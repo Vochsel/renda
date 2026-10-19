@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { SPLAT_DEMOS, type SplatDemo as Demo } from "@/lib/splat-demos";
 import { cn } from "@/lib/utils";
 
-type Mode = "mesh" | "splat";
+type Mode = "mesh" | "fast" | "splat";
+const MODE_LABEL: Record<Mode, string> = { mesh: "Mesh", fast: "Fast", splat: "Standard" };
 
 function mb(bytes: number) {
   return bytes >= 1e6 ? `${(bytes / 1e6).toFixed(1)} MB` : `${Math.round(bytes / 1e3)} KB`;
@@ -20,7 +21,7 @@ function SplatCard({ demo }: { demo: Demo }) {
   const setModeRef = useRef<(m: Mode) => void>(() => {});
   const [mode, setMode] = useState<Mode>("splat");
   const [state, setState] = useState<"idle" | "loading" | "ready" | "unsupported" | "error">("idle");
-  const [loaded, setLoaded] = useState<Record<Mode, boolean>>({ mesh: false, splat: false });
+  const [loaded, setLoaded] = useState<Record<Mode, boolean>>({ mesh: false, fast: false, splat: false });
 
   useEffect(() => {
     const el = box.current;
@@ -79,6 +80,9 @@ function SplatCard({ demo }: { demo: Demo }) {
       const splat = new SplatMesh({ url: demo.splat });
       scene.add(splat);
       splat.initialized.then(() => setLoaded((l) => ({ ...l, splat: true })));
+      const fast = new SplatMesh({ url: demo.fast.splat });
+      scene.add(fast);
+      fast.initialized.then(() => setLoaded((l) => ({ ...l, fast: true })));
 
       // Frame the mesh bounds (the splat was baked from it, so they share one frame).
       const bounds = new THREE.Box3().setFromObject(mesh);
@@ -99,6 +103,7 @@ function SplatCard({ demo }: { demo: Demo }) {
       const apply = (m: Mode) => {
         mesh.visible = m === "mesh";
         splat.visible = m === "splat";
+        fast.visible = m === "fast";
         dirty = true;
       };
       setModeRef.current = apply;
@@ -124,7 +129,7 @@ function SplatCard({ demo }: { demo: Demo }) {
       renderer.setAnimationLoop(() => {
         if (!visible) return;
         const moving = controls.update();
-        if (dirty || moving || splat.visible) {
+        if (dirty || moving || splat.visible || fast.visible) {
           renderer.render(scene, camera);
           dirty = false;
         }
@@ -139,6 +144,7 @@ function SplatCard({ demo }: { demo: Demo }) {
         controls.dispose();
         pmrem.dispose();
         splat.dispose();
+        fast.dispose();
         renderer.dispose();
         renderer.domElement.remove();
       };
@@ -149,21 +155,30 @@ function SplatCard({ demo }: { demo: Demo }) {
       io.disconnect();
       dispose?.();
     };
-  }, [demo.mesh, demo.splat]);
+  }, [demo.mesh, demo.splat, demo.fast.splat]);
 
   const select = (m: Mode) => {
     setMode(m);
     setModeRef.current(m);
   };
 
-  const stats = [
-    `${(demo.gaussians / 1000).toFixed(0)}k Gaussians`,
-    `${demo.views} views · ${demo.steps.toLocaleString("en-US")} steps`,
-    `PSNR ${demo.psnr.toFixed(1)} dB`,
-    `${Math.round(demo.billedSeconds)}s billed`,
-    `$${demo.costUsd.toFixed(2)}`,
-    `.spz ${mb(demo.splatBytes)}`,
-  ];
+  const stats =
+    mode === "fast"
+      ? [
+          `${(demo.fast.gaussians / 1000).toFixed(0)}k Gaussians on the surface`,
+          "albedo only, no training",
+          `${demo.fast.billedSeconds.toFixed(1)}s billed`,
+          `$${demo.fast.costUsd.toFixed(3)}`,
+          `.spz ${mb(demo.fast.splatBytes)}`,
+        ]
+      : [
+          `${(demo.gaussians / 1000).toFixed(0)}k Gaussians`,
+          `${demo.views} views · ${demo.steps.toLocaleString("en-US")} steps`,
+          `PSNR ${demo.psnr.toFixed(1)} dB`,
+          `${Math.round(demo.billedSeconds)}s billed`,
+          `$${demo.costUsd.toFixed(2)}`,
+          `.spz ${mb(demo.splatBytes)}`,
+        ];
   return (
     <figure>
       <div ref={box} className="bg-muted relative overflow-hidden rounded-xl" style={{ aspectRatio: "4 / 3" }}>
@@ -174,18 +189,18 @@ function SplatCard({ demo }: { demo: Demo }) {
           </p>
         )}
         <div className="bg-background/80 absolute top-3 left-3 flex gap-0.5 rounded-md p-0.5 backdrop-blur">
-          {(["mesh", "splat"] as const).map((m) => (
+          {(["mesh", "fast", "splat"] as const).map((m) => (
             <button
               key={m}
               type="button"
               onClick={() => select(m)}
               aria-pressed={m === mode}
               className={cn(
-                "flex items-center gap-1 rounded px-2 py-0.5 font-mono text-[11px] capitalize transition-colors",
+                "flex items-center gap-1 rounded px-2 py-0.5 font-mono text-[11px] transition-colors",
                 m === mode ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground",
               )}
             >
-              {m}
+              {MODE_LABEL[m]}
               {state === "loading" && !loaded[m] && <span className="size-1 animate-pulse rounded-full bg-current opacity-60" aria-label="loading" />}
             </button>
           ))}
@@ -195,7 +210,7 @@ function SplatCard({ demo }: { demo: Demo }) {
         <p className="text-sm">
           <span className="font-mono text-xs">{demo.input}</span>
           <span className="text-muted-foreground"> → </span>
-          Gaussian splat (.spz)
+          {mode === "fast" ? "fast splat preview (.spz)" : mode === "mesh" ? "source mesh" : "Gaussian splat, standard (.spz)"}
         </p>
         <p className="text-muted-foreground mt-1 font-mono text-[11px] tracking-tight">{stats.join("  ·  ")}</p>
         {demo.credit && (

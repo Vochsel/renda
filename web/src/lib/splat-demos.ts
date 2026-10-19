@@ -18,6 +18,8 @@ export type SplatDemo = {
   costUsd: number;
   psnr: number;
   ssim: number;
+  /** The `--preset fast` bake of the same mesh: Gaussians placed on the surface, albedo only, no training. */
+  fast: { splat: string; splatBytes: number; gaussians: number; billedSeconds: number; costUsd: number };
   credit?: { title: string; author: string; url: string; license: string };
 };
 
@@ -25,6 +27,7 @@ export type SplatDemo = {
 export const SPLAT_DEMOS: SplatDemo[] = [
   {
     id: "camera",
+    fast: { splat: "/splats/camera-fast.spz", splatBytes: 2082297, gaussians: 300000, billedSeconds: 5.4, costUsd: 0.003 },
     input: ".glb (Sketchfab)",
     mesh: "/bakes/camera-before.glb",
     splat: "/splats/camera.spz",
@@ -46,6 +49,7 @@ export const SPLAT_DEMOS: SplatDemo[] = [
   },
   {
     id: "table",
+    fast: { splat: "/splats/table-fast.spz", splatBytes: 2067873, gaussians: 300000, billedSeconds: 3.6, costUsd: 0.002 },
     input: ".glb",
     mesh: "/bakes/table-before.glb",
     splat: "/splats/table.spz",

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { SiteHeader } from "@/components/site-header";
+import { PageToc, type TocItem } from "@/components/page-toc";
 import { CopyButton } from "@/components/copy-button";
 import { InstallTabs } from "@/components/install-tabs";
 import { installSnippets } from "@/lib/install-snippets";
@@ -67,6 +68,14 @@ function Render({ item, priority, aspect, className }: { item: ShowcaseItem; pri
   );
 }
 
+const TOC: TocItem[] = [
+  { id: "start", label: "Get started" },
+  { id: "renders", label: "Example renders" },
+  { id: "bake", label: "Light baking → GLB" },
+  { id: "splats", label: "Mesh → splat" },
+  { id: "formats", label: "Formats & pricing" },
+];
+
 export default function Home() {
   const byId = Object.fromEntries(SHOWCASE.map((s) => [s.id, s]));
   const hero = byId[HERO];
@@ -78,8 +87,10 @@ export default function Home() {
   return (
     <>
       <SiteHeader />
-      <main className="mx-auto w-full max-w-5xl flex-1 px-4">
-        <section className="pt-20 pb-14 sm:pt-28">
+      <main className="mx-auto w-full max-w-5xl flex-1 px-4 xl:grid xl:max-w-6xl xl:grid-cols-[9rem_minmax(0,1fr)] xl:gap-12">
+        <PageToc items={TOC} />
+        <div className="min-w-0">
+        <section id="start" className="scroll-mt-20 pt-20 pb-14 sm:pt-28">
           <h1 className="max-w-2xl text-4xl font-semibold tracking-tight text-balance sm:text-5xl">
             Render any 3D file from your agent.
           </h1>
@@ -106,7 +117,7 @@ export default function Home() {
           </div>
         </section>
 
-        <section aria-label="Example renders" className="pb-6">
+        <section id="renders" aria-label="Example renders" className="scroll-mt-20 pb-6">
           <Render item={hero} priority />
           <div className="mt-12 grid gap-x-8 gap-y-12 sm:grid-cols-2">
             {grid.map((item) => (
@@ -123,7 +134,7 @@ export default function Home() {
           </p>
         </section>
 
-        <section aria-label="Light baking" className="border-border mt-16 border-t pt-14 pb-6">
+        <section id="bake" aria-label="Light baking" className="scroll-mt-20 border-border mt-16 border-t pt-14 pb-6">
           <h2 className="text-2xl font-semibold tracking-tight">Bake lighting into any model → GLB</h2>
           <p className="text-muted-foreground mt-3 mb-10 max-w-xl text-pretty">
             <span className="text-foreground font-mono text-sm">renda bake model.blend</span> — Cycles, Mitsuba or three.js bake the
@@ -132,7 +143,7 @@ export default function Home() {
           <BakeDemo />
         </section>
 
-        <section aria-label="Mesh to Gaussian splat" className="border-border mt-16 border-t pt-14 pb-6">
+        <section id="splats" aria-label="Mesh to Gaussian splat" className="scroll-mt-20 border-border mt-16 border-t pt-14 pb-6">
           <h2 className="text-2xl font-semibold tracking-tight">Turn any mesh into a Gaussian splat</h2>
           <p className="text-muted-foreground mt-3 mb-10 max-w-xl text-pretty">
             <span className="text-foreground font-mono text-sm">renda splat model.glb</span> — cameras are fitted around the
@@ -142,7 +153,7 @@ export default function Home() {
           <SplatDemo />
         </section>
 
-        <section className="border-border mt-16 grid gap-10 border-t py-14 text-sm sm:grid-cols-3">
+        <section id="formats" className="border-border mt-16 grid scroll-mt-20 gap-10 border-t py-14 text-sm sm:grid-cols-3">
           <div>
             <h2 className="font-medium">Any format</h2>
             <p className="text-muted-foreground mt-2 font-mono text-xs leading-relaxed">{FORMATS.join("  ")}</p>
@@ -163,6 +174,7 @@ export default function Home() {
             </p>
           </div>
         </section>
+        </div>
       </main>
       <footer className="text-muted-foreground mx-auto flex w-full max-w-5xl flex-wrap gap-x-5 gap-y-2 px-4 py-8 text-xs">
         <span>Apache-2.0 · AGPL-3.0 (cloud)</span>
