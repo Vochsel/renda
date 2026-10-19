@@ -1,0 +1,39 @@
+{
+  "$schema": "https://renda.dev/schema/v1.json",
+  "version": 1,
+  "name": "Turntable MP4 from .glb",
+  "scene": {
+    "root": "../scenes/scene.glb"
+  },
+  "camera": {
+    "mode": "auto",
+    "elevationDeg": 15
+  },
+  "environment": {
+    "background": "#f4f4f2"
+  },
+  "render": {
+    "engine": "blender-eevee",
+    "resolution": [
+      720,
+      720
+    ]
+  },
+  "animation": {
+    "frames": [
+      1,
+      24
+    ],
+    "fps": 24,
+    "turntable": {
+      "revolutions": 1
+    }
+  },
+  "output": {
+    "format": "mp4",
+    "video": {
+      "codec": "h264",
+      "crf": 20
+    }
+  }
+}

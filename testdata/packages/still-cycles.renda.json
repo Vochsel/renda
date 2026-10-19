@@ -1,0 +1,19 @@
+{
+  "$schema": "https://renda.dev/schema/v1.json",
+  "version": 1,
+  "name": "Cycles still from .blend (native)",
+  "scene": {
+    "root": "../scenes/scene.blend"
+  },
+  "camera": {
+    "mode": "scene"
+  },
+  "render": {
+    "engine": "blender-cycles",
+    "resolution": [
+      1280,
+      720
+    ],
+    "quality": "standard"
+  }
+}

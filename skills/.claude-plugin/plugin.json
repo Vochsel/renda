@@ -1,0 +1,28 @@
+{
+  "name": "renda",
+  "version": "0.1.0",
+  "description": "Render 3D files (.blend, USD, glTF, three.js JSON, FBX, OBJ, STL, Gaussian splats, ...) and HyperFrames videos in the cloud with Renda. Skills + MCP server.",
+  "author": {
+    "name": "Renda",
+    "url": "https://renda.vochsel.com"
+  },
+  "homepage": "https://renda.vochsel.com",
+  "license": "Apache-2.0",
+  "keywords": [
+    "3d",
+    "rendering",
+    "blender",
+    "mitsuba",
+    "usd",
+    "gltf",
+    "threejs",
+    "video",
+    "mcp",
+    "gaussian-splatting",
+    "3dgs",
+    "splat"
+  ],
+  "skills": "./",
+  "mcpServers": "./.mcp.json",
+  "repository": "https://github.com/vochsel/renda"
+}

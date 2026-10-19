@@ -1,0 +1,45 @@
+<!doctype html>
+<html
+  lang="en"
+  data-composition-variables='[
+    {"id":"title","type":"string","label":"Title","default":"Rendered with Renda"},
+    {"id":"subtitle","type":"string","label":"Subtitle","default":"Any 3D file → pixels, in the cloud"},
+    {"id":"clipUrl","type":"string","label":"3D clip URL","default":"assets/placeholder.mp4"},
+    {"id":"accent","type":"color","label":"Accent","default":"#f97316"}
+  ]'
+>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>Renda test title card</title>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      body { margin: 0; background: #0b0f14; color: #f8fafc; font-family: system-ui, sans-serif; }
+      #root { position: relative; width: 100%; height: 100%; overflow: hidden; }
+      .clip { position: absolute; display: block; }
+      #title { left: 140px; top: 400px; width: 900px; margin: 0; font-size: 80px; white-space: nowrap; font-weight: 800; letter-spacing: -2px; }
+      #subtitle { left: 140px; top: 540px; width: 900px; margin: 0; font-size: 40px; color: #94a3b8; }
+      #rule { left: 140px; top: 630px; width: 160px; height: 10px; background: var(--accent); }
+      /* The video slot: a turntable from a Renda scene job goes here (variable clipUrl). */
+      #slot-video { right: 120px; top: 190px; width: 700px; height: 700px; border-radius: 28px;
+                    object-fit: cover; background: #111827; }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="main" data-start="0" data-width="1920" data-height="1080" data-duration="6">
+      <h1 id="title" class="clip" data-start="0" data-duration="6" data-track-index="0" data-var-text="title">Rendered with Renda</h1>
+      <p id="subtitle" class="clip" data-start="0" data-duration="6" data-track-index="1" data-var-text="subtitle">Any 3D file → pixels, in the cloud</p>
+      <div id="rule" class="clip" data-start="0" data-duration="6" data-track-index="2"></div>
+      <video id="slot-video" class="clip" data-start="0.5" data-duration="5.5" data-track-index="3"
+             src="assets/placeholder.mp4" data-var-src="clipUrl" muted playsinline></video>
+    </div>
+    <script>
+      const tl = gsap.timeline({ paused: true });
+      tl.fromTo("#title", { y: 48, opacity: 0 }, { y: 0, opacity: 1, duration: 0.7, ease: "power3.out" }, 0.2);
+      tl.fromTo("#subtitle", { y: 32, opacity: 0 }, { y: 0, opacity: 1, duration: 0.6, ease: "power3.out" }, 0.45);
+      tl.fromTo("#rule", { scaleX: 0 }, { scaleX: 1, transformOrigin: "left center", duration: 0.6, ease: "power2.out" }, 0.7);
+      tl.fromTo("#slot-video", { scale: 1.08, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.8, ease: "power2.out" }, 0.5);
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>

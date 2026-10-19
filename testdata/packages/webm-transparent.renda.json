@@ -1,0 +1,42 @@
+{
+  "$schema": "https://renda.dev/schema/v1.json",
+  "version": 1,
+  "name": "Transparent WebM turntable from .3mf",
+  "scene": {
+    "root": "../scenes/scene.3mf",
+    "materialOverrides": {
+      "*": {
+        "baseColor": "#e2e8f0",
+        "roughness": 0.3
+      }
+    }
+  },
+  "environment": {
+    "background": "transparent"
+  },
+  "render": {
+    "engine": "blender-eevee",
+    "resolution": [
+      512,
+      512
+    ]
+  },
+  "animation": {
+    "frames": [
+      1,
+      24
+    ],
+    "fps": 24,
+    "turntable": {
+      "revolutions": 1
+    }
+  },
+  "output": {
+    "format": "webm",
+    "transparent": true,
+    "video": {
+      "codec": "vp9",
+      "crf": 30
+    }
+  }
+}

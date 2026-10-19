@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "renda": {
+      "command": "npx",
+      "args": ["-y", "@rendahq/mcp"]
+    }
+  }
+}

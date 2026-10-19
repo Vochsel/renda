@@ -1,0 +1,19 @@
+{
+  "$schema": "https://renda.dev/schema/v1.json",
+  "version": 1,
+  "name": "Camera from the file (.usda)",
+  "scene": {
+    "root": "../scenes/scene.usda"
+  },
+  "camera": {
+    "mode": "scene",
+    "name": "Camera"
+  },
+  "render": {
+    "engine": "mitsuba",
+    "resolution": [
+      1280,
+      720
+    ]
+  }
+}

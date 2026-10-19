@@ -1,0 +1,53 @@
+{
+  "name": "@rendahq/mcp",
+  "version": "0.1.0",
+  "description": "MCP server for Renda cloud rendering: render 3D files and scenes from any agent.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./stdio": {
+      "types": "./dist/stdio.d.ts",
+      "default": "./dist/stdio.js"
+    },
+    "./remote": {
+      "types": "./dist/remote.d.ts",
+      "default": "./dist/remote.js"
+    }
+  },
+  "bin": {
+    "renda-mcp": "./dist/bin.js"
+  },
+  "files": [
+    "README.md",
+    "dist",
+    "server.json"
+  ],
+  "scripts": {
+    "build": "tsc -p .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@rendahq/spec": "workspace:*",
+    "fflate": "^0.8.2",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  },
+  "mcpName": "io.github.vochsel/renda",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vochsel/renda",
+    "directory": "mcp"
+  },
+  "homepage": "https://renda.vochsel.com"
+}

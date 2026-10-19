@@ -1,0 +1,18 @@
+{
+  "$schema": "https://renda.dev/schema/v1.json",
+  "version": 1,
+  "name": "EEVEE still from .glb",
+  "scene": {
+    "root": "../scenes/scene.glb"
+  },
+  "render": {
+    "engine": "blender-eevee",
+    "resolution": [
+      1280,
+      720
+    ]
+  },
+  "output": {
+    "format": "jpg"
+  }
+}

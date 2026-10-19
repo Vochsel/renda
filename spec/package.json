@@ -1,0 +1,17 @@
+{
+  "name": "@rendahq/spec",
+  "version": "0.1.0",
+  "description": "The Renda package format: typed JSON for render settings most 3D formats can't express.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" }, "./schema.json": "./schema/renda.v1.json" },
+  "files": ["dist", "schema"],
+  "scripts": {
+    "build": "tsc -p . && node scripts/gen-schema.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": { "zod": "^4.1.0" },
+  "devDependencies": { "typescript": "^5.9.0", "@types/node": "^24.0.0" }
+}

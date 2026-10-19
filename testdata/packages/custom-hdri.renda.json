@@ -1,0 +1,30 @@
+{
+  "$schema": "https://renda.dev/schema/v1.json",
+  "version": 1,
+  "name": "Custom HDRI asset lighting a vertex-coloured .ply",
+  "assets": {
+    "model": {
+      "uri": "../scenes/scene.ply"
+    },
+    "sky": {
+      "uri": "../hdri/sky.hdr",
+      "format": "hdr"
+    }
+  },
+  "scene": {
+    "root": "model"
+  },
+  "environment": {
+    "hdri": "sky",
+    "intensity": 1.0,
+    "rotationDeg": 90,
+    "background": "hdri"
+  },
+  "render": {
+    "engine": "mitsuba",
+    "resolution": [
+      1280,
+      720
+    ]
+  }
+}

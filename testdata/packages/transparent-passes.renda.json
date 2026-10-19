@@ -1,0 +1,28 @@
+{
+  "$schema": "https://renda.dev/schema/v1.json",
+  "version": 1,
+  "name": "Transparent PNG with beauty/alpha/depth/normal passes from .gltf",
+  "scene": {
+    "root": "../scenes/scene.gltf"
+  },
+  "environment": {
+    "background": "transparent"
+  },
+  "render": {
+    "engine": "blender-cycles",
+    "resolution": [
+      1024,
+      1024
+    ]
+  },
+  "output": {
+    "format": "png",
+    "transparent": true,
+    "passes": [
+      "beauty",
+      "alpha",
+      "depth",
+      "normal"
+    ]
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://renda.dev/schema/v1.json",
+  "version": 1,
+  "name": "Cross-engine: three.js JSON rendered in Cycles",
+  "scene": {
+    "root": "../scenes/threejs/scene.json"
+  },
+  "camera": {
+    "mode": "scene"
+  },
+  "render": {
+    "engine": "blender-cycles",
+    "resolution": [
+      1280,
+      720
+    ]
+  }
+}

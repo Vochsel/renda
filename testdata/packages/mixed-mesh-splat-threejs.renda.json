@@ -1,0 +1,54 @@
+{
+  "$schema": "https://renda.dev/schema/v1.json",
+  "version": 1,
+  "name": "Mesh (.glb table) inside a splat environment \u2014 threejs",
+  "scene": {
+    "root": "env",
+    "include": [
+      {
+        "asset": "table"
+      }
+    ]
+  },
+  "assets": {
+    "env": {
+      "uri": "../scenes/splats/environment.ply"
+    },
+    "table": {
+      "uri": "../scenes/scene.glb"
+    }
+  },
+  "camera": {
+    "mode": "lookat",
+    "position": [
+      1.3,
+      0.55,
+      3.7
+    ],
+    "target": [
+      0,
+      -0.3,
+      0
+    ],
+    "fovDeg": 50
+  },
+  "lights": [
+    {
+      "type": "sun",
+      "direction": [
+        -0.4,
+        -1,
+        -0.3
+      ],
+      "intensity": 2.5
+    }
+  ],
+  "render": {
+    "engine": "threejs",
+    "resolution": [
+      1280,
+      720
+    ],
+    "quality": "standard"
+  }
+}

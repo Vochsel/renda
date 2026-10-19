@@ -1,0 +1,7 @@
+{ "version": 1, "name": "USDZ turntable",
+  "scene": { "root": "../scenes/scene.usdz" },
+  "camera": { "mode": "auto", "elevationDeg": 14, "fovDeg": 30 },
+  "environment": { "hdri": "studio", "background": "#efeee9" },
+  "render": { "engine": "blender-cycles", "resolution": [800, 800], "quality": "draft" },
+  "animation": { "frames": [1, 72], "fps": 24, "turntable": { "revolutions": 1 } },
+  "output": { "format": "mp4", "video": { "codec": "h264", "crf": 22 } } }

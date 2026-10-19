@@ -1,0 +1,50 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.vochsel/renda",
+  "title": "Renda",
+  "description": "Render 3D files and scenes (.blend, USD, glTF, three.js JSON, FBX, OBJ, STL, Gaussian splats\u2026) and HyperFrames videos in the cloud.",
+  "version": "0.1.0",
+  "websiteUrl": "https://renda.vochsel.com",
+  "repository": {
+    "url": "https://github.com/vochsel/renda",
+    "source": "github",
+    "subfolder": "mcp"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@rendahq/mcp",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "RENDA_API_KEY",
+          "description": "Renda API key (optional: the server can start a free trial)",
+          "isSecret": true,
+          "isRequired": false
+        },
+        {
+          "name": "RENDA_API_URL",
+          "description": "API base URL (default https://renda.vochsel.com)",
+          "isRequired": false
+        }
+      ]
+    }
+  ],
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://renda.vochsel.com/api/mcp",
+      "headers": [
+        {
+          "name": "Authorization",
+          "description": "Bearer rnd_live_\u2026 API key",
+          "isSecret": true,
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}

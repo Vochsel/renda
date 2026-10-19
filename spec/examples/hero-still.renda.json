@@ -1,0 +1,14 @@
+{
+  "$schema": "https://renda.dev/schema/v1.json",
+  "version": 1,
+  "name": "teapot-hero",
+  "assets": {
+    "teapot": { "uri": "./teapot.blend" },
+    "studio": { "uri": "https://example.com/studio.hdr", "format": "hdr" }
+  },
+  "scene": { "root": "teapot", "materialOverrides": { "*": { "roughness": 0.35 } } },
+  "camera": { "mode": "lookat", "position": [3, -3, 2], "target": [0, 0, 0.5], "fovDeg": 35 },
+  "environment": { "hdri": "studio", "intensity": 1.2, "background": "transparent" },
+  "render": { "engine": "mitsuba", "resolution": [2048, 2048], "quality": "final" },
+  "output": { "format": "png", "transparent": true, "passes": ["beauty", "depth"] }
+}

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://renda.dev/schema/v1.json",
+  "version": 1,
+  "name": "product-in-captured-room",
+  "assets": {
+    "room": { "uri": "./room-capture.ply", "format": "splat" },
+    "chair": { "uri": "./chair.glb" }
+  },
+  "scene": { "root": "room", "upAxis": "-Y", "include": [{ "asset": "chair", "transform": { "translate": [0, -1, 0] } }] },
+  "camera": { "mode": "lookat", "position": [1.3, 0.55, 3.7], "target": [0, -0.3, 0], "fovDeg": 50 },
+  "render": { "engine": "blender-cycles", "resolution": [1920, 1080], "quality": "final" },
+  "output": { "format": "png" }
+}

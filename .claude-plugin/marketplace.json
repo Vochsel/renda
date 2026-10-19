@@ -1,0 +1,12 @@
+{
+  "name": "renda",
+  "description": "Renda: agent-first cloud rendering for 3D files and scenes.",
+  "owner": { "name": "Renda", "url": "https://renda.vochsel.com" },
+  "plugins": [
+    {
+      "name": "renda",
+      "source": "./skills",
+      "description": "Render .blend, USD, glTF, three.js JSON, FBX, OBJ, STL, Gaussian splats and HyperFrames videos in the cloud. Skills + MCP server."
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://renda.dev/schema/v1.json",
+  "version": 1,
+  "name": "Splat still (.ply, engine auto \u2192 gsplat)",
+  "scene": {
+    "root": "../scenes/splats/garden.ply"
+  },
+  "camera": {
+    "mode": "auto",
+    "elevationDeg": 24,
+    "azimuthDeg": 30,
+    "padding": 0.02
+  },
+  "render": {
+    "engine": "auto",
+    "resolution": [
+      1280,
+      720
+    ],
+    "quality": "standard"
+  }
+}

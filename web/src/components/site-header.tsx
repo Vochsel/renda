@@ -1,0 +1,23 @@
+import Link from "next/link";
+import { Button } from "@/components/ui/button";
+
+export function SiteHeader() {
+  return (
+    <header className="border-border/60 border-b">
+      <div className="mx-auto flex h-14 max-w-6xl items-center gap-6 px-4">
+        <Link href="/" className="font-mono text-sm font-semibold tracking-tight">
+          renda
+        </Link>
+        <nav className="text-muted-foreground hidden items-center gap-4 text-sm sm:flex">
+          <Link href="/docs" className="hover:text-foreground">Docs</Link>
+          <Link href="/pricing" className="hover:text-foreground">Pricing</Link>
+          <a href="https://github.com/vochsel/renda" className="hover:text-foreground">GitHub</a>
+        </nav>
+        <div className="ml-auto flex items-center gap-2">
+          <Button asChild variant="ghost" size="sm"><Link href="/sign-in">Sign in</Link></Button>
+          <Button asChild size="sm"><Link href="/dashboard">Dashboard</Link></Button>
+        </div>
+      </div>
+    </header>
+  );
+}

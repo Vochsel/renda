@@ -1,0 +1,28 @@
+# deps / builds
+node_modules/
+dist/
+.next/
+*.tsbuildinfo
+next-env.d.ts
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+*.egg-info/
+cli/skills/
+
+# secrets / local config (never commit)
+.env
+.env*
+!.env.example
+credentials.json
+*.pem
+*.key
+.vercel
+.claude/settings.local.json
+
+# outputs / scratch
+renders/
+testdata/out/
+*.blend1
+.DS_Store

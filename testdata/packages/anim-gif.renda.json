@@ -1,0 +1,30 @@
+{
+  "$schema": "https://renda.dev/schema/v1.json",
+  "version": 1,
+  "name": "Scene animation from anim.blend as a GIF",
+  "scene": {
+    "root": "../scenes/anim.blend"
+  },
+  "camera": {
+    "mode": "scene"
+  },
+  "render": {
+    "engine": "blender-workbench",
+    "resolution": [
+      480,
+      270
+    ],
+    "quality": "draft"
+  },
+  "animation": {
+    "frames": [
+      1,
+      48
+    ],
+    "fps": 12,
+    "step": 2
+  },
+  "output": {
+    "format": "gif"
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "$schema": "https://renda.dev/schema/v1.json",
+  "version": 1,
+  "name": "Material override on a material-less binary STL (mm units, Z-up)",
+  "scene": {
+    "root": "../scenes/scene.stl",
+    "upAxis": "Z",
+    "unitScale": 1,
+    "materialOverrides": {
+      "*": {
+        "baseColor": "#3b82f6",
+        "metallic": 0.0,
+        "roughness": 0.45
+      }
+    }
+  },
+  "lights": [
+    {
+      "type": "sun",
+      "direction": [
+        -1,
+        -1,
+        -2
+      ],
+      "intensity": 3
+    }
+  ],
+  "render": {
+    "engine": "auto",
+    "resolution": [
+      1024,
+      768
+    ],
+    "quality": "draft"
+  },
+  "output": {
+    "format": "jpg"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://renda.dev/schema/v1.json",
+  "version": 1,
+  "name": "Alembic cache, frame 12, Cycles",
+  "scene": {
+    "root": "../scenes/scene.abc"
+  },
+  "camera": {
+    "mode": "scene"
+  },
+  "render": {
+    "engine": "blender-cycles",
+    "resolution": [
+      1280,
+      720
+    ]
+  },
+  "animation": {
+    "frames": [
+      12,
+      12
+    ],
+    "fps": 24
+  },
+  "output": {
+    "format": "png"
+  }
+}

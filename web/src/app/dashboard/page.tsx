@@ -1,0 +1,75 @@
+import Link from "next/link";
+import { requireAccount } from "@/lib/auth";
+import { getBilling } from "@/lib/accounts";
+import { monthRange, usageSummary } from "@/lib/billing";
+import { listJobs } from "@/lib/jobs";
+import { fmtAgo, fmtMinutes, fmtUsd } from "@/lib/format";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Code } from "@/components/code";
+import { SpendChart } from "@/components/spend-chart";
+import { StatusBadge } from "@/components/status-badge";
+
+export default async function Overview() {
+  const { org } = await requireAccount();
+  const range = monthRange();
+  const [usage, billing, recent] = await Promise.all([usageSummary(org.id, range.from, range.to), getBilling(org.id), listJobs(org.id, { limit: 8 })]);
+  const totalSeconds = usage.seconds.cpu + usage.seconds.gpu;
+
+  return (
+    <div className="space-y-6">
+      <h1 className="text-xl font-semibold">Overview</h1>
+      <div className="grid gap-4 sm:grid-cols-3">
+        <Stat label="Render time this month" value={fmtMinutes(totalSeconds)} sub={`${fmtMinutes(usage.seconds.gpu)} GPU · ${fmtMinutes(usage.seconds.cpu)} CPU`} />
+        <Stat label="Spend this month" value={fmtUsd(usage.costUsd)} sub={`${usage.minutesBilled} billed minutes`} />
+        <Stat label="Free minutes left" value={fmtMinutes(billing.freeSecondsRemaining)}
+          sub={billing.hasPaymentMethod ? "Card on file" : "No card on file"} />
+      </div>
+      <Card>
+        <CardHeader><CardTitle className="text-sm">Daily render time</CardTitle></CardHeader>
+        <CardContent><SpendChart days={usage.byDay} monthStart={range.from} /></CardContent>
+      </Card>
+      <Card>
+        <CardHeader className="flex-row items-center justify-between">
+          <CardTitle className="text-sm">Recent jobs</CardTitle>
+          <Link href="/dashboard/jobs" className="text-muted-foreground text-sm hover:underline">All jobs</Link>
+        </CardHeader>
+        <CardContent>
+          {recent.length ? (
+            <Table>
+              <TableHeader><TableRow><TableHead>Job</TableHead><TableHead>Status</TableHead><TableHead>Engine</TableHead><TableHead className="text-right">Cost</TableHead><TableHead className="text-right">Created</TableHead></TableRow></TableHeader>
+              <TableBody>
+                {recent.map((j) => (
+                  <TableRow key={j.id}>
+                    <TableCell><Link href={`/dashboard/jobs/${j.id}`} className="font-mono text-xs hover:underline">{j.name ?? j.id}</Link></TableCell>
+                    <TableCell><StatusBadge status={j.status} /></TableCell>
+                    <TableCell className="text-muted-foreground font-mono text-xs">{j.engine}</TableCell>
+                    <TableCell className="text-right font-mono text-xs">{j.cached ? "cached" : fmtUsd(j.costUsd)}</TableCell>
+                    <TableCell className="text-muted-foreground text-right text-xs">{fmtAgo(j.createdAt)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          ) : (
+            <div className="space-y-3">
+              <CardDescription>No renders yet. Create an API key, then:</CardDescription>
+              <Code>{`npx @rendahq/cli render model.glb        # or: uvx renda render model.glb --cloud\nexport RENDA_API_KEY=rnd_live_…            # CI / servers`}</Code>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function Stat({ label, value, sub }: { label: string; value: string; sub: string }) {
+  return (
+    <Card>
+      <CardHeader className="pb-2"><CardDescription>{label}</CardDescription></CardHeader>
+      <CardContent>
+        <div className="font-mono text-2xl font-semibold">{value}</div>
+        <div className="text-muted-foreground mt-1 text-xs">{sub}</div>
+      </CardContent>
+    </Card>
+  );
+}

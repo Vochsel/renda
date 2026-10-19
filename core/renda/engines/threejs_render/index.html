@@ -1,0 +1,189 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>html,body{margin:0;background:transparent;overflow:hidden}canvas{display:block}</style>
+<script type="importmap">
+{ "imports": {
+  "three": "./three/build/three.module.js",
+  "three/addons/": "./three/examples/jsm/",
+  "@sparkjsdev/spark": "./spark/dist/spark.module.js"
+} }
+</script>
+</head>
+<body>
+<script type="module">
+// Renda three.js renderer. The job is injected as window.RENDA_JOB by renda/engines/threejs.py:
+// { scene: {url, kind: "threejs"|"gltf"}, width, height, transparent, background: null|[r,g,b] (linear),
+//   env: {url|null, intensity, rotationDeg, visible}, lights: [...], cameras: {frame: {...}}, toneMapping }
+import * as THREE from "three";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { RGBELoader } from "three/addons/loaders/RGBELoader.js";
+import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+
+// Spark (Gaussian splats) is only imported when the job has splats.
+let Spark = null;
+
+const job = window.RENDA_JOB;
+const warnings = [];
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(job.width, job.height, false);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.AgXToneMapping ?? THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const pmrem = new THREE.PMREMGenerator(renderer);
+
+async function loadScene() {
+  if (job.scene.kind === "none") return new THREE.Group();
+  if (job.scene.kind === "threejs") {
+    const json = await (await fetch(job.scene.url)).json();
+    const obj = await new THREE.ObjectLoader().parseAsync(json);
+    return obj;
+  }
+  const gltf = await new GLTFLoader().loadAsync(job.scene.url);
+  // Spec-following exporters (Blender) write suns in lux (a 3 W/m² sun → 2049 lx), which blows
+  // out three's lighting; bring them back to the scale the other engines use (see mesh_formats.py).
+  gltf.scene.traverse((o) => {
+    if (o.isDirectionalLight && o.intensity > 50) o.intensity /= 683;
+  });
+  return gltf.scene;
+}
+
+async function setupEnv() {
+  let envTex = null;
+  if (job.env.url) {
+    const hdr = await new RGBELoader().loadAsync(job.env.url);
+    hdr.mapping = THREE.EquirectangularReflectionMapping;
+    envTex = hdr;
+    scene.environment = pmrem.fromEquirectangular(hdr).texture;
+  } else if (job.env.room) {
+    scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+  }
+  if (scene.environment) {
+    scene.environmentIntensity = job.env.intensity;
+    scene.environmentRotation = new THREE.Euler(0, THREE.MathUtils.degToRad(job.env.rotationDeg), 0);
+  }
+  if (job.background) {
+    scene.background = new THREE.Color().setRGB(...job.background, THREE.LinearSRGBColorSpace);
+  } else if (job.env.visible && envTex) {
+    scene.background = envTex;
+    scene.backgroundIntensity = job.env.intensity;
+    scene.backgroundRotation = new THREE.Euler(0, THREE.MathUtils.degToRad(job.env.rotationDeg), 0);
+  } else {
+    scene.background = null;
+    renderer.setClearColor(0x000000, job.transparent ? 0 : 1);
+  }
+}
+
+function addLights() {
+  for (const l of job.lights) {
+    const color = new THREE.Color().setRGB(...l.color, THREE.LinearSRGBColorSpace);
+    let light;
+    if (l.type === "sun") {
+      light = new THREE.DirectionalLight(color, l.intensity);
+      light.position.set(...l.direction.map((v) => -v * 10));
+      light.castShadow = true;
+      light.shadow.mapSize.set(2048, 2048);
+    } else if (l.type === "point") {
+      light = new THREE.PointLight(color, l.candela, 0, 2);
+      light.position.set(...l.position);
+    } else if (l.type === "spot") {
+      light = new THREE.SpotLight(color, l.candela, 0, THREE.MathUtils.degToRad(l.angleDeg / 2), 0.2, 2);
+      light.position.set(...l.position);
+      light.target.position.set(...l.target);
+      scene.add(light.target);
+    } else if (l.type === "area") {
+      light = new THREE.DirectionalLight(color, l.intensity / 20);
+      light.position.set(...l.position);
+      light.target.position.set(...l.target);
+      scene.add(light.target);
+      warnings.push("threejs: area lights approximated as directional");
+    }
+    if (light) scene.add(light);
+  }
+}
+
+function fitShadows(root) {
+  const box = new THREE.Box3().setFromObject(root);
+  const size = box.getSize(new THREE.Vector3()).length() || 1;
+  scene.traverse((o) => {
+    if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; }
+    if (o.isDirectionalLight && o.shadow) {
+      const c = o.shadow.camera;
+      c.left = c.bottom = -size; c.right = c.top = size; c.near = 0.01; c.far = size * 20;
+      o.shadow.bias = -0.0005;
+      c.updateProjectionMatrix();
+    }
+  });
+}
+
+let camera = null;
+function placeCamera(c) {
+  const aspect = job.width / job.height;
+  if (c.orthoHeight) {
+    const h = c.orthoHeight / 2, w = h * aspect;
+    camera = new THREE.OrthographicCamera(-w, w, h, -h, c.near, c.far);
+  } else {
+    camera = new THREE.PerspectiveCamera(c.fovYDeg, aspect, c.near, c.far);
+  }
+  camera.up.set(...c.up);
+  camera.position.set(...c.position);
+  camera.lookAt(...c.target);
+  camera.updateProjectionMatrix();
+}
+
+let spark = null;
+const splatMeshes = [];
+async function loadSplats() {
+  if (!job.splats || !job.splats.length) return;
+  Spark = await import("@sparkjsdev/spark");
+  spark = new Spark.SparkRenderer({ renderer });
+  scene.add(spark);
+  for (const s of job.splats) {
+    const mesh = new Spark.SplatMesh({ url: s.url, fileType: s.fileType });
+    if (s.flipYDown) mesh.quaternion.set(1, 0, 0, 0); // COLMAP/OpenCV Y-down → Y-up
+    scene.add(mesh);
+    splatMeshes.push(mesh);
+  }
+  await Promise.all(splatMeshes.map((m) => m.initialized));
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const mixers = [];
+window.renderFrame = async (frame) => {
+  const c = job.cameras[String(frame)];
+  placeCamera(c);
+  if (mixers.length && job.fps) for (const m of mixers) m.setTime((frame - job.frameStart) / job.fps);
+  if (spark) {
+    // Splats are depth-sorted asynchronously in a worker: render until the sort for this view settles.
+    for (let i = 0; i < 120; i++) {
+      renderer.render(scene, camera);
+      await sleep(i < 3 ? 30 : 15);
+      if (i >= 3 && !spark.sorting && !spark.sortDirty) break;
+    }
+  }
+  renderer.render(scene, camera);
+  return renderer.domElement.toDataURL("image/png");
+};
+
+try {
+  const root = await loadScene();
+  scene.add(root);
+  await setupEnv();
+  addLights();
+  fitShadows(root);
+  await loadSplats();
+  window.RENDA_READY = { ok: true, warnings };
+} catch (e) {
+  window.RENDA_READY = { ok: false, error: String(e && e.stack || e) };
+}
+</script>
+</body>
+</html>

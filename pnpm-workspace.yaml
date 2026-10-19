@@ -1,0 +1,5 @@
+packages:
+  - spec
+  - mcp
+  - cli
+  - web

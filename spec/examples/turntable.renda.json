@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "name": "sneaker-turntable",
+  "assets": { "shoe": { "uri": "./sneaker.usdz" } },
+  "scene": { "root": "shoe" },
+  "camera": { "mode": "auto", "elevationDeg": 15 },
+  "environment": { "hdri": "studio", "background": "#f4f4f2" },
+  "render": { "engine": "blender-eevee", "resolution": [1080, 1080], "quality": "standard" },
+  "animation": { "frames": [1, 120], "fps": 30, "turntable": { "revolutions": 1 } },
+  "output": { "format": "mp4", "video": { "codec": "h264", "crf": 20 } }
+}

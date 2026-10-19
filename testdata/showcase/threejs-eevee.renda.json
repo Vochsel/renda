@@ -1,0 +1,6 @@
+{ "version": 1, "name": "three.js JSON in Eevee",
+  "scene": { "root": "../scenes/threejs/scene.json" },
+  "camera": { "mode": "auto", "elevationDeg": 12, "azimuthDeg": 160, "fovDeg": 32 },
+  "environment": { "hdri": "night", "intensity": 1.4, "background": "#1b1d22" },
+  "render": { "engine": "blender-eevee", "resolution": [1000, 1000], "quality": "final" },
+  "output": { "format": "webp" } }

@@ -1,0 +1,6 @@
+{ "version": 1, "name": "Hero — Cycles, final",
+  "scene": { "root": "../scenes/scene.blend" },
+  "camera": { "mode": "auto", "elevationDeg": 18, "azimuthDeg": 38, "fovDeg": 30, "padding": 0.06 },
+  "environment": { "hdri": "sunset", "intensity": 1.1, "rotationDeg": 120, "background": "#efeee9" },
+  "render": { "engine": "blender-cycles", "resolution": [1600, 1000], "quality": "final" },
+  "output": { "format": "webp" } }

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://renda.dev/schema/v1.json",
+  "version": 1,
+  "name": "Cross-engine: .blend rendered in Mitsuba via the IR",
+  "scene": {
+    "root": "../scenes/scene.blend"
+  },
+  "camera": {
+    "mode": "scene"
+  },
+  "render": {
+    "engine": "mitsuba",
+    "resolution": [
+      1280,
+      720
+    ]
+  }
+}

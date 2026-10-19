@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "assets": { "scene": { "uri": "./scene.json", "format": "threejs" } },
+  "scene": { "root": "scene", "upAxis": "Y" },
+  "camera": { "mode": "scene" },
+  "render": { "engine": "threejs", "resolution": [1280, 720], "quality": "draft" },
+  "output": { "format": "webp" }
+}

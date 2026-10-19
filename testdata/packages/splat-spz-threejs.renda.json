@@ -1,0 +1,24 @@
+{
+  "$schema": "https://renda.dev/schema/v1.json",
+  "version": 1,
+  "name": "Splat (.spz) in three.js via Spark",
+  "scene": {
+    "root": "../scenes/splats/garden.spz"
+  },
+  "camera": {
+    "mode": "auto",
+    "elevationDeg": 24,
+    "azimuthDeg": 30,
+    "padding": 0.02
+  },
+  "environment": {
+    "background": "#20232a"
+  },
+  "render": {
+    "engine": "threejs",
+    "resolution": [
+      1280,
+      720
+    ]
+  }
+}

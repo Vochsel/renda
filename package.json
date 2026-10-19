@@ -1,0 +1,10 @@
+{
+  "name": "renda",
+  "private": true,
+  "packageManager": "pnpm@10.14.0",
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test"
+  },
+  "license": "SEE LICENSE IN README.md"
+}

@@ -1,0 +1,8 @@
+{
+  "project": "./title-card",
+  "name": "title-card",
+  "format": "mp4",
+  "quality": "draft",
+  "fps": 30,
+  "variables": { "title": "Renda test set", "subtitle": "HyperFrames job smoke test" }
+}

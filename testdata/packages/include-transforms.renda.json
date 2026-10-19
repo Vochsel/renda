@@ -1,0 +1,61 @@
+{
+  "$schema": "https://renda.dev/schema/v1.json",
+  "version": 1,
+  "name": "include[] with transforms: .dae root plus two STL knots",
+  "assets": {
+    "room": {
+      "uri": "../scenes/scene.dae"
+    },
+    "knot": {
+      "uri": "../scenes/scene.stl"
+    }
+  },
+  "scene": {
+    "root": "room",
+    "include": [
+      {
+        "asset": "knot",
+        "transform": {
+          "translate": [
+            1.6,
+            0,
+            0
+          ],
+          "rotateDeg": [
+            0,
+            0,
+            45
+          ],
+          "scale": 0.6
+        }
+      },
+      {
+        "asset": "knot",
+        "transform": {
+          "translate": [
+            -1.6,
+            0,
+            0
+          ],
+          "scale": [
+            0.5,
+            0.5,
+            1.2
+          ]
+        }
+      }
+    ],
+    "materialOverrides": {
+      "*": {
+        "roughness": 0.5
+      }
+    }
+  },
+  "render": {
+    "engine": "blender-eevee",
+    "resolution": [
+      1280,
+      720
+    ]
+  }
+}

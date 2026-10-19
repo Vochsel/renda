@@ -1,0 +1,6 @@
+{ "version": 1, "name": ".blend in Mitsuba 3",
+  "scene": { "root": "../scenes/scene.blend" },
+  "camera": { "mode": "auto", "elevationDeg": 28, "azimuthDeg": -40, "fovDeg": 32, "padding": 0.08 },
+  "environment": { "hdri": "studio", "background": "#e9ebee" },
+  "render": { "engine": "mitsuba", "resolution": [1000, 1000], "quality": "final" },
+  "output": { "format": "webp" } }

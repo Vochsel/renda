@@ -1,0 +1,30 @@
+{
+  "$schema": "https://renda.dev/schema/v1.json",
+  "version": 1,
+  "name": "Explicit look-at camera on .fbx (Y-up file \u2192 coordinates are Y-up)",
+  "scene": {
+    "root": "../scenes/scene.fbx",
+    "upAxis": "Y"
+  },
+  "camera": {
+    "mode": "lookat",
+    "position": [
+      0,
+      1.2,
+      4
+    ],
+    "target": [
+      0,
+      0.3,
+      0
+    ],
+    "fovDeg": 30
+  },
+  "render": {
+    "engine": "blender-cycles",
+    "resolution": [
+      1280,
+      720
+    ]
+  }
+}
