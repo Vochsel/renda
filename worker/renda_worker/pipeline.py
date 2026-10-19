@@ -92,9 +92,10 @@ class Deps:
     work_root: Path = field(default_factory=lambda: Path(tempfile.gettempdir()) / "renda-work")
 
 
-def _asset_cache(deps: Deps, job_package: dict, inputs: dict) -> AssetCache:
+def _asset_cache(deps: Deps, job_package: dict, inputs: dict, defer_commit: bool = False) -> AssetCache:
     kw = {"download": deps.download} if deps.download else {}
-    return AssetCache(deps.asset_root, inputs, name_hints(job_package), on_new=deps.on_new_asset, **kw)
+    return AssetCache(deps.asset_root, inputs, name_hints(job_package), on_new=deps.on_new_asset,
+                      scratch=deps.work_root / ".downloads", defer_commit=defer_commit, clock=deps.clock, **kw)
 
 
 def _check_cancel(deps: Deps) -> None:
@@ -133,14 +134,16 @@ def run_scene_job(job: JobRequest, deps: Deps) -> dict[str, Any]:
     ev = deps.events
     active = Stopwatch(deps.clock)
     billable = True
+    cache: AssetCache | None = None
     try:
         with active:
             ev.status("planning", progress=0.0)
-            cache = _asset_cache(deps, job.package, {k: str(v) for k, v in job.inputs.items()})
+            cache = _asset_cache(deps, job.package, {k: str(v) for k, v in job.inputs.items()}, defer_commit=True)
             pkg = deps.core.load_package(job.package)
             work = deps.work_root / job.jobId
             work.mkdir(parents=True, exist_ok=True)
             asset_paths = deps.core.resolve(pkg, work, cache.fetch)
+            cache.commit()  # one Volume commit for every newly cached asset, before chunks look for them
             _check_cancel(deps)
             plan = deps.core.plan(pkg, asset_paths, job.priority)
             cache_key = get(plan, "cache_key")
@@ -208,8 +211,8 @@ def run_scene_job(job: JobRequest, deps: Deps) -> dict[str, Any]:
             if cache_key:
                 deps.storage.put_json(_cache_manifest_key(cache_key), {"outputs": outputs, "jobId": job.jobId})
         # Report usage before `done` so the job's billed total is final when clients see it succeed.
-        if billable and active.total > 0:
-            ev.usage(hw.Hardware.CPU.value, active.total, "orchestrate")
+        if billable and _billed(active.total, cache) > 0:
+            ev.usage(hw.Hardware.CPU.value, _billed(active.total, cache), "orchestrate")
             billable = False
         ev.status("succeeded", progress=1.0)
         ev.done(outputs, cached=False)
@@ -222,9 +225,9 @@ def run_scene_job(job: JobRequest, deps: Deps) -> dict[str, Any]:
         ev.failed(f"{type(exc).__name__}: {exc}")
         return {"status": "failed", "error": str(exc)}
     finally:
-        # Orchestrator active time (fetch, plan, finalize) on a 0.25-core container; skip on cache hits.
-        if billable and active.total > 0:
-            ev.usage(hw.Hardware.CPU.value, active.total, "orchestrate")
+        # Orchestrator active time (plan, finalize) on a 0.25-core container; skip on cache hits.
+        if billable and _billed(active.total, cache) > 0:
+            ev.usage(hw.Hardware.CPU.value, _billed(active.total, cache), "orchestrate")
 
 
 def _plain(cfg: Any) -> Any:
@@ -236,6 +239,7 @@ def _plain(cfg: Any) -> Any:
 def run_chunk(task: ChunkTask, deps: Deps, started: float | None = None) -> ChunkResult:
     """Render one chunk of frames and upload them. Bills its own wall time from `started`."""
     started = deps.clock() if started is None else started
+    cache: AssetCache | None = None
     try:
         cache = _asset_cache(deps, task.package, task.inputs)
         pkg = deps.core.load_package(task.package)
@@ -269,13 +273,13 @@ def run_chunk(task: ChunkTask, deps: Deps, started: float | None = None) -> Chun
         shutil.rmtree(work, ignore_errors=True)
         return ChunkResult(task.chunk, task.frames, objects, [str(w) for w in get(result, "warnings") or []])
     finally:
-        seconds = deps.clock() - started
-        deps.events.usage(dispatch.runner_hardware(task.runner).value, seconds, task.chunk)
+        deps.events.usage(dispatch.runner_hardware(task.runner).value, _billed(deps.clock() - started, cache), task.chunk)
 
 
 def run_train(task: "dispatch.TrainTask", deps: Deps, started: float | None = None) -> dict[str, Any]:
     """Splat-bake refinement: train on the Volume views, upload the splat (+ dataset), clean up."""
     started = deps.clock() if started is None else started
+    cache: AssetCache | None = None
     try:
         cache = _asset_cache(deps, task.package, task.inputs)
         pkg = deps.core.load_package(task.package)
@@ -297,7 +301,7 @@ def run_train(task: "dispatch.TrainTask", deps: Deps, started: float | None = No
             deps.on_new_asset()
         return {"outputs": outputs, "warnings": [str(w) for w in get(result, "warnings") or []]}
     finally:
-        deps.events.usage(task.hardware, deps.clock() - started, "train")
+        deps.events.usage(task.hardware, _billed(deps.clock() - started, cache), "train")
 
 
 def run_encode(task: EncodeTask, deps: Deps, started: float | None = None) -> dict[str, Any]:
@@ -327,6 +331,11 @@ def run_encode(task: EncodeTask, deps: Deps, started: float | None = None) -> di
         return result
     finally:
         deps.events.usage(hw.Hardware.CPU.value, deps.clock() - started, "encode")
+
+
+def _billed(seconds: float, cache: AssetCache | None) -> float:
+    """Seconds to bill: filling the asset cache on a miss is our infrastructure cost, not the user's."""
+    return max(0.0, seconds - (cache.fetch_seconds if cache is not None else 0.0))
 
 
 def _parallel(fn: Callable[[Any], Any], items: Sequence[Any], workers: int = 16) -> list[Any]:
@@ -373,6 +382,7 @@ def _subprocess_runner(cmd: list[str], cwd: Path, timeout: int) -> subprocess.Co
 
 def run_hyperframes_job(job: JobRequest, deps: Deps, run: Runner = _subprocess_runner, timeout: int = 2 * 60 * 60, started: float | None = None) -> dict[str, Any]:
     started = deps.clock() if started is None else started
+    cache: AssetCache | None = None
     ev = deps.events
     try:
         hp = HyperframesPackage.model_validate(job.package)
@@ -408,4 +418,4 @@ def run_hyperframes_job(job: JobRequest, deps: Deps, run: Runner = _subprocess_r
         ev.failed(f"{type(exc).__name__}: {exc}")
         return {"status": "failed", "error": str(exc)}
     finally:
-        ev.usage(hw.Hardware.CPU.value, deps.clock() - started, "hyperframes")
+        ev.usage(hw.Hardware.CPU.value, _billed(deps.clock() - started, cache), "hyperframes")
