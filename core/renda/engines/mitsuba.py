@@ -33,6 +33,21 @@ def _optix_denoiser_weights() -> bool:
     return any(glob.glob(p) for p in ("/usr/share/nvidia/nvoptix.bin", "/usr/lib/x86_64-linux-gnu/nvoptix.bin"))
 
 
+def _rfilter(pkg) -> dict:
+    """render.antialias → Mitsuba reconstruction filter (default: Gaussian, Mitsuba's own default)."""
+    aa = pkg.render.antialias
+    if aa is None:
+        return {"type": "gaussian"}
+    if aa.filter == "box":
+        return {"type": "box"}
+    if aa.filter == "mitchell":
+        return {"type": "mitchell"}
+    if aa.filter == "blackman-harris":
+        return {"type": "lanczos", "lobes": 3}
+    # width 1.5 px (Blender's default) ↔ σ = 0.5 (Mitsuba's default), scaled linearly
+    return {"type": "gaussian", "stddev": max(aa.filterWidth / 3, 0.1)}
+
+
 def pick_variant(prefer_gpu: bool) -> str:
     """cuda (Linux GPU) > metal (Apple) > llvm (vectorised CPU) > scalar."""
     import mitsuba as mi
@@ -167,16 +182,26 @@ class MitsubaEngine(Engine):
             integrator = {"type": "aov", "aovs": ",".join(aovs), "integrator": integrator}
         scene["integrator"] = integrator
 
-        cams = resolve_cameras(pkg, stage, frames, warnings, prefer_scene=use_scene_cam)
+        from ..ir.camera import resolve_subframes
+
+        subs = resolve_subframes(pkg, stage, frames, warnings, prefer_scene=use_scene_cam,
+                                 emulate_motion_blur=pkg.render.motionBlur is not None)
+        cams = {f: s[len(s) // 2] for f, s in subs.items()}
         first = cams[frames[0]]
+        n_sub = len(subs[frames[0]])
+        spp_sub = max(1, round(spp / n_sub))  # same total samples, spread over the shutter
+        thin_lens = first.focus_distance is not None and first.ortho_height is None
         sensor: dict = {
-            "type": "perspective" if first.ortho_height is None else "orthographic",
+            "type": "thinlens" if thin_lens else "perspective" if first.ortho_height is None else "orthographic",
             "near_clip": float(max(first.near, 1e-4)), "far_clip": float(first.far),
             "to_world": mi.ScalarTransform4f().look_at(origin=first.position.tolist(), target=first.target.tolist(), up=first.up.tolist()),
             "film": {"type": "hdrfilm", "width": width, "height": height, "pixel_format": "rgba",
-                     "rfilter": {"type": "gaussian"}, "sample_border": True},
-            "sampler": {"type": "independent", "sample_count": spp, "seed": pkg.render.seed},
+                     "rfilter": _rfilter(pkg), "sample_border": True},
+            "sampler": {"type": "independent", "sample_count": spp_sub, "seed": pkg.render.seed},
         }
+        if thin_lens:
+            sensor["aperture_radius"] = float(first.aperture_radius)
+            sensor["focus_distance"] = float(first.focus_distance)
         if first.ortho_height is None:
             sensor["fov"] = float(first.fov_y_deg)
             sensor["fov_axis"] = "y"
@@ -200,6 +225,8 @@ class MitsubaEngine(Engine):
         files: list[Path] = []
         from ..images import save_beauty, save_pass
 
+        post = pkg.post
+        tm_mode, exposure = (post.tonemap, post.exposure) if post is not None else ("agx", 0.0)
         depths: dict[int, np.ndarray] = {}
         for f in frames:
             cam = cams[f]
@@ -211,24 +238,29 @@ class MitsubaEngine(Engine):
                 rebuilt.update({k: v for k, v in scene.items() if not k.startswith(("shape_", "bsdf_"))})
                 mi_scene = mi.load_dict(rebuilt)
                 params = mi.traverse(mi_scene)
-            if cam is not first:
-                params["camera.to_world"] = mi.Transform4f().look_at(origin=cam.position.tolist(), target=cam.target.tolist(), up=cam.up.tolist()) \
-                    if first.ortho_height is None else params["camera.to_world"]
-                params.update()
-            mi.render(mi_scene, params, seed=pkg.render.seed + f, spp=spp)
-            film = mi_scene.sensors()[0].film()
-            bmp = film.bitmap(raw=False)
-            channels = dict(bmp.split())
+            acc = None
+            channels: dict = {}
+            for i, sub in enumerate(subs[f]):
+                if first.ortho_height is None:
+                    params["camera.to_world"] = mi.Transform4f().look_at(origin=sub.position.tolist(), target=sub.target.tolist(), up=sub.up.tolist())
+                    params.update()
+                mi.render(mi_scene, params, seed=(pkg.render.seed + f) * 64 + i, spp=spp_sub)
+                bmp = mi_scene.sensors()[0].film().bitmap(raw=False)
+                sub_rgba = np.array(bmp, copy=True)[..., :4].astype(np.float32)  # R,G,B,A first
+                acc = sub_rgba if acc is None else acc + sub_rgba
+                if i == len(subs[f]) // 2:
+                    channels = {k: np.array(v, copy=True) for k, v in bmp.split()}
+            rgba = acc / len(subs[f])
             if hybrid and "depth" in channels:
-                depths[f] = _planar_depth(np.array(channels["depth"], copy=True), cam, width, height)
-            rgba = np.array(bmp, copy=False)[..., :4].astype(np.float32)  # R,G,B,A first
+                depths[f] = _planar_depth(channels["depth"], cam, width, height)
             if denoiser is not None:
                 rgb = np.array(denoiser(mi.TensorXf(rgba[..., :3].copy())))
                 rgba = np.concatenate([rgb, rgba[..., 3:4]], axis=-1)
             if hybrid:  # mesh layer with alpha; composite_files adds splats + background and the final format
-                save_beauty(rgba, ctx.out_dir / frame_filename("beauty", f, "png"), "png", True, None)
+                save_beauty(rgba, ctx.out_dir / frame_filename("beauty", f, "png"), "png", True, None, tm_mode, exposure)
             else:
-                files.append(save_beauty(rgba, ctx.out_dir / frame_filename("beauty", f, ext), ext, pkg.output.transparent, bgc))
+                files.append(save_beauty(rgba, ctx.out_dir / frame_filename("beauty", f, ext), ext, pkg.output.transparent, bgc,
+                                         tm_mode, exposure))
             pass_ext = "exr" if pkg.output.format == "exr" else "png"
             for p in passes:
                 if p == "alpha":

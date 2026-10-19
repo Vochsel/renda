@@ -256,7 +256,12 @@ def plan(
         + (5.0 if fmt in ("step", "iges") else 0.0)  # OpenCASCADE tessellation (cached afterwards)
     if has_splats and engine in ("blender-cycles", "blender-eevee", "blender-workbench", "mitsuba"):
         load_s += 4.0  # splat file + rasteriser init for the composited layer
-    frame_s = frame_seconds(engine, hardware, pkg, samples, complexity, splats)
+    from . import effects, post as post_mod
+
+    frame_s = frame_seconds(engine, hardware, pkg, samples, complexity, splats) * effects.frame_cost_factor(pkg, engine)
+    if post_mod.is_active(pkg.post, True):
+        frame_s += 0.35 * pkg.render.resolution[0] * pkg.render.resolution[1] / 2.07e6  # numpy post stage, per 1080p frame
+    warnings += effects.warnings_for(pkg, engine)
     chunks = chunk_frames(frames, load_s, frame_s, priority)
     encode_s = 0.05 * len(frames) * (pkg.render.resolution[0] * pkg.render.resolution[1] / 2.07e6) if pkg.output.is_video else 0.0
     total = len(chunks) * load_s + len(frames) * frame_s + encode_s

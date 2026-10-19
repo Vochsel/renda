@@ -51,3 +51,47 @@ def test_orbit_framing_never_clips_during_turntable(lo, hi):
         cam = type(base)(base.target + rot @ rel, base.target, up, base.fov_y_deg)
         x, y = _ndc(cam, _corners(lo, hi), 4 / 3)
         assert max(np.abs(x).max(), np.abs(y).max()) <= 1.0 + 1e-6, deg
+
+
+def test_blender_auto_framing_matches_core(tmp_path):
+    """Blender's in-process auto camera (render.py frame_auto) must frame like core's frame_bounds, so a
+    package looks the same in Cycles/Eevee as in Mitsuba/three.js/gsplat."""
+    import json
+    import subprocess
+    from pathlib import Path
+
+    import numpy as np
+    import pytest
+
+    from renda.ir.loaders.blender import blender_binary
+    from renda.ir.camera import frame_bounds
+
+    exe = blender_binary()
+    if not exe:
+        pytest.skip("blender not installed")
+    script = Path(__file__).parents[1] / "renda" / "engines" / "blender_scripts" / "render.py"
+    lo, hi = (-2.0, -0.5, 0.0), (2.0, 0.5, 0.3)  # long and flat: where sphere framing is far too loose
+    out = tmp_path / "cam.json"
+    expr = f"""
+import bpy, json, importlib.util, sys
+from mathutils import Vector
+sys.argv = ["x"]
+spec = importlib.util.spec_from_file_location("rr", {str(script)!r}); rr = importlib.util.module_from_spec(spec)
+sys.path.insert(0, {str(script.parent)!r}); spec.loader.exec_module(rr)
+bpy.ops.wm.read_factory_settings(use_empty=True)
+bpy.ops.mesh.primitive_cube_add()
+ob = bpy.context.active_object
+ob.scale = ({(hi[0]-lo[0])/2}, {(hi[1]-lo[1])/2}, {(hi[2]-lo[2])/2}); ob.location = ({(hi[0]+lo[0])/2}, {(hi[1]+lo[1])/2}, {(hi[2]+lo[2])/2})
+bpy.context.view_layer.update()
+res = {{}}
+for orbit in (False, True):
+    pos, tgt, fov = rr.frame_auto(bpy.context.scene, {{"fovDeg": 35, "elevationDeg": 20, "azimuthDeg": 35, "padding": 0.1}}, 16/9, orbit=orbit)
+    res[str(orbit)] = {{"pos": list(pos), "tgt": list(tgt)}}
+json.dump(res, open({str(out)!r}, "w"))
+"""
+    subprocess.run([exe, "-b", "--factory-startup", "--python-expr", expr], check=True, capture_output=True, timeout=120)
+    got = json.loads(out.read_text())
+    for orbit in (False, True):
+        ref = frame_bounds(np.array(lo), np.array(hi), np.array([0.0, 0, 1]), 35, 16 / 9, 20, 35, 0.1, orbit=orbit)
+        assert np.allclose(got[str(orbit)]["pos"], ref.position, atol=1e-3), orbit
+        assert np.allclose(got[str(orbit)]["tgt"], ref.target, atol=1e-3), orbit

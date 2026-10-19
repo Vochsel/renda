@@ -103,4 +103,11 @@ class Engine(abc.ABC):
             "accepts": sorted(self.accepts),
             "gpu": self.capabilities.gpu,
             "passes": sorted(self.capabilities.passes),
+            "effects": _effects_for(self.name),
         }
+
+
+def _effects_for(name: str) -> dict:
+    from ..effects import MATRIX
+
+    return {**MATRIX.get(name, {}), "post": "shared"}

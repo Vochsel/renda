@@ -174,6 +174,27 @@ without Hydra's weight. In `core/renda/ir/`:
 
 Engines: `blender-cycles`, `blender-eevee`, `blender-workbench` (natively load blend/usd/gltf/fbx/obj/stl/ply/abc via Blender importers, plus `.rir`), `mitsuba` (via IR), `threejs` (headless Chromium + three.js WebGL rasteriser — the cheapest preview engine, renders three.js JSON natively and anything else via IR→glTF; splats via Spark in the same scene, so meshes and splats occlude each other properly), `gsplat` (Gaussian splats only: nerfstudio gsplat on CUDA, a vectorised numpy reference rasteriser elsewhere). New engines (pbrt-v4, LuxCore, Arnold…) are one adapter file each.
 
+### Lens, motion blur and post effects across engines
+
+`camera.lens` (focal length, f-stop → depth of field, focus, bokeh blades, anamorphic ratio), `render.antialias`,
+`render.motionBlur` and `post` are engine-agnostic controls. `core/renda/effects.py` holds the support matrix
+(native / emulated / approximated / unsupported per engine), which drives job warnings, `renda engines --json`
+and the planner's cost factors:
+
+- **Native** wherever the engine has the feature: Blender cameras (DoF, blades, ratio, pixel filter, motion
+  blur — turntables become a keyframed pivot so the blur follows the true arc), Mitsuba's `thinlens` sensor
+  and reconstruction filters, three.js tone mapping/exposure.
+- **Emulated** around the engine otherwise: subframe accumulation in linear light for motion blur (Mitsuba
+  splits its samples across subframes, so it costs the same; Workbench, three.js and gsplat pay
+  `subframes` × frame time), and thin-lens depth of field from the depth buffer (three.js, gsplat) with a
+  layered gather blur and polygonal/anamorphic bokeh (`core/renda/post.py`).
+- **Post** (`renda.post`): white balance, bloom, contrast/saturation, lens distortion, chromatic aberration,
+  vignette, sharpen and film grain run as one shared numpy stage on every finished frame, so they look the
+  same on every engine. Exposure and tonemap (AgX/Filmic/ACES/Khronos Neutral/Standard) run inside the
+  engine, before the image is display-referred.
+- Lens maths (`core/renda/lens.py`) treats scene units as metres; `ResolvedCamera` carries focal length,
+  focus distance and aperture so every engine focuses on the same plane.
+
 ### Gaussian splats across engines
 
 | Scene | auto picks | how |

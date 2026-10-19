@@ -912,6 +912,83 @@
               "default": 0.1,
               "type": "number",
               "minimum": 0
+            },
+            "lens": {
+              "type": "object",
+              "properties": {
+                "focalLengthMm": {
+                  "description": "Overrides fovDeg; measured across sensorWidthMm (the larger image side).",
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "maximum": 5000
+                },
+                "sensorWidthMm": {
+                  "default": 36,
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "fStop": {
+                  "description": "Aperture f-number. Setting it turns depth of field on.",
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "maximum": 256
+                },
+                "focusDistance": {
+                  "description": "Scene units from the camera. Overrides focusTarget.",
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "focusTarget": {
+                  "default": "auto",
+                  "description": "\"auto\" = the camera target; [x,y,z] = a point; any other string = an object name.",
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "const": "auto"
+                    },
+                    {
+                      "type": "array",
+                      "prefixItems": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ],
+                      "items": false,
+                      "minItems": 3,
+                      "maxItems": 3
+                    },
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  ]
+                },
+                "apertureBlades": {
+                  "default": 0,
+                  "description": "0 = round bokeh, 3+ = polygonal.",
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 16
+                },
+                "apertureRotationDeg": {
+                  "default": 0,
+                  "type": "number"
+                },
+                "anamorphicRatio": {
+                  "default": 1,
+                  "description": ">1 stretches bokeh vertically (anamorphic look).",
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "maximum": 4
+                }
+              },
+              "additionalProperties": false
             }
           },
           "required": [
@@ -929,6 +1006,83 @@
             "name": {
               "description": "Defaults to the active camera.",
               "type": "string"
+            },
+            "lens": {
+              "type": "object",
+              "properties": {
+                "focalLengthMm": {
+                  "description": "Overrides fovDeg; measured across sensorWidthMm (the larger image side).",
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "maximum": 5000
+                },
+                "sensorWidthMm": {
+                  "default": 36,
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "fStop": {
+                  "description": "Aperture f-number. Setting it turns depth of field on.",
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "maximum": 256
+                },
+                "focusDistance": {
+                  "description": "Scene units from the camera. Overrides focusTarget.",
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "focusTarget": {
+                  "default": "auto",
+                  "description": "\"auto\" = the camera target; [x,y,z] = a point; any other string = an object name.",
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "const": "auto"
+                    },
+                    {
+                      "type": "array",
+                      "prefixItems": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ],
+                      "items": false,
+                      "minItems": 3,
+                      "maxItems": 3
+                    },
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  ]
+                },
+                "apertureBlades": {
+                  "default": 0,
+                  "description": "0 = round bokeh, 3+ = polygonal.",
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 16
+                },
+                "apertureRotationDeg": {
+                  "default": 0,
+                  "type": "number"
+                },
+                "anamorphicRatio": {
+                  "default": 1,
+                  "description": ">1 stretches bokeh vertically (anamorphic look).",
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "maximum": 4
+                }
+              },
+              "additionalProperties": false
             }
           },
           "required": [
@@ -1004,6 +1158,83 @@
               "type": "number",
               "exclusiveMinimum": 0,
               "exclusiveMaximum": 180
+            },
+            "lens": {
+              "type": "object",
+              "properties": {
+                "focalLengthMm": {
+                  "description": "Overrides fovDeg; measured across sensorWidthMm (the larger image side).",
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "maximum": 5000
+                },
+                "sensorWidthMm": {
+                  "default": 36,
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "fStop": {
+                  "description": "Aperture f-number. Setting it turns depth of field on.",
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "maximum": 256
+                },
+                "focusDistance": {
+                  "description": "Scene units from the camera. Overrides focusTarget.",
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "focusTarget": {
+                  "default": "auto",
+                  "description": "\"auto\" = the camera target; [x,y,z] = a point; any other string = an object name.",
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "const": "auto"
+                    },
+                    {
+                      "type": "array",
+                      "prefixItems": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ],
+                      "items": false,
+                      "minItems": 3,
+                      "maxItems": 3
+                    },
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  ]
+                },
+                "apertureBlades": {
+                  "default": 0,
+                  "description": "0 = round bokeh, 3+ = polygonal.",
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 16
+                },
+                "apertureRotationDeg": {
+                  "default": 0,
+                  "type": "number"
+                },
+                "anamorphicRatio": {
+                  "default": 1,
+                  "description": ">1 stretches bokeh vertically (anamorphic look).",
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "maximum": 4
+                }
+              },
+              "additionalProperties": false
             }
           },
           "required": [
@@ -1493,6 +1724,59 @@
             "cpu",
             "gpu"
           ]
+        },
+        "antialias": {
+          "type": "object",
+          "properties": {
+            "filter": {
+              "default": "gaussian",
+              "type": "string",
+              "enum": [
+                "gaussian",
+                "box",
+                "blackman-harris",
+                "mitchell"
+              ]
+            },
+            "filterWidth": {
+              "default": 1.5,
+              "description": "Pixels.",
+              "type": "number",
+              "minimum": 0.01,
+              "maximum": 10
+            }
+          },
+          "additionalProperties": false
+        },
+        "motionBlur": {
+          "description": "Needs an animation (a camera turntable or scene animation).",
+          "type": "object",
+          "properties": {
+            "shutter": {
+              "default": 0.5,
+              "description": "Fraction of a frame the shutter is open (0.5 = 180°).",
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 1
+            },
+            "position": {
+              "default": "center",
+              "type": "string",
+              "enum": [
+                "center",
+                "start",
+                "end"
+              ]
+            },
+            "subframes": {
+              "default": 8,
+              "description": "Samples in time where motion blur is emulated.",
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 64
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
@@ -1719,6 +2003,113 @@
               "type": "null"
             }
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "post": {
+      "type": "object",
+      "properties": {
+        "exposure": {
+          "default": 0,
+          "description": "Stops (EV).",
+          "type": "number",
+          "minimum": -10,
+          "maximum": 10
+        },
+        "tonemap": {
+          "default": "agx",
+          "type": "string",
+          "enum": [
+            "agx",
+            "filmic",
+            "aces",
+            "neutral",
+            "standard"
+          ]
+        },
+        "contrast": {
+          "default": 0,
+          "type": "number",
+          "minimum": -1,
+          "maximum": 1
+        },
+        "saturation": {
+          "default": 1,
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "temperature": {
+          "default": 0,
+          "description": "-1 cool … +1 warm.",
+          "type": "number",
+          "minimum": -1,
+          "maximum": 1
+        },
+        "tint": {
+          "default": 0,
+          "description": "-1 green … +1 magenta.",
+          "type": "number",
+          "minimum": -1,
+          "maximum": 1
+        },
+        "vignette": {
+          "default": 0,
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "chromaticAberration": {
+          "default": 0,
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "lensDistortion": {
+          "default": 0,
+          "description": "<0 barrel, >0 pincushion.",
+          "type": "number",
+          "minimum": -1,
+          "maximum": 1
+        },
+        "bloom": {
+          "type": "object",
+          "properties": {
+            "intensity": {
+              "default": 0.3,
+              "type": "number",
+              "minimum": 0,
+              "maximum": 4
+            },
+            "threshold": {
+              "default": 0.8,
+              "description": "Display luminance where the glow starts.",
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "radius": {
+              "default": 0.4,
+              "description": "Relative glow size.",
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "filmGrain": {
+          "default": 0,
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "sharpen": {
+          "default": 0,
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
         }
       },
       "additionalProperties": false

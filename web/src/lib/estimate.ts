@@ -131,6 +131,20 @@ export function estimateModel(pkg: RendaPackage, priority: Priority = "standard"
   return done(engine, hardware, samples, hardware === "gpu-l40s" ? gpu * 0.5 : gpu);
 }
 
+/** Frame-time multiplier for lens effects; mirrors effects.frame_cost_factor in core. */
+function effectsFactor(pkg: RendaPackage, engine: string): number {
+  let f = 1;
+  const mb = pkg.render.motionBlur;
+  if (mb) {
+    if (engine === "mitsuba") f *= 1.1; // samples split across subframes
+    else if (["blender-workbench", "threejs", "gsplat"].includes(engine)) f *= mb.subframes; // emulated
+    else if (engine === "blender-eevee") f *= 2;
+    else f *= 1.15;
+  }
+  if (pkg.camera.lens?.fStop) f *= ["threejs", "gsplat"].includes(engine) ? 1.05 : 1.2;
+  return f;
+}
+
 export function estimateScene(pkg: RendaPackage, priority: Priority = "standard"): Estimate {
   if (pkg.output.format === "glb") return estimateModel(pkg, priority);
   const warnings: string[] = [];
@@ -162,7 +176,8 @@ export function estimateScene(pkg: RendaPackage, priority: Priority = "standard"
   const plans = classes.map((hw) => {
     const c = FRAME_COST[engine][hw]!;
     const splatLayer = hasSplats && engine !== "gsplat" && engine !== "threejs" ? SPLAT_LAYER_SECONDS : 0;
-    const perFrame = (c.fixed + c.perMpSample * mp * samples) * passes + splatLayer;
+    const perFrame = (c.fixed + c.perMpSample * mp * samples) * passes * effectsFactor(pkg, engine) + splatLayer
+      + (pkg.post ? 0.35 * mp / 2.07 : 0); // shared post stage
     const renderSeconds = perFrame * frames;
     const chunks = Math.min(MAX_CONTAINERS, frames, Math.max(1, Math.ceil(renderSeconds / TARGET_CHUNK_SECONDS)));
     const encode = isVideo ? 3 + frames * mp * 0.02 : 0;

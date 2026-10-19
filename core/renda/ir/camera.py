@@ -22,6 +22,10 @@ class ResolvedCamera:
     ortho_height: float | None = None
     near: float = 0.01
     far: float = 10000.0
+    # physical lens (set when the package has camera.lens)
+    focal_mm: float | None = None
+    focus_distance: float | None = None  # plane of focus along the view axis; None = no depth of field
+    aperture_radius: float = 0.0  # scene units
 
     def matrix(self) -> np.ndarray:
         return look_at(self.position, self.target, self.up)
@@ -35,6 +39,8 @@ class ResolvedCamera:
             "orthoHeight": self.ortho_height,
             "near": float(self.near),
             "far": float(self.far),
+            "focalMm": self.focal_mm,
+            "focusDistance": self.focus_distance,
         }
 
 
@@ -104,24 +110,31 @@ def frame_bounds(
     return ResolvedCamera(pos, target, up.astype(float), fov_y_deg, near=max(dist - radius * 2, dist * 0.001), far=dist + radius * 4)
 
 
-def resolve_cameras(pkg: RendaPackage, stage: Stage, frames: list[int], warnings: list[str] | None = None,
-                    prefer_scene: bool = False) -> dict[int, ResolvedCamera]:
-    """One camera per frame, applying the package's camera mode and optional turntable.
+def resolve_cameras(pkg: RendaPackage, stage: Stage, frames: list[float], warnings: list[str] | None = None,
+                    prefer_scene: bool = False) -> dict[float, ResolvedCamera]:
+    """One camera per frame, applying the package's camera mode, lens and optional turntable.
 
+    Frames may be fractional (motion-blur subframes). Turntable motion is a property of the whole
+    animation, not of the chunk being rendered, so a one-frame chunk still gets its rotated view.
     prefer_scene: use the stage's camera when it has one (see scene.native_setup).
     """
+    from ..lens import aperture_radius, effective_fov_y, focal_from_fov_y, focus_distance, focus_point
+
     warnings = warnings if warnings is not None else []
     w, h = pkg.render.resolution
     aspect = w / h
     up = stage.up_vector()
     lo, hi = stage.bounds()
     cam = pkg.camera
+    lens = getattr(cam, "lens", None)
     if prefer_scene and stage.cameras:
-        cam = SceneCamera(mode="scene")
+        cam = SceneCamera(mode="scene", lens=lens)
+    tt = pkg.animation.turntable if pkg.animation else None
+    animated = bool(tt and len(pkg.frames()) > 1)
 
     if isinstance(cam, LookAtCamera):
         base = ResolvedCamera(np.array(cam.position, float), np.array(cam.target, float),
-                              np.array(cam.up, float) if cam.up else up.astype(float), cam.fovDeg)
+                              np.array(cam.up, float) if cam.up else up.astype(float), effective_fov_y(cam.fovDeg, lens, aspect))
     elif isinstance(cam, SceneCamera):
         sc = stage.camera(cam.name)
         if sc is None:
@@ -129,16 +142,24 @@ def resolve_cameras(pkg: RendaPackage, stage: Stage, frames: list[int], warnings
                 f"camera: no camera named {cam.name!r} in scene; using auto framing" if cam.name
                 else "camera: scene has no camera; using auto framing"
             )
-            base = frame_bounds(lo, hi, up, 35, aspect)
+            base = frame_bounds(lo, hi, up, effective_fov_y(35, lens, aspect), aspect)
         else:
             base = _from_scene_camera(sc, stage)
+            if lens is not None and lens.focalLengthMm:
+                base.fov_y_deg = effective_fov_y(base.fov_y_deg, lens, aspect)
     else:
         assert isinstance(cam, AutoCamera)
-        tt_auto = bool(pkg.animation and pkg.animation.turntable and len(frames) > 1)
-        base = frame_bounds(lo, hi, up, cam.fovDeg, aspect, cam.elevationDeg, cam.azimuthDeg, cam.padding, orbit=tt_auto)
+        base = frame_bounds(lo, hi, up, effective_fov_y(cam.fovDeg, lens, aspect), aspect, cam.elevationDeg,
+                            cam.azimuthDeg, cam.padding, orbit=animated)
 
-    tt = pkg.animation.turntable if pkg.animation else None
-    if not tt or len(frames) <= 1:
+    if lens is not None and base.ortho_height is None:
+        base.focal_mm = lens.focalLengthMm or focal_from_fov_y(base.fov_y_deg, lens.sensorWidthMm, aspect)
+        if lens.fStop is not None:
+            point = focus_point(lens, stage, warnings)
+            base.focus_distance = focus_distance(lens, base.position, base.target, point)
+            base.aperture_radius = aperture_radius(base.focal_mm, lens.fStop)
+
+    if not animated:
         return {f: base for f in frames}
 
     axis = up if tt.axis == "up" else {"X": np.array([1.0, 0, 0]), "Y": np.array([0, 1.0, 0]), "Z": np.array([0, 0, 1.0])}[tt.axis]
@@ -150,8 +171,21 @@ def resolve_cameras(pkg: RendaPackage, stage: Stage, frames: list[int], warnings
         ang = 2 * math.pi * tt.revolutions * t
         rel = base.position - base.target
         out[f] = ResolvedCamera(base.target + _rotate(rel, axis, ang), base.target, base.up, base.fov_y_deg,
-                                base.ortho_height, base.near, base.far)
+                                base.ortho_height, base.near, base.far, base.focal_mm, base.focus_distance,
+                                base.aperture_radius)
     return out
+
+
+def resolve_subframes(pkg: RendaPackage, stage: Stage, frames: list[int], warnings: list[str] | None = None,
+                      prefer_scene: bool = False, emulate_motion_blur: bool = True) -> dict[int, list[ResolvedCamera]]:
+    """Cameras per frame for emulated motion blur: one per shutter subframe (just the frame's own camera
+    when there's no motion blur or the engine does it natively)."""
+    from ..effects import subframe_offsets
+
+    offs = subframe_offsets(pkg) if emulate_motion_blur else [0.0]
+    times = [f + o for f in frames for o in offs]
+    cams = resolve_cameras(pkg, stage, times, warnings, prefer_scene)
+    return {f: [cams[f + o] for o in offs] for f in frames}
 
 
 def _from_scene_camera(sc: Camera, stage: Stage) -> ResolvedCamera:

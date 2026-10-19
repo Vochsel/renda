@@ -31,8 +31,11 @@ const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserv
 renderer.setPixelRatio(1);
 renderer.setSize(job.width, job.height, false);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.toneMapping = THREE.AgXToneMapping ?? THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.0;
+renderer.toneMapping = {
+  agx: THREE.AgXToneMapping, aces: THREE.ACESFilmicToneMapping, neutral: THREE.NeutralToneMapping,
+  standard: THREE.LinearToneMapping, filmic: THREE.CineonToneMapping,
+}[job.tonemap || "agx"] ?? THREE.AgXToneMapping;
+renderer.toneMappingExposure = Math.pow(2, job.exposure || 0);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.appendChild(renderer.domElement);
@@ -217,8 +220,47 @@ async function applyTextures(frame) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const mixers = [];
-window.renderFrame = async (frame) => {
-  const c = job.cameras[String(frame)];
+window.renderFrame = (frame) => window.renderView(job.cameras[String(frame)], frame);
+
+// Linear view-space depth (scene units) packed into RGB, for emulated depth of field. Meshes only:
+// Spark splats draw outside the material system, so they read as background here.
+const depthMaterial = new THREE.ShaderMaterial({
+  uniforms: { far: { value: 1000 } },
+  vertexShader: `varying float vDepth;
+    void main() { vec4 mv = modelViewMatrix * vec4(position, 1.0); vDepth = -mv.z; gl_Position = projectionMatrix * mv; }`,
+  fragmentShader: `uniform float far; varying float vDepth;
+    void main() {
+      float v = clamp(vDepth / far, 0.0, 0.99999);
+      vec3 enc = fract(v * vec3(1.0, 255.0, 65025.0));
+      enc -= enc.yzz * vec3(1.0 / 255.0, 1.0 / 255.0, 0.0);
+      gl_FragColor = vec4(enc, 1.0);
+    }`,
+});
+window.renderDepth = (c) => {
+  placeCamera(c);
+  const bg = scene.background, tm = renderer.toneMapping;
+  scene.background = null;
+  scene.overrideMaterial = depthMaterial;
+  depthMaterial.uniforms.far.value = c.far;
+  for (const m of splatMeshes) m.visible = false;
+  if (spark) spark.visible = false;
+  renderer.toneMapping = THREE.NoToneMapping;
+  const cs = renderer.outputColorSpace;
+  renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+  renderer.setClearColor(0xffffff, 1);
+  renderer.render(scene, camera);
+  const url = renderer.domElement.toDataURL("image/png");
+  scene.overrideMaterial = null;
+  scene.background = bg;
+  renderer.toneMapping = tm;
+  renderer.outputColorSpace = cs;
+  renderer.setClearColor(0x000000, job.transparent ? 0 : 1);
+  for (const m of splatMeshes) m.visible = true;
+  if (spark) spark.visible = true;
+  return url;
+};
+
+window.renderView = async (c, frame) => {
   placeCamera(c);
   await applyTextures(frame);
   if (mixers.length && job.fps) for (const m of mixers) m.setTime((frame - job.frameStart) / job.fps);

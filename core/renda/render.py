@@ -45,8 +45,24 @@ def render_frames(
     if plan.engine == "gsplat" and pkg.scene.textureOverrides:
         result.warnings.append("gsplat: Gaussian splats have no material textures; textureOverrides were ignored "
                                "(they apply to meshes in the other engines)")
+    apply_post(pkg, plan.engine, result)
     result.seconds = time.time() - t0
     return result
+
+
+def apply_post(pkg: RendaPackage, engine: str, result: RenderResult) -> None:
+    """The shared post stage (renda.post) on every beauty frame, so it looks the same on every engine.
+    (Effect support warnings come from the planner, once per job.)"""
+    from . import effects, post
+
+    emulate_exposure = effects.status(engine, "exposure") == effects.EMULATED
+    if not post.is_active(pkg.post, emulate_exposure):
+        return
+    for f in result.files:
+        m = re.match(r"frame_(\d+)\.(png|jpg|jpeg|webp|exr)$", Path(f).name)
+        if m:
+            post.apply_file(Path(f), pkg.post, seed=pkg.render.seed * 100003 + int(m.group(1)),
+                            emulate_exposure=emulate_exposure, warnings=result.warnings)
 
 
 _MAGIC_EXT = [

@@ -1,0 +1,225 @@
+[
+ {
+  "engine": "blender-cycles",
+  "case": "plain",
+  "warnings": [],
+  "seconds": 3.38
+ },
+ {
+  "engine": "blender-cycles",
+  "case": "dof",
+  "warnings": [],
+  "seconds": 5.01
+ },
+ {
+  "engine": "blender-cycles",
+  "case": "motion blur",
+  "warnings": [],
+  "seconds": 3.77
+ },
+ {
+  "engine": "blender-cycles",
+  "case": "post",
+  "warnings": [],
+  "seconds": 2.82
+ },
+ {
+  "engine": "blender-cycles",
+  "case": "aa+aces",
+  "warnings": [
+   "blender-cycles: Blender has no ACES view transform; used Filmic"
+  ],
+  "seconds": 2.46
+ },
+ {
+  "engine": "blender-eevee",
+  "case": "plain",
+  "warnings": [],
+  "seconds": 26.77
+ },
+ {
+  "engine": "blender-eevee",
+  "case": "dof",
+  "warnings": [],
+  "seconds": 3.37
+ },
+ {
+  "engine": "blender-eevee",
+  "case": "motion blur",
+  "warnings": [],
+  "seconds": 2.42
+ },
+ {
+  "engine": "blender-eevee",
+  "case": "post",
+  "warnings": [],
+  "seconds": 2.35
+ },
+ {
+  "engine": "blender-eevee",
+  "case": "aa+aces",
+  "warnings": [
+   "blender-eevee: Blender has no ACES view transform; used Filmic"
+  ],
+  "seconds": 2.0
+ },
+ {
+  "engine": "blender-workbench",
+  "case": "plain",
+  "warnings": [],
+  "seconds": 2.56
+ },
+ {
+  "engine": "blender-workbench",
+  "case": "dof",
+  "warnings": [],
+  "seconds": 2.06
+ },
+ {
+  "engine": "blender-workbench",
+  "case": "motion blur",
+  "warnings": [
+   "blender-workbench: Workbench has no motion blur; emulated with subframe accumulation"
+  ],
+  "seconds": 2.31
+ },
+ {
+  "engine": "blender-workbench",
+  "case": "post",
+  "warnings": [],
+  "seconds": 2.14
+ },
+ {
+  "engine": "blender-workbench",
+  "case": "aa+aces",
+  "warnings": [
+   "blender-workbench: Blender has no ACES view transform; used Filmic"
+  ],
+  "seconds": 1.74
+ },
+ {
+  "engine": "mitsuba",
+  "case": "plain",
+  "warnings": [
+   "mitsuba: denoising needs a CUDA GPU; llvm_ad_rgb output is undenoised at 64 spp"
+  ],
+  "seconds": 2.0
+ },
+ {
+  "engine": "mitsuba",
+  "case": "dof",
+  "warnings": [
+   "mitsuba: Mitsuba's thin lens is round; aperture blades ignored",
+   "mitsuba: denoising needs a CUDA GPU; llvm_ad_rgb output is undenoised at 64 spp"
+  ],
+  "seconds": 1.91
+ },
+ {
+  "engine": "mitsuba",
+  "case": "motion blur",
+  "warnings": [
+   "mitsuba: motion blur emulated with subframes (samples split across them, same cost)",
+   "mitsuba: OptiX denoiser unavailable on this GPU; rendered at 256 spp instead"
+  ],
+  "seconds": 1.51
+ },
+ {
+  "engine": "mitsuba",
+  "case": "post",
+  "warnings": [
+   "mitsuba: denoising needs a CUDA GPU; llvm_ad_rgb output is undenoised at 64 spp"
+  ],
+  "seconds": 1.73
+ },
+ {
+  "engine": "mitsuba",
+  "case": "aa+aces",
+  "warnings": [
+   "mitsuba: denoising needs a CUDA GPU; llvm_ad_rgb output is undenoised at 64 spp"
+  ],
+  "seconds": 1.22
+ },
+ {
+  "engine": "threejs",
+  "case": "plain",
+  "warnings": [],
+  "seconds": 3.25
+ },
+ {
+  "engine": "threejs",
+  "case": "dof",
+  "warnings": [
+   "threejs: depth of field emulated from the depth buffer",
+   "threejs: blades is emulated on this engine"
+  ],
+  "seconds": 3.49
+ },
+ {
+  "engine": "threejs",
+  "case": "motion blur",
+  "warnings": [
+   "threejs: motion blur emulated with subframe accumulation"
+  ],
+  "seconds": 4.97
+ },
+ {
+  "engine": "threejs",
+  "case": "post",
+  "warnings": [],
+  "seconds": 2.75
+ },
+ {
+  "engine": "threejs",
+  "case": "aa+aces",
+  "warnings": [
+   "threejs: antialias filter approximated by the supersample downscale filter"
+  ],
+  "seconds": 2.45
+ },
+ {
+  "engine": "gsplat",
+  "case": "plain",
+  "warnings": [
+   "splats: assumed COLMAP/OpenCV axes (Y down); if the render is upside down set scene.upAxis to \"Y\" (or \"Z\")"
+  ],
+  "seconds": 4.82
+ },
+ {
+  "engine": "gsplat",
+  "case": "dof",
+  "warnings": [
+   "gsplat: depth of field emulated from the splat depth",
+   "gsplat: blades is emulated on this engine",
+   "splats: assumed COLMAP/OpenCV axes (Y down); if the render is upside down set scene.upAxis to \"Y\" (or \"Z\")"
+  ],
+  "seconds": 0.36
+ },
+ {
+  "engine": "gsplat",
+  "case": "motion blur",
+  "warnings": [
+   "gsplat: motion blur emulated with subframe accumulation",
+   "splats: assumed COLMAP/OpenCV axes (Y down); if the render is upside down set scene.upAxis to \"Y\" (or \"Z\")"
+  ],
+  "seconds": 0.59
+ },
+ {
+  "engine": "gsplat",
+  "case": "post",
+  "warnings": [
+   "splats: assumed COLMAP/OpenCV axes (Y down); if the render is upside down set scene.upAxis to \"Y\" (or \"Z\")"
+  ],
+  "seconds": 0.41
+ },
+ {
+  "engine": "gsplat",
+  "case": "aa+aces",
+  "warnings": [
+   "gsplat: gsplat's anti-aliased rasteriser ignores antialias filter settings",
+   "gsplat: exposure applied to the display-referred splat colours",
+   "gsplat: splat colours are already display-referred, so no tonemap is applied",
+   "splats: assumed COLMAP/OpenCV axes (Y down); if the render is upside down set scene.upAxis to \"Y\" (or \"Z\")"
+  ],
+  "seconds": 0.2
+ }
+]
