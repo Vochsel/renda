@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -54,6 +55,13 @@ def _trimesh_scene(stage: Stage, pbr: bool = True):
         visual = trimesh.visual.TextureVisuals(uv=uv, material=mats[mat.name])
         tm = trimesh.Trimesh(vertices=mesh.points, faces=mesh.indices, vertex_normals=mesh.normals,
                              visual=visual, process=False)
+        if mesh.colors is not None and len(mesh.colors) == len(mesh.points):
+            # vertex-coloured meshes (scans, PLY): COLOR_0 (linear floats, per the glTF spec) next to the
+            # material; viewers and Blender's importer multiply it into the base colour. trimesh writes
+            # custom attributes as "_COLOR_0"; _fix_color_attribute renames it after export.
+            rgba = np.ones((len(mesh.colors), 4), dtype=np.float32)
+            rgba[:, : mesh.colors.shape[1]] = np.clip(mesh.colors[:, :4], 0, 1)
+            tm.vertex_attributes["COLOR_0"] = rgba
         scene.add_geometry(tm, node_name=f"{mesh.name}_{i}", geom_name=f"{mesh.name}_{i}", transform=mesh.transform)
     return scene
 
@@ -62,8 +70,41 @@ def to_gltf(stage: Stage, out: str | Path) -> Path:
     """Write .glb (or .gltf). Lights/cameras are not written (engines get them from the job)."""
     out = Path(out)
     scene = _trimesh_scene(stage, pbr=True)
-    scene.export(str(out), file_type="glb" if out.suffix.lower() != ".gltf" else "gltf")
+    if out.suffix.lower() == ".gltf":
+        scene.export(str(out), file_type="gltf")
+        data = json.loads(out.read_text())
+        if _fix_color_attribute(data):
+            out.write_text(json.dumps(data))
+    else:
+        out.write_bytes(_patch_glb(scene.export(file_type="glb")))
     return out
+
+
+def _fix_color_attribute(gltf: dict) -> bool:
+    """Rename trimesh's "_COLOR_0" custom attribute to the standard COLOR_0. Returns True if changed."""
+    changed = False
+    for m in gltf.get("meshes", []):
+        for prim in m.get("primitives", []):
+            attrs = prim.get("attributes", {})
+            if "_COLOR_0" in attrs and "COLOR_0" not in attrs:
+                attrs["COLOR_0"] = attrs.pop("_COLOR_0")
+                changed = True
+    return changed
+
+
+def _patch_glb(glb: bytes) -> bytes:
+    """Apply _fix_color_attribute to a GLB's JSON chunk (re-padded to 4 bytes)."""
+    import struct
+
+    json_len = struct.unpack_from("<I", glb, 12)[0]
+    data = json.loads(glb[20:20 + json_len])
+    if not _fix_color_attribute(data):
+        return glb
+    js = json.dumps(data, separators=(",", ":")).encode()
+    js += b" " * (-len(js) % 4)
+    rest = glb[20 + json_len:]
+    body = struct.pack("<I", len(js)) + b"JSON" + js + rest
+    return glb[:8] + struct.pack("<I", 12 + len(body)) + body
 
 
 def to_obj(stage: Stage, out: str | Path) -> Path:

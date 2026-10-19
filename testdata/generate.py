@@ -300,6 +300,59 @@ def write_ply_and_3mf() -> None:
     # 3MF is Z-up by spec; the glTF source is Y-up, so rotate (x, y, z) → (x, -z, y).
     scene.apply_transform(trimesh.transformations.rotation_matrix(np.pi / 2, (1, 0, 0)))
     scene.export(SCENES / "scene.3mf")
+    _add_3mf_colors(SCENES / "scene.3mf", scene)
+
+
+def _add_3mf_colors(path: Path, scene) -> None:
+    """trimesh writes 3MF without materials; add a <basematerials> group from the glTF base colours and
+    point each object at its entry (pid/pindex), so 3MF colour support is visible."""
+    import shutil
+    import tempfile
+    import zipfile
+    from xml.etree import ElementTree as ET
+
+    import numpy as np
+
+    core = "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
+    ET.register_namespace("", core)
+
+    def srgb_hex(rgba) -> str:
+        c = np.clip(np.asarray(rgba[:3], dtype=float), 0, 1)
+        c = np.where(c <= 0.0031308, c * 12.92, 1.055 * c ** (1 / 2.4) - 0.055)
+        return "#" + "".join(f"{int(round(v * 255)):02X}" for v in c) + "FF"
+
+    colors = {}
+    for name, geom in scene.geometry.items():
+        mat = getattr(geom.visual, "material", None)
+        f = getattr(mat, "baseColorFactor", None)
+        rgba = (np.asarray(f, dtype=float) / 255.0) if f is not None else np.array([0.8, 0.8, 0.8, 1.0])
+        if getattr(mat, "baseColorTexture", None) is not None:  # textured (checker cube): use its orange
+            rgba = np.array([0.9, 0.35, 0.08, 1.0])
+        colors[name] = (getattr(mat, "name", None) or name, srgb_hex(rgba))
+
+    with zipfile.ZipFile(path) as z:
+        parts = {n: z.read(n) for n in z.namelist()}
+    model = "3D/3dmodel.model"
+    root = ET.fromstring(parts[model])
+    resources = root.find(f"{{{core}}}resources")
+    base = ET.Element(f"{{{core}}}basematerials", {"id": "1000"})
+    index = {}
+    for obj in resources.findall(f"{{{core}}}object"):
+        entry = colors.get(obj.get("name"))
+        if entry is None or obj.find(f"{{{core}}}mesh") is None:
+            continue
+        index.setdefault(entry, len(index))
+        obj.set("pid", "1000")
+        obj.set("pindex", str(index[entry]))
+    for (name, hexcol), _ in sorted(index.items(), key=lambda kv: kv[1]):
+        ET.SubElement(base, f"{{{core}}}base", {"name": name, "displaycolor": hexcol})
+    resources.insert(0, base)
+    parts[model] = ET.tostring(root, xml_declaration=True, encoding="utf-8")
+    tmp = Path(tempfile.mkdtemp()) / path.name
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
+        for n, data in parts.items():
+            z.writestr(n, data)
+    shutil.move(str(tmp), path)
 
 
 def write_threejs() -> None:

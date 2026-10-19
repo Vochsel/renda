@@ -114,10 +114,14 @@ so set `scene.unitScale` for mm/cm files.
   the default material.
 - **STL**: no materials or colours, and usually mm and Z-up. Set `upAxis: "Z"`,
   `unitScale: 0.001`, and a `materialOverrides` colour.
-- **PLY**: vertex colours are used automatically. Point clouds without faces render as
+- **PLY**: vertex colours are used automatically, in every engine. Point clouds without faces render as
   small spheres in Blender engines.
-- **Alembic (.abc)**: imported via Blender; set `animation.frames` to the cache range.
-- **DAE / 3MF**: loaded via the IR loaders; simple materials only.
+- **Alembic (.abc)**: imported via Blender; set `animation.frames` to the cache range. Caches carry no
+  materials, so they render in neutral clay — use `materialOverrides` for colour.
+- **3MF**: per-object and per-triangle colours (`basematerials`, `colorgroup`) become materials named after
+  the 3MF material, so `materialOverrides` can target them. Units stay as written (usually mm: add
+  `unitScale: 0.001`).
+- **DAE**: loaded via the IR loaders; simple materials only.
 - **STEP (.step/.stp) and IGES (.iges/.igs)**: tessellated with OpenCASCADE. Units are converted to
   metres automatically (don't add `unitScale: 0.001` for a mm file; `unitScale` applies on top), Z up,
   STEP part/assembly colours become materials. Treat like a product shot (studio HDRI, auto camera).

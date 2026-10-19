@@ -57,7 +57,9 @@ def load(path: Path, fmt: str) -> Stage:
                 mat_name = mat_ids[key]
         elif isinstance(visual, trimesh.visual.ColorVisuals):
             if visual.kind == "vertex":
+                # PLY/OBJ store 8-bit sRGB; the IR keeps vertex colours linear (like glTF COLOR_0)
                 colors = np.asarray(visual.vertex_colors, dtype=np.float32)[:, :4] / 255.0
+                colors[:, :3] = _srgb_lin(colors[:, :3])
             elif visual.kind == "face":
                 fc = np.asarray(visual.face_colors[0], dtype=np.float32) / 255.0
                 name = _unique(f"color_{len(stage.materials)}", stage.materials)
