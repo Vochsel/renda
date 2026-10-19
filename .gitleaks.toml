@@ -1,0 +1,28 @@
+# Default gitleaks rules plus Renda-specific ones; fake keys in tests are allowlisted.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "renda-api-key"
+description = "Renda API key"
+regex = '''rnd_live_[A-Za-z0-9_-]{24,}'''
+keywords = ["rnd_live_"]
+
+[[rules]]
+id = "stripe-claimable-sandbox-key"
+description = "Stripe claimable sandbox restricted key"
+regex = '''rkcs_(test|live)_[A-Za-z0-9]{24,}'''
+keywords = ["rkcs_"]
+
+[allowlist]
+description = "Obviously fake keys used in tests and docs"
+regexes = [
+  '''rnd_live_x{8,}''',
+  '''rnd_live_(trial|verified)+''',
+  '''rnd_live_…''',
+]
+paths = [
+  '''(^|/)pnpm-lock\.yaml$''',
+  '''(^|/)uv\.lock$''',
+  '''^testdata/scenes/''',
+]

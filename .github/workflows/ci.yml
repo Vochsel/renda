@@ -1,0 +1,120 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "24"
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  node:
+    name: spec · mcp · cli
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --filter "@rendahq/cli..."
+      - name: Build (spec → mcp → cli)
+        run: pnpm --filter "@rendahq/cli..." build
+      - name: Test spec
+        run: pnpm --filter @rendahq/spec test
+      - name: Test mcp
+        run: pnpm --filter @rendahq/mcp test
+      - name: Test cli
+        run: pnpm --filter @rendahq/cli test
+      - name: Committed JSON Schema matches the spec
+        run: git diff --exit-code -- spec/schema/renda.v1.json
+
+  web:
+    name: web
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --filter "@rendahq/web..."
+      - uses: actions/cache@v5
+        with:
+          path: web/.next/cache
+          key: next-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ hashFiles('web/src/**') }}
+          restore-keys: next-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-
+      # prebuild builds the workspace deps (spec, mcp). Env access is lazy, so no secrets are needed;
+      # the build also generates Next's route types that tsc needs.
+      - name: Build
+        run: pnpm --filter @rendahq/web build
+      - name: Typecheck
+        run: pnpm --filter @rendahq/web exec tsc --noEmit
+      - name: Lint
+        run: pnpm --filter @rendahq/web lint
+      - name: Test
+        run: pnpm --filter @rendahq/web test
+
+  core:
+    name: core (python)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      # spec/dist feeds the Zod ↔ pydantic parity tests.
+      - name: Build spec
+        run: |
+          pnpm install --frozen-lockfile --filter "@rendahq/spec"
+          pnpm --filter @rendahq/spec build
+      # Mitsuba 3.9's LLVM backend needs a newer libLLVM than the distro ships.
+      - name: Install LLVM 19
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc >/dev/null
+          echo "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-19 main" | sudo tee /etc/apt/sources.list.d/llvm.list
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends libllvm19
+          echo "DRJIT_LIBLLVM_PATH=$(find /usr/lib/x86_64-linux-gnu -name 'libLLVM*19*.so*' | head -1)" >> "$GITHUB_ENV"
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: core/uv.lock
+      # No GPU, Blender or Chromium here: tests that need them skip themselves (-rs lists why).
+      - name: Sync
+        working-directory: core
+        run: uv sync --frozen --extra mitsuba --extra cad --extra usd
+      - name: Test
+        working-directory: core
+        run: uv run --frozen pytest -q -rs
+
+  worker:
+    name: worker (python)
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: worker/uv.lock
+      - name: Test
+        working-directory: worker
+        run: uv run pytest -q -rs

@@ -1,5 +1,8 @@
 # Renda
 
+[![CI](https://github.com/vochsel/renda/actions/workflows/ci.yml/badge.svg)](https://github.com/vochsel/renda/actions/workflows/ci.yml)
+[![Production smoke](https://github.com/vochsel/renda/actions/workflows/smoke.yml/badge.svg)](https://github.com/vochsel/renda/actions/workflows/smoke.yml)
+
 **Open-source, agent-first cloud rendering for 3D files and scenes.**
 
 Hand Renda a `.blend`, `.usdz`, `.glb`, `.fbx`, `.obj`, `.stl`, `.ply`, `.dae`, `.3mf`, `.abc`,
