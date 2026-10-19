@@ -12,14 +12,11 @@ import { SplatDemo } from "@/components/splat-demo";
 const FORMATS = [".blend", ".usd(z)", ".glb", ".fbx", ".obj", ".stl", ".ply", ".dae", ".3mf", ".abc", "three.js", "splats (.ply .splat .spz)"];
 const ENGINES = ["Cycles", "Eevee", "Workbench", "Mitsuba 3", "three.js", "gsplat", "HyperFrames"];
 
-// Under the hero, in a 2-column grid with one shared aspect ratio.
-const HERO = "porsche-cycles";
-const GRID = [
-  "courtyard-mixed-cycles", "lizard-gsplat",
-  "camera-mitsuba", "hall-turntable",
-  "samurai-eevee", "raccoon-gsplat",
-  "craftsman-threejs", "venus-turntable",
-];
+// Showcase grouped by what goes in and what comes out. `wide` items span both columns.
+const MESH_IMAGE = ["porsche-cycles", "camera-mitsuba", "samurai-eevee", "craftsman-threejs"];
+const SPLAT_IMAGE = { wide: "courtyard-mixed-cycles", grid: ["lizard-gsplat", "raccoon-gsplat"] };
+const MESH_VIDEO = "venus-turntable";
+const SPLAT_VIDEO = "hall-turntable";
 
 const GPU_SHORT: Record<ShowcaseItem["hardware"], string> = { cpu: "CPU", "gpu-l4": "L4 GPU", "gpu-l40s": "L40S GPU" };
 
@@ -36,6 +33,14 @@ function Stats({ item }: { item: ShowcaseItem }) {
     `$${item.costUsd < 0.01 ? item.costUsd.toFixed(4) : item.costUsd.toFixed(2)}`,
   ].filter(Boolean);
   return <p className="text-muted-foreground mt-1 font-mono text-[11px] tracking-tight">{parts.join("  ·  ")}</p>;
+}
+
+function SectionLabel({ from, to }: { from: string; to: string }) {
+  return (
+    <h2 className="mb-5 font-mono text-xs tracking-wide uppercase">
+      {from} <span className="text-muted-foreground">→</span> {to}
+    </h2>
+  );
 }
 
 function Render({ item, priority, aspect, className }: { item: ShowcaseItem; priority?: boolean; aspect?: string; className?: string }) {
@@ -70,7 +75,9 @@ function Render({ item, priority, aspect, className }: { item: ShowcaseItem; pri
 
 const TOC: TocItem[] = [
   { id: "start", label: "Get started" },
-  { id: "renders", label: "Example renders" },
+  { id: "mesh-image", label: "3D → image" },
+  { id: "splat-image", label: "Splat → image" },
+  { id: "video", label: "3D & splat → video" },
   { id: "bake", label: "Light baking → GLB" },
   { id: "splats", label: "Mesh → splat" },
   { id: "formats", label: "Formats & pricing" },
@@ -78,9 +85,12 @@ const TOC: TocItem[] = [
 
 export default function Home() {
   const byId = Object.fromEntries(SHOWCASE.map((s) => [s.id, s]));
-  const hero = byId[HERO];
-  const grid = GRID.map((id) => byId[id]);
-  const shown = [hero, ...grid];
+  const meshImages = MESH_IMAGE.map((id) => byId[id]);
+  const splatWide = byId[SPLAT_IMAGE.wide];
+  const splatImages = SPLAT_IMAGE.grid.map((id) => byId[id]);
+  const meshVideo = byId[MESH_VIDEO];
+  const splatVideo = byId[SPLAT_VIDEO];
+  const shown = [...meshImages, splatWide, ...splatImages, meshVideo, splatVideo];
   const total = shown.reduce((n, s) => n + s.costUsd, 0);
   const cheapest = Math.min(...Object.values(PRICE_PER_MINUTE));
 
@@ -118,11 +128,32 @@ export default function Home() {
         </section>
 
         <section id="renders" aria-label="Example renders" className="scroll-mt-20 pb-6">
-          <Render item={hero} priority />
-          <div className="mt-12 grid gap-x-8 gap-y-12 sm:grid-cols-2">
-            {grid.map((item) => (
-              <Render key={item.id} item={item} aspect="4 / 3" />
-            ))}
+          <div id="mesh-image" className="scroll-mt-20">
+            <SectionLabel from="3D" to="image" />
+            <div className="grid gap-x-8 gap-y-12 sm:grid-cols-2">
+              {meshImages.map((item, i) => (
+                <Render key={item.id} item={item} aspect="4 / 3" priority={i < 2} />
+              ))}
+            </div>
+          </div>
+          <div id="splat-image" className="mt-16 scroll-mt-20">
+            <SectionLabel from="Splat" to="image" />
+            <Render item={splatWide} />
+            <div className="mt-12 grid gap-x-8 gap-y-12 sm:grid-cols-2">
+              {splatImages.map((item) => (
+                <Render key={item.id} item={item} aspect="4 / 3" />
+              ))}
+            </div>
+          </div>
+          <div id="video" className="mt-16 grid scroll-mt-20 gap-x-8 gap-y-12 sm:grid-cols-2">
+            <div>
+              <SectionLabel from="3D" to="video" />
+              <Render item={meshVideo} aspect="1 / 1" />
+            </div>
+            <div>
+              <SectionLabel from="Splat" to="video" />
+              <Render item={splatVideo} aspect="1 / 1" />
+            </div>
           </div>
           <p className="text-muted-foreground mt-10 text-xs">
             Real jobs on the production pipeline, unretouched. All {shown.length} cost ${total.toFixed(2)} together. Models from
