@@ -6,6 +6,7 @@ import { installSnippets } from "@/lib/install-snippets";
 import { FREE_MINUTES, HARDWARE_LABEL, PRICE_PER_MINUTE } from "@/lib/pricing";
 import { SHOWCASE, type ShowcaseItem } from "@/lib/showcase";
 import { BakeDemo } from "@/components/bake-demo";
+import { SplatDemo } from "@/components/splat-demo";
 
 const FORMATS = [".blend", ".usd(z)", ".glb", ".fbx", ".obj", ".stl", ".ply", ".dae", ".3mf", ".abc", "three.js", "splats (.ply .splat .spz)"];
 const ENGINES = ["Cycles", "Eevee", "Workbench", "Mitsuba 3", "three.js", "gsplat", "HyperFrames"];
@@ -129,6 +130,16 @@ export default function Home() {
             HDRI and lights into the textures, so the GLB looks lit in any viewer or engine, with no lights. Drag to orbit.
           </p>
           <BakeDemo />
+        </section>
+
+        <section aria-label="Mesh to Gaussian splat" className="border-border mt-16 border-t pt-14 pb-6">
+          <h2 className="text-2xl font-semibold tracking-tight">Turn any mesh into a Gaussian splat</h2>
+          <p className="text-muted-foreground mt-3 mb-10 max-w-xl text-pretty">
+            <span className="text-foreground font-mono text-sm">renda splat model.glb</span> — cameras are fitted around the
+            model, views render in parallel, and gsplat trains from an exact COLMAP dataset, so lighting and reflections
+            are baked into the splat. Switch between the source mesh and the splat; drag to orbit.
+          </p>
+          <SplatDemo />
         </section>
 
         <section className="border-border mt-16 grid gap-10 border-t py-14 text-sm sm:grid-cols-3">
