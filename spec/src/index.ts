@@ -273,8 +273,24 @@ export const Bake = z.strictObject({
   textureFormat: z.enum(["png", "jpg", "webp"]).default("jpg"),
 });
 
+/** `output.format: "splat"` bakes the scene into a 3D Gaussian splat (see `splatBake`). */
+export const SplatFormat = z.enum(["ply", "spz", "splat"]);
+
+export const SplatBake = z.strictObject({
+  preset: z.enum(["fast", "standard", "high"]).default("standard")
+    .describe("fast: mesh → Gaussians directly (albedo, seconds). standard/high: + rendered views and gsplat refinement (lighting baked in)."),
+  views: z.number().int().min(8).max(1000).nullable().default(null).describe("Rendered training views (preset default when null)."),
+  resolution: z.number().int().min(128).max(2048).nullable().default(null).describe("Square view resolution in px."),
+  steps: z.number().int().min(0).max(100000).nullable().default(null).describe("Refinement iterations."),
+  shDegree: z.number().int().min(0).max(3).nullable().default(null).describe("Spherical-harmonic degree (view-dependent colour)."),
+  maxGaussians: z.number().int().min(1000).max(10_000_000).nullable().default(null),
+  engine: Engine.default("auto").describe("Engine that renders the training views (not gsplat)."),
+  coverage: z.enum(["auto", "sphere", "hemisphere"]).default("auto"),
+  dataset: z.boolean().default(false).describe("Also return the views + exact COLMAP sparse model as a zip."),
+});
+
 export const Output = z.strictObject({
-  format: z.union([ImageFormat, VideoFormat, ModelFormat]).default("png"),
+  format: z.union([ImageFormat, VideoFormat, ModelFormat, z.literal("splat")]).default("png"),
   passes: z.array(z.enum(["beauty", "alpha", "depth", "normal", "albedo", "mask"])).default(["beauty"]),
   transparent: z.boolean().default(false),
   video: z.strictObject({
@@ -284,6 +300,8 @@ export const Output = z.strictObject({
   keepFrames: z.boolean().default(false).describe("Also return individual frames for video outputs."),
   bake: Bake.nullable().optional()
     .describe('Bake lighting into textures (needs format "glb"). Omit/null with format "glb" = plain conversion to GLB.'),
+  splatFormat: SplatFormat.optional().describe('File type for format "splat" (default ply).'),
+  splatBake: SplatBake.optional().describe('Settings for format "splat".'),
 });
 
 /** Look and lens post effects. Exposure and tonemap run inside the engine where it can; the rest is a shared
@@ -331,6 +349,14 @@ export const RendaPackage = z.strictObject(packageShape).superRefine((pkg, ctx) 
   const isVideo = VideoFormat.safeParse(pkg.output.format).success;
   if (isVideo && !pkg.animation) {
     ctx.addIssue({ code: "custom", path: ["animation"], message: `output.format "${pkg.output.format}" needs an animation range` });
+  }
+  if (pkg.output.format === "splat") {
+    if (pkg.animation) ctx.addIssue({ code: "custom", path: ["animation"], message: 'output.format "splat" bakes a static scene; remove animation' });
+    if (pkg.output.splatBake?.engine === "gsplat") {
+      ctx.addIssue({ code: "custom", path: ["output", "splatBake", "engine"], message: "training views need a mesh renderer (cycles, eevee, mitsuba, threejs or auto)" });
+    }
+  } else if (pkg.output.splatFormat || pkg.output.splatBake) {
+    ctx.addIssue({ code: "custom", path: ["output", "format"], message: 'splatFormat/splatBake need output.format "splat"' });
   }
   if (pkg.output.transparent && ["jpg", "mp4", "gif"].includes(pkg.output.format)) {
     ctx.addIssue({ code: "custom", path: ["output", "transparent"], message: `${pkg.output.format} has no alpha channel; use png/webp/exr/webm/mov` });

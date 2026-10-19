@@ -310,6 +310,31 @@ these from `jobs.outputs`; `worker/scripts/backfill_thumbs.py` fills them in for
 - **3D animation / turntable**: frames rendered in chunks → `ffmpeg` encode (mp4 h264/h265, webm vp9, gif, prores) on CPU.
 - **HyperFrames** (`kind:"hyperframes"`): HTML-composition videos rendered with the HyperFrames CLI in a Chromium image. A composition may reference Renda outputs (e.g. a turntable clip) — submit the 3D job first, pass its output URL into the composition.
 
+## 6b. Splat bakes (mesh scene → Gaussian splat)
+
+`output.format: "splat"` (CLI `renda splat`, MCP `renda_bake_splat`) turns any mesh scene into a 3D
+Gaussian splat (`splatFormat` ply/spz/splat). Code: `core/renda/splatbake/`.
+
+1. **Mesh → Gaussians** (Mesh2Splat-style, EA SEED 2025): area-weighted surface samples, flat discs
+   oriented along the surface, base colour from textures. Preset `fast` stops here (CPU, seconds, albedo only).
+2. **Training views**: a rig fitted to the bounds (Fibonacci shell framing the bounding sphere + ~30%
+   close-ups aimed at surface points; `coverage` auto/sphere/hemisphere), rendered as transparent PNGs by
+   any mesh engine through the normal chunk fan-out. The rig is deterministic, so chunks and the trainer
+   agree on poses without passing them around; engines receive it via `ir.camera.override_cameras`.
+   Views go to the assets Volume (`bakes/<job>/views/`), not R2.
+3. **Exact COLMAP model**: PINHOLE intrinsics + OpenCV-convention poses straight from the rig (no SfM),
+   points3D from the surface samples; returned with the views when `dataset: true`.
+4. **Refinement** (`splatbake/train.py`, splat image, L4 standard / L40S high): gsplat with MCMC
+   densification capped at `maxGaussians`, antialiased rasterisation, 0.8·L1 + 0.2·(1−SSIM) on random
+   backgrounds + alpha loss, depth and normal losses against the frozen mesh-surface Gaussians (geometry
+   from the source mesh, independent of the view engine), progressive SH, early stop on held-out PSNR.
+   Every 8th view is held out; PSNR/SSIM are reported as a job warning.
+
+Worker flow: orchestrate → view chunks (`local_dir` on the Volume) → `train_splat_{l4,l40s}` (usage chunk
+`train`) → splat (+ dataset zip) uploaded to R2 → views deleted. Measured on Modal (2026-10-19), testdata
+table scene, standard: 96 Cycles views in 5 parallel L4 chunks (~90 GPU-s), 7k steps in 235 s, holdout
+PSNR 34.5 dB / SSIM 0.980, $0.24 total.
+
 ## 7. Agent-first onboarding
 
 Patterns borrowed from Stripe sandboxes, WorkOS unclaimed environments, Neon `init`, Convex anonymous

@@ -171,12 +171,13 @@ class BlenderEngine(Engine):
                       "fovDeg": first.fov_y_deg}
             tt = None
             use_scene_camera = False
-            transparent_film = True  # meshes only: the compositor adds splats and the background
-            if "depth" not in passes:
-                passes.append("depth")
-            if (getattr(pkg.camera, "lens", None) and pkg.camera.lens.fStop) or pkg.render.motionBlur:
-                warnings.append(f"{self.name}: depth of field and motion blur apply to the meshes; the composited "
-                                "splat layer stays sharp")
+            if hybrid_stage is not None:
+                transparent_film = True  # meshes only: the compositor adds splats and the background
+                if "depth" not in passes:
+                    passes.append("depth")
+                if (getattr(pkg.camera, "lens", None) and pkg.camera.lens.fStop) or pkg.render.motionBlur:
+                    warnings.append(f"{self.name}: depth of field and motion blur apply to the meshes; the composited "
+                                    "splat layer stays sharp")
         lens = getattr(pkg.camera, "lens", None)
         lens_job = None
         if lens is not None:
@@ -245,7 +246,10 @@ class BlenderEngine(Engine):
         warnings: list[str] = []
         stage = splat_stage_for(ctx)
         if stage is None:
-            job = self.build_job(ctx, frames, warnings)
+            from ..ir.camera import active_override
+
+            # explicit rig cameras (splat bake) replace Blender's own framing
+            job = self.build_job(ctx, frames, warnings, cams=active_override(frames))
             try:
                 result = run_blender_script("render.py", job)
             finally:

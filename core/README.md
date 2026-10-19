@@ -12,6 +12,8 @@ renda render scene.json --engine threejs       # three.js JSON scene, cheapest p
 renda render capture.spz --engine threejs      # Gaussian splats locally (Spark); in the cloud auto → gsplat
 renda render bracket.stl --engine mitsuba --quality final -o out/
 renda info robot.fbx                           # format, triangles, bounds, cameras, lights
+renda splat chair.glb --preset fast            # mesh → Gaussian splat in seconds (albedo); default preset bakes lighting (needs CUDA or --cloud)
+renda splat room.blend --cloud --format spz --dataset   # + exact COLMAP model of the training views
 renda convert robot.fbx robot.glb              # any → .glb / .gltf / .obj / .usd(a|c) / .rir
 renda init model.glb                           # writes model.renda.json to edit
 renda engines                                  # what's installed here

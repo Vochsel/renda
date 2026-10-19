@@ -43,6 +43,11 @@ Gaussian splats: splat-only scenes render with engine "gsplat"; put meshes insid
 CAD: \`renda render bracket.step\` (also .stp, .iges/.igs). STEP keeps part colours; units become metres; Z up. Meshing density: scene.tessellation {linearDeflection (m), angularDeflection (rad)}. IGES colours aren't imported — use scene.materialOverrides.
 Composing scenes: a package can \`"extends": ["./studio.renda.json", "https://…/brand.renda.json"]\` (later wins; objects merge, arrays replace, null removes) and place other packages with \`scene.include: [{"package": "./props/chair.renda.json", "as": "chair", "transform": {...}}]\`. Relative paths resolve against the file that wrote them. \`renda flatten pkg.renda.json --provenance\` shows the result and which layer set each field; render/estimate/validate flatten automatically.
 Lens and look, in the package: camera.lens {focalLengthMm, fStop (turns on depth of field), focusTarget, apertureBlades}, render.antialias {filter, filterWidth}, render.motionBlur {shutter} (needs an animation), post {exposure, tonemap: agx|filmic|aces|neutral|standard, contrast, saturation, temperature, vignette, chromaticAberration, lensDistortion, bloom, filmGrain, sharpen}. Same controls on every engine: native in Blender, emulated where an engine lacks them (warnings say so); post effects are one shared stage, identical across engines. Emulated motion blur (workbench, threejs, gsplat) costs subframes × the frame time.
+Bake any mesh scene into a Gaussian splat (output.format "splat"):
+    renda splat model.glb --preset fast                  # mesh → Gaussians directly, seconds, albedo only
+    renda splat scene.blend --format spz                 # standard: ~96 views (Cycles) + gsplat refinement, lighting baked, a few minutes, ~$0.2–0.5
+    renda splat model.glb --preset high --dataset        # 200 views, 30k steps, SH3 on L40S; --dataset also returns views + exact COLMAP model (zip)
+Poses come from the scene itself (no structure-from-motion), so the COLMAP model is exact. Holdout PSNR/SSIM is reported in the job warnings.
 Identical re-renders are cached and free. Local paths are uploaded automatically (deduped by sha256).
 
 Bake lighting into a model and get a GLB back (works in any glTF viewer / game engine with no lights):
@@ -56,7 +61,7 @@ Package form: output: {"format": "glb", "bake": {"mode": "unlit", "size": 2048}}
 ## 5. MCP (if you'd rather use tools than the CLI)
 - Local stdio: \`${installSnippets.mcp.claudeCode}\` (or \`renda mcp add --agent cursor|codex|claude-code\`).
 - Remote (streamable HTTP): ${base}/api/mcp with header \`Authorization: Bearer <apiKey>\`.
-Tools: renda_trial, renda_claim, renda_signup, renda_verify, renda_render, renda_bake, renda_estimate, renda_flatten_package, renda_get_job, renda_list_jobs, renda_render_video, renda_usage, renda_billing_link, …
+Tools: renda_trial, renda_claim, renda_signup, renda_verify, renda_render, renda_bake, renda_bake_splat, renda_estimate, renda_flatten_package, renda_get_job, renda_list_jobs, renda_render_video, renda_usage, renda_billing_link, …
 Skills: \`npx skills add ${GITHUB_REPO}\` · Claude Code plugin: \`/plugin marketplace add ${GITHUB_REPO}\` then \`/plugin install renda@renda\`.
 
 ## 6. Errors and money

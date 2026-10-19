@@ -324,17 +324,46 @@ def render(
     json_out: JsonOpt = False,
 ):
     """Render a scene locally (default) or in the cloud (--cloud)."""
-    from .spec import load_package
-
     raw, base = load_input(input)
     raw = apply_overrides(raw, engine=engine, res=res, quality=quality, samples=samples, frames=frames, fmt=fmt,
                           transparent=transparent, turntable=turntable, textures=texture)
-    _run(raw, base, output, priority, cloud, wait, max_minutes, json_out)
+    _run(raw, base, output, priority=priority, cloud=cloud, wait=wait, max_minutes=max_minutes, json_out=json_out)
 
 
-def _run(raw: dict, base: Path, output: Path, priority: str, cloud: bool, wait: bool, max_minutes: float | None,
+@command
+def splat(
+    input: Annotated[Path, typer.Argument(help="Scene file or .renda.json package (meshes of any format)")],
+    output: Annotated[Path, typer.Option("-o", "--output", help="Output directory")] = Path("renders"),
+    preset: Annotated[str, typer.Option(help="fast (mesh → Gaussians, seconds) | standard | high (rendered views + gsplat refinement)")] = "standard",
+    fmt: Annotated[str, typer.Option("--format", help="ply|spz|splat")] = "ply",
+    views: Annotated[Optional[int], typer.Option(help="Training views (preset default when omitted)")] = None,
+    steps: Annotated[Optional[int], typer.Option(help="Refinement steps")] = None,
+    sh_degree: Annotated[Optional[int], typer.Option("--sh-degree", help="0-3 view-dependent colour")] = None,
+    engine: Annotated[Optional[str], typer.Option(help="Engine for the training views (auto|blender-cycles|blender-eevee|mitsuba|threejs)")] = None,
+    dataset: Annotated[bool, typer.Option("--dataset", help="Also return the views + exact COLMAP model (zip)")] = False,
+    priority: Annotated[str, typer.Option(help="economy|standard|rush (cloud)")] = "standard",
+    cloud: Annotated[bool, typer.Option("--cloud", help="Bake in the Renda cloud (needed for standard/high without a CUDA GPU)")] = False,
+    wait: Annotated[bool, typer.Option("--wait/--no-wait", help="Cloud: wait for the job and download outputs")] = True,
+    max_minutes: Annotated[Optional[float], typer.Option("--max-minutes", help="Cloud: refuse if the estimate exceeds this many render-minutes")] = None,
+    json_out: JsonOpt = False,
+):
+    """Bake a scene into a 3D Gaussian splat (.ply/.spz/.splat), lighting included."""
+    raw, base = load_input(input)
+    o = raw.setdefault("output", {})
+    o.update({"format": "splat", "splatFormat": fmt})
+    sb = {"preset": preset, "dataset": dataset}
+    for k, v in (("views", views), ("steps", steps), ("shDegree", sh_degree), ("engine", engine)):
+        if v is not None:
+            sb[k] = v
+    o["splatBake"] = {**o.get("splatBake", {}), **sb}
+    o.pop("passes", None)
+    raw.pop("animation", None)
+    _run(raw, base, output, priority=priority, cloud=cloud, wait=wait, max_minutes=max_minutes, json_out=json_out)
+
+
+def _run(raw: dict, base: Path, output: Path, *, priority: str, cloud: bool, wait: bool, max_minutes: float | None,
          json_out: bool) -> None:
-    """Render/bake a raw package locally or in the cloud (shared by `render` and `bake`)."""
+    """Shared body of render/bake/splat: validate, then render locally or submit to the cloud."""
     from .spec import load_package
 
     pkg = load_package(raw)
@@ -464,7 +493,7 @@ def bake(
         if samples:
             b["samples"] = samples
         o["bake"] = b
-    _run(raw, base, output, priority, cloud, wait, max_minutes, json_out)
+    _run(raw, base, output, priority=priority, cloud=cloud, wait=wait, max_minutes=max_minutes, json_out=json_out)
 
 
 @command

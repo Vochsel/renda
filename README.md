@@ -45,6 +45,9 @@ get 30 free minutes. A full account by email works from a terminal too: `renda s
   gsplat behind one CLI. Gaussian splats render in all of them (natively in three.js and gsplat,
   depth-composited over Blender and Mitsuba renders). A lightweight scene IR (Hydra-lite) means a `.blend` can be rendered in
   Mitsuba, or a three.js scene in Cycles.
+- **Bake any scene into a Gaussian splat.** `renda splat model.glb` turns meshes (with their lighting)
+  into `.ply`/`.spz`/`.splat`: mesh-initialised Gaussians, auto-fitted views rendered in parallel, an exact
+  COLMAP model, and gsplat refinement. A few minutes and ~$0.25 for a typical object.
 - **A tiny typed package format** (`*.renda.json`) for what scene files can't say: resolution,
   camera, HDRI, lights, material overrides, frame range, output format. See [`spec/`](spec/).
 - **Cheap.** Per-second billing, automatic CPU vs GPU selection, result + asset caching,

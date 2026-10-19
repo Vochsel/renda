@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import math
 from dataclasses import dataclass
 
@@ -110,6 +112,26 @@ def frame_bounds(
     return ResolvedCamera(pos, target, up.astype(float), fov_y_deg, near=max(dist - radius * 2, dist * 0.001), far=dist + radius * 4)
 
 
+# Explicit per-frame cameras (e.g. the splat-bake rig) that replace the package's camera for every engine.
+_OVERRIDE: contextvars.ContextVar[dict[int, ResolvedCamera] | None] = contextvars.ContextVar("renda_cameras", default=None)
+
+
+@contextlib.contextmanager
+def override_cameras(cams: dict[int, ResolvedCamera]):
+    """Within the block, resolve_cameras returns these cameras (keyed by frame) for any engine."""
+    token = _OVERRIDE.set(cams)
+    try:
+        yield
+    finally:
+        _OVERRIDE.reset(token)
+
+
+def active_override(frames: list[float]) -> dict[float, ResolvedCamera] | None:
+    """The override cameras for `frames`, or None outside override_cameras()."""
+    override = _OVERRIDE.get()
+    return None if override is None else {f: override[f] for f in frames}
+
+
 def resolve_cameras(pkg: RendaPackage, stage: Stage, frames: list[float], warnings: list[str] | None = None,
                     prefer_scene: bool = False) -> dict[float, ResolvedCamera]:
     """One camera per frame, applying the package's camera mode, lens and optional turntable.
@@ -118,6 +140,12 @@ def resolve_cameras(pkg: RendaPackage, stage: Stage, frames: list[float], warnin
     animation, not of the chunk being rendered, so a one-frame chunk still gets its rotated view.
     prefer_scene: use the stage's camera when it has one (see scene.native_setup).
     """
+    override = _OVERRIDE.get()
+    if override is not None:
+        # Explicit rig cameras (splat-bake training views) are used as-is: sharp pinholes, no lens/DoF,
+        # since depth of field or blur would be baked into the splat. Callers warn if a lens was set.
+        return {f: override[f] for f in frames}
+
     from ..lens import aperture_radius, effective_fov_y, focal_from_fov_y, focus_distance, focus_point
 
     warnings = warnings if warnings is not None else []

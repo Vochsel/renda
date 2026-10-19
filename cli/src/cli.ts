@@ -69,6 +69,8 @@ Render
                bake lighting into the textures and download a .glb   (--glb: plain conversion, no bake)
                [--frames a-b] [--format png|mp4|…] [-o dir] [--no-wait] [--max-minutes N] [--local]
                [--texture "material=/Wood.*/i,slot=baseColor,scale=4:./oak.jpg"]  (repeatable; any image or video)
+  renda splat <file|pkg> [--preset fast|standard|high] [--format ply|spz|splat] [--views N] [--steps N]
+               [--engine …] [--dataset] [--local]   bake any 3D scene into a Gaussian splat, lighting included
   renda estimate <file|pkg>                  time + cost before rendering
   renda jobs [id] [--cancel] [--download dir]
   renda validate <pkg.renda.json>            check a package against the spec
@@ -343,7 +345,7 @@ const COMMANDS: Record<string, Handler> = {
     if (!file) throw new UsageError("usage: renda render <file|package.renda.json>");
     if (bool(ctx.flags, "local")) return runLocal(ctx, file);
     const { pkg, baseDir } = await buildPackage(ctx, file);
-    return submit(ctx, pkg, baseDir);
+    await submitAndFinish(ctx, pkg, baseDir);
   },
 
   async bake(ctx, [file]) {
@@ -352,7 +354,29 @@ const COMMANDS: Record<string, Handler> = {
     }
     if (bool(ctx.flags, "local")) return runLocal(ctx, file, "bake");
     const { pkg, baseDir } = await buildPackage(ctx, file, (p) => applyBake(p, ctx.flags));
-    return submit(ctx, pkg, baseDir);
+    await submitAndFinish(ctx, pkg, baseDir);
+  },
+
+  // ---------------- splat bake ----------------
+  async splat(ctx, [file]) {
+    if (!file) throw new UsageError("usage: renda splat <file|package.renda.json> [--preset fast|standard|high] [--format ply|spz|splat]");
+    if (bool(ctx.flags, "local")) return runLocal(ctx, file, "splat");
+    const fmt = str(ctx.flags, "format") ?? "ply";
+    if (!["ply", "spz", "splat"].includes(fmt)) throw new UsageError("--format must be ply, spz or splat");
+    const { format: _fmt, engine: _engine, ...rest } = ctx.flags;
+    const { pkg, baseDir } = await buildPackage(ctx, file, (p) => {
+      const sb: Record<string, unknown> = { ...(p.output?.splatBake ?? {}) };
+      sb.preset = str(ctx.flags, "preset") ?? sb.preset ?? "standard";
+      for (const [flag, key] of [["views", "views"], ["steps", "steps"], ["sh-degree", "shDegree"]] as const) {
+        const v = num(ctx.flags, flag);
+        if (v !== undefined) sb[key] = v;
+      }
+      if (str(ctx.flags, "engine")) sb.engine = str(ctx.flags, "engine"); // the engine that renders the training views
+      if (bool(ctx.flags, "dataset")) sb.dataset = true;
+      p.output = { format: "splat", splatFormat: fmt, splatBake: sb };
+      delete p.animation;
+    }, rest);
+    await submitAndFinish(ctx, pkg, baseDir);
   },
 
   async estimate(ctx, [file]) {
@@ -455,29 +479,49 @@ function packageOverrides(flags: Parsed["flags"]) {
   return o;
 }
 
+/** Upload local files, check the budget, submit, wait and download (shared by render, bake and splat). */
+async function submitAndFinish(ctx: Ctx, pkg: any, baseDir: string) {
+  const { client, trial } = await ctx.authed(true);
+  const maxMinutes = num(ctx.flags, "max-minutes");
+  const { package: uploadedPkg, uploaded } = await uploadLocalPaths(client, pkg as any, baseDir);
+  if (uploaded.length) ctx.out.info(`uploaded ${uploaded.length} file(s) (${uploaded.filter((u) => u.deduped).length} already on server)`);
+  if (maxMinutes !== undefined) {
+    const est = await client.estimate(uploadedPkg as any);
+    const hi = (est as any).estSeconds?.[1] ?? 0;
+    if (hi / 60 > maxMinutes) {
+      throw new CliError("over_budget", `Estimated up to ${minutes(hi)}, above --max-minutes ${maxMinutes}.`, EXIT.error,
+        "Lower --res/--quality/--frames, or raise --max-minutes.", [], { estimate: est });
+    }
+  }
+  let job = await client.createJob({ package: uploadedPkg as any, priority: (str(ctx.flags, "priority") as any) ?? "standard" });
+  ctx.out.info(`job ${job.id} ${job.status}`);
+  if (ctx.flags.wait !== false) job = await waitJob(ctx, client, job);
+  await finish(ctx, job, trial?.claimUrl);
+}
+
 /** Bare scene file → starter package; .renda.json → read it and apply CLI overrides. */
-async function buildPackage(ctx: Ctx, file: string, mutate?: (pkg: any) => void): Promise<{ pkg: any; baseDir: string }> {
+async function buildPackage(ctx: Ctx, file: string, edit?: (pkg: any) => void, flags: Ctx["flags"] = ctx.flags): Promise<{ pkg: any; baseDir: string }> {
   const remote = /^(https?|asset):\/\//.test(file);
   const abs = remote ? file : resolve(file);
   const baseDir = remote ? ctx.deps.sys.cwd() : dirname(abs);
   let pkg: any;
   if (remote) {
-    pkg = starterPackage(file, packageOverrides(ctx.flags) as any);
+    pkg = starterPackage(file, packageOverrides(flags) as any);
   } else if (file.endsWith(".renda.json")) {
     pkg = (await flattenFile(abs)).package; // extends / package references resolved against the file
-    const f = ctx.flags;
+    const f = flags;
     if (str(f, "engine") || str(f, "res") || str(f, "quality")) pkg.render = { ...(pkg.render ?? {}) };
     if (str(f, "engine")) pkg.render.engine = str(f, "engine");
     if (str(f, "res")) pkg.render.resolution = parseRes(str(f, "res")!);
     if (str(f, "quality")) pkg.render.quality = str(f, "quality");
     if (str(f, "format")) pkg.output = { ...(pkg.output ?? {}), format: str(f, "format") };
   } else {
-    pkg = starterPackage(`./${basename(abs)}`, packageOverrides(ctx.flags) as any);
+    pkg = starterPackage(`./${basename(abs)}`, packageOverrides(flags) as any);
   }
-  if (str(ctx.flags, "frames")) {
-    pkg.animation = { ...(pkg.animation ?? { fps: 30 }), frames: parseFrames(str(ctx.flags, "frames")!) };
+  if (str(flags, "frames")) {
+    pkg.animation = { ...(pkg.animation ?? { fps: 30 }), frames: parseFrames(str(flags, "frames")!) };
   }
-  mutate?.(pkg);
+  edit?.(pkg);
   for (const t of ctx.lists.texture ?? []) {
     let entry: any;
     try {
@@ -546,25 +590,6 @@ async function finish(ctx: Ctx, job: Job, claimUrl?: string) {
   ctx.out.ok({ job, files }, [describeJob(job), ...files.map((f) => `saved ${f}`)].join("\n"), next);
 }
 
-/** Upload local files, submit, wait and download (shared by render and bake). */
-async function submit(ctx: Ctx, pkg: any, baseDir: string) {
-    const { client, trial } = await ctx.authed(true);
-    const maxMinutes = num(ctx.flags, "max-minutes");
-    const { package: uploadedPkg, uploaded } = await uploadLocalPaths(client, pkg as any, baseDir);
-    if (uploaded.length) ctx.out.info(`uploaded ${uploaded.length} file(s) (${uploaded.filter((u) => u.deduped).length} already on server)`);
-    if (maxMinutes !== undefined) {
-      const est = await client.estimate(uploadedPkg as any);
-      const hi = (est as any).estSeconds?.[1] ?? 0;
-      if (hi / 60 > maxMinutes) {
-        throw new CliError("over_budget", `Estimated up to ${minutes(hi)}, above --max-minutes ${maxMinutes}.`, EXIT.error,
-          "Lower --res/--quality/--frames, or raise --max-minutes.", [], { estimate: est });
-      }
-    }
-    let job = await client.createJob({ package: uploadedPkg as any, priority: (str(ctx.flags, "priority") as any) ?? "standard" });
-    ctx.out.info(`job ${job.id} ${job.status}`);
-    if (ctx.flags.wait !== false) job = await waitJob(ctx, client, job);
-    await finish(ctx, job, trial?.claimUrl);
-}
 
 /** `renda bake` flags → output.format "glb" + output.bake (or a plain conversion with --glb). */
 function applyBake(pkg: any, flags: Parsed["flags"]) {
@@ -587,9 +612,9 @@ function applyBake(pkg: any, flags: Parsed["flags"]) {
 }
 
 /** `--local`: hand off to the Python CLI (Blender/Mitsuba on this machine) via uvx. */
-async function runLocal(ctx: Ctx, file: string, command: "render" | "bake" = "render") {
+async function runLocal(ctx: Ctx, file: string, command: "render" | "bake" | "splat" = "render") {
   const uvx = ctx.deps.sys.which("uvx");
-  if (!uvx) throw new CliError("uv_missing", "Local rendering uses the Python CLI via uvx, which isn't installed.", EXIT.error, UV_INSTALL_HINT, ["uvx renda render " + file]);
+  if (!uvx) throw new CliError("uv_missing", "Local rendering uses the Python CLI via uvx, which isn't installed.", EXIT.error, UV_INSTALL_HINT, [`uvx renda ${command} ${file}`]);
   const pass: string[] = ["renda", command, file];
   for (const [k, v] of Object.entries(ctx.flags)) {
     if (["local", "wait", "json", "max-minutes", "priority"].includes(k)) continue;

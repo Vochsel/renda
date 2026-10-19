@@ -76,6 +76,7 @@ class RenderPlan:
     est_load_seconds: float = 0.0
     est_frame_seconds: float = 0.0
     splats: bool = False  # the scene has Gaussian splats (the worker routes these to the splat-capable image)
+    splat_bake: dict | None = None  # output.format "splat": resolved splatbake.BakeSettings (frames = training views)
 
     def to_json(self) -> dict:
         d = asdict(self)
@@ -222,6 +223,9 @@ def plan(
     prices = prices or DEFAULT_PRICES
     warnings: list[str] = []
     fmt = scene_format_of(pkg, asset_paths)
+    if pkg.output.is_splat:
+        return _plan_splat_bake(pkg, asset_paths, fmt, priority, available, triangles, asset_hashes,
+                                engine_versions, prices)
     quality = pkg.render.quality
     include_fmts = include_formats(pkg, asset_paths)
     has_splats = fmt == "splat" or "splat" in include_fmts
@@ -338,8 +342,87 @@ def _plan_model(pkg, asset_paths, fmt, priority, available, triangles, asset_has
     )
 
 
+# Splat-bake refinement: seconds per 1000 steps at 768² with ~500k Gaussians (gsplat MCMC, measured-ish),
+# scaled by view resolution; plus a fixed start (torch/CUDA init, scene + view loading, export).
+TRAIN_SECONDS_PER_K_STEPS: dict[str, float] = {"gpu-l4": 22.0, "gpu-l40s": 10.0, "cpu": 0.0}
+TRAIN_START_SECONDS = 25.0
+
+
+def train_seconds(settings: dict) -> float:
+    if not settings.get("views"):
+        return 0.0
+    res = (settings["resolution"] / 768) ** 2
+    hw = settings["train_hardware"]
+    return TRAIN_START_SECONDS + settings["steps"] / 1000 * TRAIN_SECONDS_PER_K_STEPS[hw] * max(res, 0.25)
+
+
+def _plan_splat_bake(pkg: RendaPackage, asset_paths, fmt: str, priority: str, available, triangles,
+                     asset_hashes, engine_versions, prices) -> RenderPlan:
+    """output.format "splat": frames are the training views (rendered in parallel chunks), then one
+    refinement job; preset fast is a single CPU chunk running the direct conversion."""
+    from . import splatbake
+
+    warnings: list[str] = []
+    if fmt == "splat":
+        raise ValueError('the scene is already a Gaussian splat; use `renda convert` to change its format')
+    settings = splatbake.resolve_settings(pkg)
+    ignored = splatbake.ignored_view_settings(pkg)
+    if ignored:
+        warnings.append(f"splat bake: {', '.join(ignored)} ignored — training views are sharp pinhole renders "
+                        "(lens/blur/screen-space effects would bake in as view-inconsistent noise)")
+    key = ""
+    if asset_hashes is not None or asset_paths:
+        from .cache import cache_key, sha256_file
+
+        hashes = dict(asset_hashes or {})
+        if not hashes and asset_paths:
+            hashes = {k: sha256_file(p) for k, p in asset_paths.items() if Path(p).is_file()}
+        key = cache_key(pkg, hashes, engine_versions or {"splatbake": "cloud"})
+    if settings.direct:
+        load_s = LOAD_SECONDS["mitsuba"] + (6.0 if fmt in ("blend", "fbx", "abc") else 0.0)
+        est = load_s + settings.init_points / 1e5 * 1.5
+        return RenderPlan(engine=splatbake.FAST_ENGINE, hardware="cpu", frames=[1], chunks=[[1]],
+                          est_seconds=(round(est * 0.6, 1), round(est * 1.8, 1)), warnings=warnings, cache_key=key,
+                          scene_format=fmt, priority=priority, est_load_seconds=load_s, est_frame_seconds=est,
+                          splat_bake=settings.to_json())
+
+    vpkg = splatbake.view_package(pkg, settings)
+    if vpkg.render.engine == "auto":
+        cands = [e for e in choose_engine(fmt, vpkg.render.quality, available) if e != "gsplat"]
+        if not cands:
+            raise RuntimeError(f"no mesh engine available for .{fmt} here; render with --cloud")
+        engine = cands[0]
+    else:
+        engine = vpkg.render.engine
+    settings.engine = engine
+    frames = list(range(1, settings.views + 1))
+    samples = samples_for(engine, vpkg.render.quality, vpkg.render.samples)
+    if engine == "threejs":
+        samples = min(samples, 4)
+    complexity = complexity_factor(triangles)
+    hardware = choose_hardware(engine, vpkg, priority, samples, complexity, len(frames), warnings, prices)
+    load_s = LOAD_SECONDS[engine] + (6.0 if fmt in ("blend", "fbx", "abc") and not engine.startswith("blender") else 0.0)
+    frame_s = frame_seconds(engine, hardware, vpkg, samples, complexity)
+    chunks = chunk_frames(frames, load_s, frame_s, priority)
+    data = settings.to_json()
+    render_s = len(chunks) * load_s + len(frames) * frame_s
+    total = render_s + train_seconds(data)
+    return RenderPlan(
+        engine=engine, hardware=hardware, frames=frames, chunks=chunks,
+        est_seconds=(round(total * 0.6, 1), round(total * 1.8, 1)), warnings=warnings, cache_key=key,
+        scene_format=fmt, samples=samples, priority=priority, est_load_seconds=round(load_s, 2),
+        est_frame_seconds=round(frame_s, 3), splat_bake=data,
+    )
+
+
 def estimate_cost(plan: RenderPlan, prices: dict[str, float] | None = None) -> tuple[float, float]:
-    """USD range for a plan: per-second billing at the hardware class's per-minute price."""
-    p = (prices or DEFAULT_PRICES).get(plan.hardware, DEFAULT_PRICES.get(plan.hardware, 0.06))
+    """USD range for a plan: per-second billing at the hardware class's per-minute price (a splat bake's
+    refinement step is priced at its own class)."""
+    prices = prices or DEFAULT_PRICES
+    p = prices.get(plan.hardware, DEFAULT_PRICES.get(plan.hardware, 0.06))
     lo, hi = plan.est_seconds
+    if plan.splat_bake and plan.splat_bake.get("views"):
+        t = train_seconds(plan.splat_bake)
+        pt = prices.get(plan.splat_bake["train_hardware"], DEFAULT_PRICES["gpu-l4"])
+        return (round((lo - t * 0.6) / 60 * p + t * 0.6 / 60 * pt, 4), round((hi - t * 1.8) / 60 * p + t * 1.8 / 60 * pt, 4))
     return (round(lo / 60 * p, 4), round(hi / 60 * p, 4))

@@ -28,6 +28,9 @@ RUNNERS = {
     "splat-l40s": "render_chunk_splat_l40s",
 }
 
+# Splat-bake refinement (torch + gsplat) by hardware class → Modal function names.
+TRAIN_RUNNERS = {"gpu-l4": "train_splat_l4", "gpu-l40s": "train_splat_l40s"}
+
 
 def needs_blender(engine: str, scene_formats: Iterable[str]) -> bool:
     return engine.startswith("blender") or bool(BLENDER_ONLY_FORMATS & set(scene_formats))
@@ -67,6 +70,20 @@ class ChunkTask:
     callback_url: str
     upload_prefix: str  # outputs/<id>/ for stills, work/<id>/frames/ for video
     final: bool         # True → files are user-facing outputs
+    local_dir: str | None = None  # write files here (shared Volume) instead of uploading: splat-bake views
+
+
+@dataclass
+class TrainTask:
+    """Second stage of a splat bake: one GPU container trains on the views the chunks rendered."""
+    job_id: str
+    package: dict[str, Any]
+    inputs: dict[str, str]
+    plan: Any
+    views_dir: str
+    output_prefix: str
+    callback_url: str
+    hardware: str  # gpu-l4 | gpu-l40s
 
 
 @dataclass
@@ -87,11 +104,24 @@ def plan_chunks(plan: Any) -> list[list[int]]:
     return [list(frames)]
 
 
-def build_tasks(job: Any, plan: Any, scene_formats: Sequence[str], output_format: str) -> list[ChunkTask]:
+def is_splat_training(plan: Any) -> bool:
+    """A splat bake that renders views and trains (preset fast converts directly in one chunk)."""
+    sb = get(plan, "splat_bake")
+    return bool(sb and get(sb, "views"))
+
+
+def bake_views_dir(asset_root: Path | str, job_id: str) -> str:
+    return str(Path(asset_root) / "bakes" / job_id / "views")
+
+
+def build_tasks(job: Any, plan: Any, scene_formats: Sequence[str], output_format: str,
+                asset_root: Path | str | None = None) -> list[ChunkTask]:
     engine = str(get(plan, "engine", "auto"))
     hardware = hw.parse(str(get(plan, "hardware", "cpu")))
     runner = runner_for(engine, hardware, scene_formats, splats=bool(get(plan, "splats", False)))
     video = is_video(output_format)
+    training = is_splat_training(plan)
+    local_dir = bake_views_dir(asset_root or "/assets", job.jobId) if training else None
     prefix = f"work/{job.jobId}/frames/" if video else job.outputPrefix
     return [
         ChunkTask(
@@ -104,10 +134,25 @@ def build_tasks(job: Any, plan: Any, scene_formats: Sequence[str], output_format
             plan=plan,
             callback_url=str(job.callbackUrl),
             upload_prefix=prefix,
-            final=not video,
+            final=not (video or training),
+            local_dir=local_dir,
         )
         for i, frames in enumerate(plan_chunks(plan))
     ]
+
+
+def build_train_task(job: Any, plan: Any, asset_root: Path | str) -> TrainTask:
+    sb = get(plan, "splat_bake")
+    return TrainTask(
+        job_id=job.jobId,
+        package=job.package,
+        inputs={k: str(v) for k, v in job.inputs.items()},
+        plan=plan,
+        views_dir=bake_views_dir(asset_root, job.jobId),
+        output_prefix=job.outputPrefix,
+        callback_url=str(job.callbackUrl),
+        hardware=str(get(sb, "train_hardware", "gpu-l4")),
+    )
 
 
 def group_by_runner(tasks: Iterable[ChunkTask]) -> dict[str, list[ChunkTask]]:

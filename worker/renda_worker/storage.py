@@ -18,6 +18,8 @@ CONTENT_TYPES = {
     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp",
     ".exr": "image/x-exr", ".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime",
     ".gif": "image/gif", ".json": "application/json", ".zip": "application/zip", ".glb": "model/gltf-binary",
+    # Gaussian splats (splat bakes)
+    ".ply": "application/x-ply", ".spz": "application/octet-stream", ".splat": "application/octet-stream",
 }
 
 

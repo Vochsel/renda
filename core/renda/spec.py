@@ -323,13 +323,29 @@ class VideoSettings(_M):
     crf: int = Field(default=18, ge=0, le=51)
 
 
+class SplatBake(_M):
+    """Bake the scene into a 3D Gaussian splat (`output.format: "splat"`)."""
+
+    preset: Literal["fast", "standard", "high"] = "standard"
+    views: int | None = Field(default=None, ge=8, le=1000)
+    resolution: int | None = Field(default=None, ge=128, le=2048)
+    steps: int | None = Field(default=None, ge=0, le=100000)
+    shDegree: int | None = Field(default=None, ge=0, le=3)
+    maxGaussians: int | None = Field(default=None, ge=1000, le=10_000_000)
+    engine: EngineName = "auto"
+    coverage: Literal["auto", "sphere", "hemisphere"] = "auto"
+    dataset: bool = False
+
+
 class Output(_M):
-    format: Literal["png", "jpg", "webp", "exr", "mp4", "webm", "gif", "mov", "glb"] = "png"
+    format: Literal["png", "jpg", "webp", "exr", "mp4", "webm", "gif", "mov", "glb", "splat"] = "png"
     passes: list[Literal["beauty", "alpha", "depth", "normal", "albedo", "mask"]] = Field(default_factory=lambda: ["beauty"])
     transparent: bool = False
     video: VideoSettings = Field(default_factory=VideoSettings)
     keepFrames: bool = False
     bake: Bake | None = None
+    splatFormat: Literal["ply", "spz", "splat"] | None = None
+    splatBake: SplatBake | None = None
 
     @property
     def is_video(self) -> bool:
@@ -338,6 +354,10 @@ class Output(_M):
     @property
     def is_model(self) -> bool:
         return self.format in MODEL_FORMATS
+
+    @property
+    def is_splat(self) -> bool:
+        return self.format == "splat"
 
 
 class Bloom(_M):
@@ -392,6 +412,13 @@ class RendaPackage(_M):
             raise ValueError("render.motionBlur: motion blur needs movement: add an animation range (e.g. a turntable)")
         if self.output.is_video and self.animation is None:
             raise ValueError(f'output.format "{self.output.format}" needs an animation range')
+        if self.output.is_splat:
+            if self.animation is not None:
+                raise ValueError('output.format "splat" bakes a static scene; remove animation')
+            if self.output.splatBake and self.output.splatBake.engine == "gsplat":
+                raise ValueError("output.splatBake.engine: training views need a mesh renderer (cycles, eevee, mitsuba, threejs or auto)")
+        elif self.output.splatFormat or self.output.splatBake:
+            raise ValueError('splatFormat/splatBake need output.format "splat"')
         if self.output.transparent and self.output.format in ("jpg", "mp4", "gif"):
             raise ValueError(f"{self.output.format} has no alpha channel; use png/webp/exr/webm/mov")
         if self.output.bake is not None and self.output.format != "glb":

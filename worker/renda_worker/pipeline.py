@@ -85,6 +85,7 @@ class Deps:
     # runner name, tasks -> ChunkResults in completion order
     run_chunks: Callable[[str, list[ChunkTask]], Iterable[ChunkResult]] | None = None
     run_encode: Callable[[EncodeTask], dict[str, Any]] | None = None
+    run_train: Callable[["dispatch.TrainTask"], dict[str, Any]] | None = None
     download: Callable[[str, Path], None] | None = None
     on_new_asset: Callable[[], None] | None = None
     clock: Callable[[], float] = time.monotonic
@@ -155,7 +156,7 @@ def run_scene_job(job: JobRequest, deps: Deps) -> dict[str, Any]:
                 ev.warning(str(w))
             output_cfg = get(pkg, "output")
             out_format = str(get(output_cfg, "format", "png"))
-            tasks = dispatch.build_tasks(job, plan, dispatch.scene_formats(asset_paths), out_format)
+            tasks = dispatch.build_tasks(job, plan, dispatch.scene_formats(asset_paths), out_format, deps.asset_root)
             total_frames = sum(len(t.frames) for t in tasks)
             runner = tasks[0].runner
             ev.status("rendering", progress=0.05, engine=get(plan, "engine"), hardware=dispatch.runner_hardware(runner).value)
@@ -175,7 +176,16 @@ def run_scene_job(job: JobRequest, deps: Deps) -> dict[str, Any]:
 
         with active:
             objects = [o for r in sorted(results, key=lambda r: r.chunk) for o in r.objects]
-            if dispatch.is_video(out_format):
+            if dispatch.is_splat_training(plan):
+                _check_cancel(deps)
+                ev.status("encoding", progress=0.9)  # "training" in the UI's terms; keeps the status enum stable
+                assert deps.run_train is not None
+                with active.paused():  # the training container bills its own time
+                    trained = deps.run_train(dispatch.build_train_task(job, plan, deps.asset_root))
+                for w in trained.get("warnings", []):
+                    ev.warning(w)
+                outputs = trained["outputs"]
+            elif dispatch.is_video(out_format):
                 _check_cancel(deps)
                 ev.status("encoding", progress=0.9)
                 keep = bool(get(output_cfg, "keepFrames", False))
@@ -245,13 +255,49 @@ def run_chunk(task: ChunkTask, deps: Deps, started: float | None = None) -> Chun
                 media.attach(obj, f, deps.storage)
             return obj
 
-        # R2 round-trips dominate small frames; sequential uploads cost ~40s of GPU time per 48 frames.
-        objects = _parallel(upload, [Path(f) for f in get(result, "files") or []])
+        files = [Path(f) for f in get(result, "files") or []]
+        if task.local_dir:
+            # splat-bake views stay on the shared Volume for the training container (no R2 round trip)
+            dest = Path(task.local_dir)
+            dest.mkdir(parents=True, exist_ok=True)
+            objects = [{"path": str(shutil.copy(f, dest / f.name)), "bytes": f.stat().st_size} for f in files]
+            if deps.on_new_asset:
+                deps.on_new_asset()
+        else:
+            # R2 round-trips dominate small frames; sequential uploads cost ~40s of GPU time per 48 frames.
+            objects = _parallel(upload, files)
         shutil.rmtree(work, ignore_errors=True)
         return ChunkResult(task.chunk, task.frames, objects, [str(w) for w in get(result, "warnings") or []])
     finally:
         seconds = deps.clock() - started
         deps.events.usage(dispatch.runner_hardware(task.runner).value, seconds, task.chunk)
+
+
+def run_train(task: "dispatch.TrainTask", deps: Deps, started: float | None = None) -> dict[str, Any]:
+    """Splat-bake refinement: train on the Volume views, upload the splat (+ dataset), clean up."""
+    started = deps.clock() if started is None else started
+    try:
+        cache = _asset_cache(deps, task.package, task.inputs)
+        pkg = deps.core.load_package(task.package)
+        work = Path(tempfile.mkdtemp(prefix="train-", dir=_ensure(deps.work_root)))
+        asset_paths = deps.core.resolve(pkg, work, cache.fetch)
+        out_dir = work / "out"
+        out_dir.mkdir()
+        result = deps.core.train_splat(task.plan, pkg, asset_paths, Path(task.views_dir), out_dir)
+
+        def upload(f: Path) -> dict[str, Any]:
+            key = task.output_prefix + f.name
+            ctype = content_type(f)
+            return {"key": key, "contentType": ctype, "bytes": deps.storage.put_file(f, key, ctype)}
+
+        outputs = _parallel(upload, [Path(f) for f in get(result, "files") or []])
+        shutil.rmtree(work, ignore_errors=True)
+        shutil.rmtree(Path(task.views_dir).parent, ignore_errors=True)  # bakes/<job>/
+        if deps.on_new_asset:
+            deps.on_new_asset()
+        return {"outputs": outputs, "warnings": [str(w) for w in get(result, "warnings") or []]}
+    finally:
+        deps.events.usage(task.hardware, deps.clock() - started, "train")
 
 
 def run_encode(task: EncodeTask, deps: Deps, started: float | None = None) -> dict[str, Any]:

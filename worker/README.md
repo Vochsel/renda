@@ -131,6 +131,13 @@ modal serve renda_worker/app.py        # dev URLs: https://<ws>--renda-submit-de
 ./deploy.sh                                # prod URLs: https://<ws>--renda-submit.modal.run, …--renda-cancel.modal.run
 ```
 
+Isolated copy for development (own endpoints `renda-submit-<name>`, volumes and dicts; production
+untouched): `RENDA_APP_NAME=renda-worker-<name> ./deploy.sh`, then `modal app stop renda-worker-<name>`.
+
+Splat bakes (`output.format: "splat"`): view chunks write PNGs to the assets Volume
+(`bakes/<job>/views/`), then `train_splat_l4` / `train_splat_l40s` (splat image) refine with gsplat and
+upload the splat; usage is reported under chunk `train`.
+
 Set `MODAL_SUBMIT_URL` / `MODAL_CANCEL_URL` and the same `RENDA_WORKER_TOKEN` / `RENDA_WORKER_SECRET`
 in the web app. To see events locally, tunnel the web dev server (e.g. `cloudflared tunnel --url
 http://localhost:3000`) and pass its URL as `--callback` to `scripts/submit_local.py`.

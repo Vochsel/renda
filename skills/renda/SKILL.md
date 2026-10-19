@@ -1,6 +1,6 @@
 ---
 name: renda
-description: Render 3D files and scenes in the cloud with Renda: .blend, USD/USDZ, glTF/GLB, three.js JSON, FBX, OBJ, STL, PLY, DAE, 3MF, Alembic, CAD STEP/IGES (.step/.stp/.iges/.igs), and Gaussian splats (.ply/.splat/.spz captures, alone or mixed with meshes). Produces images (png/jpg/webp/exr), video (mp4/webm/gif/mov) or a GLB with lighting baked into its textures, with Blender Cycles/Eevee, Mitsuba, three.js, or gsplat. Use this skill whenever the user wants to render, preview, visualise, thumbnail, screenshot or "see" a 3D model or scene, make product shots or turntables, bake lighting / lightmaps / ambient occlusion into a model, convert a scene to GLB, batch-render assets, or mentions Renda, even if they don't say "render" (e.g. "what does this .glb look like?", "make a hero image of my STL", "render this STEP part").
+description: Render 3D files and scenes in the cloud with Renda: .blend, USD/USDZ, glTF/GLB, three.js JSON, FBX, OBJ, STL, PLY, DAE, 3MF, Alembic, CAD STEP/IGES (.step/.stp/.iges/.igs), and Gaussian splats (.ply/.splat/.spz captures, alone or mixed with meshes). Produces images (png/jpg/webp/exr), video (mp4/webm/gif/mov), a GLB with lighting baked into its textures, or a Gaussian splat baked from meshes, with Blender Cycles/Eevee, Mitsuba, three.js, or gsplat. Use this skill whenever the user wants to render, preview, visualise, thumbnail, screenshot or "see" a 3D model or scene, make product shots or turntables, bake lighting / lightmaps / ambient occlusion into a model, turn a mesh scene into a Gaussian splat (or a COLMAP dataset), convert a scene to GLB, batch-render assets, or mentions Renda, even if they don't say "render" (e.g. "what does this .glb look like?", "make a hero image of my STL", "render this STEP part").
 ---
 
 # Renda: cloud rendering for agents
@@ -84,6 +84,18 @@ MCP: `renda_bake` (same inputs as `renda_render`, plus `mode`, `size`, `engine`,
 lighting comes from the package's `environment` + `lights`, so set those like a render. Default
 engine is `blender-cycles` (GPU, global illumination + glossy); `mitsuba` is similar; `threejs` is
 cheapest but direct light only. Splats can't be baked. Output is one `.glb` in `outputs`.
+
+## Baking a scene into a Gaussian splat
+
+`renda splat model.glb` (CLI) or the `renda_bake_splat` tool turns meshes into a splat file:
+- `--preset fast`: direct mesh → Gaussians in seconds, albedo only (no lighting). Good for a quick
+  splat of a textured asset or as a placeholder.
+- `standard` (default): renders ~96 views around the object (cameras fitted automatically) and refines
+  with gsplat, so the scene's lighting, shadows and reflections are baked in. A few minutes, roughly
+  $0.2–0.5; run `renda estimate` with the same flags first if the scene is large.
+- `high`: 200 views, 30k steps, full view-dependent colour on an L40S, for hero assets.
+- `--dataset` also returns the rendered views with an exact COLMAP model (poses are known, no SfM),
+  for training in other tools. The job warnings report held-out PSNR/SSIM: above ~30 dB looks clean.
 
 ## Errors you'll see
 
