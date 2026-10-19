@@ -50,7 +50,7 @@ def download(uri: str) -> Path:
 def referenced(pkg: RendaPackage) -> dict[str, str]:
     """Every asset the package needs: {id-or-uri: uri}. Built-in HDRIs are excluded."""
     refs: dict[str, str] = {aid: a.uri for aid, a in pkg.assets.items()}
-    inline = [pkg.scene.root, *(i.asset for i in pkg.scene.include)]
+    inline = [pkg.scene.root, *(i.asset for i in pkg.scene.include), *(t.source for t in pkg.scene.textureOverrides)]
     if pkg.environment.hdri and pkg.environment.hdri not in hdri.BUILTINS:
         inline.append(pkg.environment.hdri)
     for ref in inline:

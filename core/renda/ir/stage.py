@@ -48,6 +48,11 @@ class Material:
     normal_tex: str | None = None
     emission_tex: str | None = None
     opacity_tex: str | None = None
+    # per-slot texture transform (scale_u, scale_v, offset_u, offset_v, rotation_deg) and colour space
+    # ("srgb"|"linear"), keyed by spec slot name (baseColor, normal, …); set by texture overrides
+    tex_uv: dict = field(default_factory=dict)
+    tex_colorspace: dict = field(default_factory=dict)
+    normal_strength: float = 1.0
 
     TEX_FIELDS = (
         "base_color_tex", "metallic_roughness_tex", "roughness_tex", "metallic_tex",

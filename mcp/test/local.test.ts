@@ -66,6 +66,17 @@ describe("uploadLocalPaths", () => {
     expect((r.package as any).scene.root).toMatch(/^asset:\/\//);
     expect((r.package as any).environment.hdri).toMatch(/^asset:\/\//);
   });
+
+  it("uploads texture override sources", async () => {
+    const dir = await fixtureDir();
+    const f = fakeFetch(({ url, body }) => (url.endsWith("/uploads") ? { json: { assetUri: `asset://${body.sha256}`, exists: true } } : undefined));
+    const client = new RendaClient({ baseUrl: "https://x.test", apiKey: "k", fetch: f.fetch });
+    const pkg = { scene: { root: "https://cdn/x.glb", textureOverrides: [{ source: "./sky.hdr" }, { source: "https://cdn/oak.jpg" }] } };
+    const r = await uploadLocalPaths(client, pkg as any, dir);
+    const tex = (r.package as any).scene.textureOverrides;
+    expect(tex[0].source).toMatch(/^asset:\/\/[0-9a-f]{64}$/);
+    expect(tex[1].source).toBe("https://cdn/oak.jpg");
+  });
 });
 
 describe("zipDirectory", () => {

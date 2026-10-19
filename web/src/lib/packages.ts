@@ -40,7 +40,7 @@ const BUILTIN_HDRIS = new Set(["studio", "sunset", "night"]);
 /** All uris a scene package depends on (asset table + inline refs that aren't asset ids). */
 export function sceneUris(pkg: RendaPackage): string[] {
   const uris = Object.values(pkg.assets).map((a) => a.uri);
-  const refs = [pkg.scene.root, ...pkg.scene.include.map((i) => i.asset)];
+  const refs = [pkg.scene.root, ...pkg.scene.include.map((i) => i.asset), ...pkg.scene.textureOverrides.map((t) => t.source)];
   if (pkg.environment.hdri && !BUILTIN_HDRIS.has(pkg.environment.hdri)) refs.push(pkg.environment.hdri);
   for (const r of refs) if (!(r in pkg.assets)) uris.push(r);
   return uris;

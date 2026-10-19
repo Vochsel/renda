@@ -156,6 +156,9 @@ class RendaClient:
         for inc in scene.get("include", []):
             if inc.get("asset") in uploaded and inc["asset"] not in out.get("assets", {}):
                 inc["asset"] = uploaded[inc["asset"]]
+        for tex in scene.get("textureOverrides", []):
+            if tex.get("source") in uploaded and tex["source"] not in out.get("assets", {}):
+                tex["source"] = uploaded[tex["source"]]
         env = out.get("environment", {})
         if env.get("hdri") in uploaded and env["hdri"] not in out.get("assets", {}):
             env["hdri"] = uploaded[env["hdri"]]

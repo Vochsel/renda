@@ -6,6 +6,7 @@ import {
   RendaApiError, RendaClient, TERMINAL_STATUSES, clearCredentials, credentialsPath, loadCredentials, saveCredentials,
   starterPackage, uploadBytes, uploadLocalPaths, validatePackage, zipDirectory, type Credentials, type Job,
 } from "@rendahq/mcp";
+import { parseTextureFlag } from "@rendahq/spec";
 import { bool, num, parseArgs, parseFrames, parseRes, str, UsageError, type Parsed } from "./args.js";
 import { addMcp, installSkills, parseAgents, realSys, removeMcp, writeAgentsSnippet, type StepResult, type Sys } from "./agents.js";
 import { CLI_PACKAGE, DEFAULT_API_URL, MCP_PACKAGE, UV_INSTALL_HINT, VERSION } from "./constants.js";
@@ -66,6 +67,7 @@ Render
   renda bake <file|pkg.renda.json> [--mode unlit|ao|lightmap] [--size 2048] [--engine auto|blender-cycles|mitsuba|threejs]
                bake lighting into the textures and download a .glb   (--glb: plain conversion, no bake)
                [--frames a-b] [--format png|mp4|…] [-o dir] [--no-wait] [--max-minutes N] [--local]
+               [--texture "material=/Wood.*/i,slot=baseColor,scale=4:./oak.jpg"]  (repeatable; any image or video)
   renda estimate <file|pkg>                  time + cost before rendering
   renda jobs [id] [--cancel] [--download dir]
   renda validate <pkg.renda.json>            check a package against the spec
@@ -94,7 +96,7 @@ export async function run(argv: string[], deps: Deps = defaultDeps()): Promise<n
     out.ok({ usage: HELP }, HELP);
     return cmd || bool(parsed.flags, "help") ? EXIT.ok : EXIT.usage;
   }
-  const ctx = new Ctx(deps, out, parsed.flags);
+  const ctx = new Ctx(deps, out, parsed.flags, parsed.lists ?? {});
   try {
     const handler = COMMANDS[cmd];
     if (!handler) throw new UsageError(`unknown command "${cmd}"`);
@@ -108,7 +110,7 @@ export async function run(argv: string[], deps: Deps = defaultDeps()): Promise<n
 class Ctx {
   creds: Credentials = {};
   loaded = false;
-  constructor(public deps: Deps, public out: Out, public flags: Parsed["flags"]) {}
+  constructor(public deps: Deps, public out: Out, public flags: Parsed["flags"], public lists: Record<string, string[]> = {}) {}
 
   async load() {
     if (!this.loaded) {
@@ -452,6 +454,19 @@ async function buildPackage(ctx: Ctx, file: string, mutate?: (pkg: any) => void)
     pkg.animation = { ...(pkg.animation ?? { fps: 30 }), frames: parseFrames(str(ctx.flags, "frames")!) };
   }
   mutate?.(pkg);
+  for (const t of ctx.lists.texture ?? []) {
+    let entry: any;
+    try {
+      entry = parseTextureFlag(t);
+    } catch (e) {
+      throw new UsageError((e as Error).message);
+    }
+    // paths on the command line are relative to the shell, not the package
+    if (!/^(https?|asset|file):\/\//.test(entry.source) && !(pkg.assets ?? {})[entry.source]) {
+      entry.source = resolve(ctx.deps.sys.cwd(), entry.source);
+    }
+    pkg.scene = { ...(pkg.scene ?? {}), textureOverrides: [...(pkg.scene?.textureOverrides ?? []), entry] };
+  }
   const v = validatePackage(pkg);
   if (!v.valid) throw new CliError("invalid_package", "The package is invalid.", EXIT.error, "Fix the fields listed in `issues`.", [], { issues: v.issues });
   return { pkg, baseDir };
@@ -554,6 +569,10 @@ async function runLocal(ctx: Ctx, file: string, command: "render" | "bake" = "re
   const pass: string[] = ["renda", command, file];
   for (const [k, v] of Object.entries(ctx.flags)) {
     if (["local", "wait", "json", "max-minutes", "priority"].includes(k)) continue;
+    if (k === "texture") {  // repeatable, and values contain commas: pass each one
+      for (const t of ctx.lists.texture ?? []) pass.push("--texture", t);
+      continue;
+    }
     pass.push(`--${k}`);
     if (typeof v === "string") pass.push(v);
   }

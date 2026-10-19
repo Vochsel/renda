@@ -1,0 +1,17 @@
+{
+  "$schema": "https://renda.dev/schema/v1.json",
+  "version": 1,
+  "name": "Video texture on a phone screen (turntable)",
+  "scene": {
+    "root": "../textures/phone.glb",
+    "textureOverrides": [
+      { "match": { "material": "Screen" }, "source": "../textures/screen.mp4" },
+      { "match": { "object": "Display", "slot": "emission" }, "source": "../textures/screen.mp4", "strength": 2.5 }
+    ]
+  },
+  "camera": { "mode": "auto", "elevationDeg": 8, "azimuthDeg": 0, "fovDeg": 30 },
+  "environment": { "hdri": "studio", "background": "#16181d" },
+  "render": { "engine": "blender-cycles", "resolution": [480, 480], "quality": "draft" },
+  "animation": { "frames": [1, 48], "fps": 24, "turntable": { "revolutions": 0.25 } },
+  "output": { "format": "mp4", "keepFrames": true }
+}

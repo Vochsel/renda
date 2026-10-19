@@ -70,6 +70,13 @@ class BlenderEngine(Engine):
         scene_lights: list[dict] = []
         overrides_applied_in_ir = False
         bridged_camera = None
+        texture_jobs: list[dict] = []
+        resolved = []
+        if pkg.scene.textureOverrides:
+            from ..textures import resolve_texture_overrides
+
+            resolved = resolve_texture_overrides(pkg, ctx.asset_paths, frames, ctx.cache_dir)
+            texture_jobs = [r.to_job(frames) for r in resolved]
         if fmt not in NATIVE:
             # three.js JSON, COLLADA, 3MF, .rir, splat scenes → IR → glTF (materials/overrides baked in;
             # splats are left out of the glTF and composited afterwards)
@@ -78,6 +85,15 @@ class BlenderEngine(Engine):
             else:
                 stage, w = build_stage(pkg, ctx.asset_paths, ctx.cache_dir)
                 warnings += w
+            if resolved:
+                # match on the IR (object-scoped clones must exist before export); Blender wires the
+                # images onto the named materials and swaps video frames itself
+                from ..textures import TexturePlan
+
+                tex_plan = TexturePlan(stage, resolved)
+                warnings += tex_plan.warnings()
+                for job_entry, targets in zip(texture_jobs, tex_plan.targets):
+                    job_entry["targets"] = [list(t) for t in targets]
             cache = _scratch(ctx, "blender-input")
             root = _gltf_for_blender(stage, cache / "scene.glb")
             src_fmt, source_up, unit_scale = "gltf", stage.up_axis, 1.0
@@ -170,7 +186,10 @@ class BlenderEngine(Engine):
                             "rotationDeg": env.rotationDeg, "keep_scene_world": keep_world},
             "transparent_film": transparent_film,
             "lights": lights,
-            "material_overrides": {} if overrides_applied_in_ir else {k: ov_json(v) for k, v in pkg.scene.materialOverrides.items()},
+            "material_overrides": [] if overrides_applied_in_ir else [
+                {"key": k, "object": v.object, **ov_json(v)}
+                for k, v in sorted(pkg.scene.materialOverrides.items(), key=lambda kv: kv[0] != "*")],
+            "texture_overrides": texture_jobs,
             "passes": passes,
             "out_dir": str(ctx.out_dir),
             "image_format": "OPEN_EXR" if pkg.output.format == "exr" else "PNG",

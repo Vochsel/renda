@@ -164,8 +164,91 @@ def load_input(path: Path) -> tuple[dict, Path]:
     return {"assets": {"scene": {"uri": path.name}}, "scene": {"root": "scene"}}, path.parent.resolve()
 
 
+_TEX_KEYS = {"material", "object", "texture", "slot", "scale", "offset", "rotation", "colorspace", "cs",
+             "strength", "loop", "start", "speed", "frame"}
+
+
+def parse_texture_flag(value: str) -> dict:
+    """`--texture "material=/Wood.*/i,slot=baseColor,scale=4:./oak.jpg"` → a textureOverrides entry.
+
+    Before the first top-level `:` come comma-separated key=value pairs (material, object, texture,
+    slot, scale=4 or 2x3, offset=0.1x0.2, rotation=deg, colorSpace=srgb|linear, strength, loop,
+    start=sec, speed, frame); after it, the image/video path or URL. No `=` → the whole value is the
+    source, applied to every material's base colour.
+    """
+    import re
+
+    s = value.strip()
+    pos, spec = 0, {}
+    while True:
+        m = re.compile(r"([A-Za-z]+)=").match(s, pos)
+        if not m or m.group(1).lower() not in _TEX_KEYS:
+            break
+        key, pos = m.group(1).lower(), m.end()
+        if s.startswith("/", pos):  # /regex/flags may contain , and :
+            mm = re.compile(r"/(?:\\.|[^/\\])*/[imsx]*").match(s, pos)
+            if not mm:
+                raise CliError("bad_option", f"--texture: unterminated /regex/ in {value!r}")
+        else:
+            mm = re.compile(r"[^,:]*").match(s, pos)
+        spec[key], pos = mm.group(0), mm.end()
+        if s.startswith(",", pos):
+            pos += 1
+            continue
+        if s.startswith(":", pos):
+            pos += 1
+            break
+        raise CliError("bad_option", f"--texture: expected ',' or ':' after {key}= in {value!r}",
+                       'format: --texture "material=Wood*,slot=baseColor:./oak.jpg"')
+    source = s[pos:] if spec else s
+    if not source:
+        raise CliError("bad_option", f"--texture: missing image/video after ':' in {value!r}")
+    if "://" not in source and source not in ("",):
+        p = Path(source).expanduser()
+        if p.exists():
+            source = str(p.resolve())  # CLI paths are relative to the shell, not the package
+
+    def pair(v: str) -> list[float]:
+        a, _, b = v.lower().partition("x")
+        return [float(a), float(b or a)]
+
+    entry: dict = {"source": source}
+    match = {k: spec[k] for k in ("material", "object", "texture", "slot") if k in spec}
+    if match:
+        entry["match"] = match
+    uv = {}
+    if "scale" in spec:
+        sx, sy = pair(spec["scale"])
+        uv["scale"] = sx if sx == sy else [sx, sy]
+    if "offset" in spec:
+        uv["offset"] = pair(spec["offset"])
+    if "rotation" in spec:
+        uv["rotationDeg"] = float(spec["rotation"])
+    if uv:
+        entry["uv"] = uv
+    video = {}
+    if "loop" in spec:
+        video["loop"] = spec["loop"].lower() not in ("0", "false", "no", "off")
+    if "start" in spec:
+        video["startSec"] = float(spec["start"])
+    if "speed" in spec:
+        video["speed"] = float(spec["speed"])
+    if "frame" in spec:
+        video["frame"] = int(spec["frame"])
+    if video:
+        entry["video"] = video
+    cs = spec.get("colorspace") or spec.get("cs")
+    if cs:
+        entry["colorSpace"] = cs.lower()
+    if "strength" in spec:
+        entry["strength"] = float(spec["strength"])
+    return entry
+
+
 def apply_overrides(raw: dict, *, engine=None, res=None, quality=None, samples=None, frames=None, fmt=None,
-                    transparent=None, turntable=False, fps=None) -> dict:
+                    transparent=None, turntable=False, fps=None, textures=None) -> dict:
+    if textures:
+        raw.setdefault("scene", {}).setdefault("textureOverrides", []).extend(parse_texture_flag(t) for t in textures)
     r = raw.setdefault("render", {}) if any(v is not None for v in (engine, res, quality, samples)) else raw.get("render")
     if engine:
         r["engine"] = engine
@@ -222,6 +305,9 @@ def render(
     fmt: Annotated[Optional[str], typer.Option("--format", help="png|jpg|webp|exr|mp4|webm|gif|mov")] = None,
     transparent: Annotated[Optional[bool], typer.Option("--transparent/--opaque", help="Alpha background")] = None,
     turntable: Annotated[bool, typer.Option(help="Orbit the camera 360° (defaults to frames 1-120)")] = False,
+    texture: Annotated[Optional[list[str]], typer.Option(
+        "--texture", help='Override a texture (repeatable): "material=/Wood.*/i,slot=baseColor,scale=4:./oak.jpg". '
+                          "Any image or video; matches material/object/texture names by glob or /regex/.")] = None,
     priority: Annotated[str, typer.Option(help="economy|standard|rush (cloud)")] = "standard",
     cloud: Annotated[bool, typer.Option("--cloud", help="Render in the Renda cloud")] = False,
     wait: Annotated[bool, typer.Option("--wait/--no-wait", help="Cloud: wait for the job and download outputs")] = True,
@@ -233,7 +319,7 @@ def render(
 
     raw, base = load_input(input)
     raw = apply_overrides(raw, engine=engine, res=res, quality=quality, samples=samples, frames=frames, fmt=fmt,
-                          transparent=transparent, turntable=turntable)
+                          transparent=transparent, turntable=turntable, textures=texture)
     _run(raw, base, output, priority, cloud, wait, max_minutes, json_out)
 
 
@@ -513,6 +599,7 @@ def estimate(
     frames: Annotated[Optional[str], typer.Option(help="Frame range a-b")] = None,
     fmt: Annotated[Optional[str], typer.Option("--format", help="Output format")] = None,
     turntable: Annotated[bool, typer.Option(help="360° camera orbit")] = False,
+    texture: Annotated[Optional[list[str]], typer.Option("--texture", help="Texture override, as for `render`")] = None,
     local: Annotated[bool, typer.Option("--local", help="Use the local planner only (no network)")] = False,
     json_out: JsonOpt = False,
 ):
@@ -522,7 +609,8 @@ def estimate(
     from .spec import load_package
 
     raw, base = load_input(input)
-    raw = apply_overrides(raw, engine=engine, res=res, quality=quality, frames=frames, fmt=fmt, turntable=turntable)
+    raw = apply_overrides(raw, engine=engine, res=res, quality=quality, frames=frames, fmt=fmt, turntable=turntable,
+                          textures=texture)
     pkg = load_package(raw)
     data = None
     if not local:

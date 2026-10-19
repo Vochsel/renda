@@ -79,6 +79,9 @@ export async function uploadLocalPaths(
   for (const inc of out.scene?.include ?? []) {
     if (inc.asset && !assetIds.has(inc.asset)) inc.asset = await rewrite(inc.asset);
   }
+  for (const tex of out.scene?.textureOverrides ?? []) {
+    if (tex.source && !assetIds.has(tex.source)) tex.source = await rewrite(tex.source);
+  }
   const hdri = out.environment?.hdri;
   if (hdri && !assetIds.has(hdri) && !BUILTIN_HDRIS.has(hdri)) out.environment.hdri = await rewrite(hdri);
 

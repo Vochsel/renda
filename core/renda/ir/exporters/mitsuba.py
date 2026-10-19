@@ -61,17 +61,75 @@ class TextureCache:
             self._memo[key] = str(out)
         return self._memo[key]
 
+    def scaled_linear(self, path: str, scale: tuple[float, float, float], srgb: bool) -> str:
+        """An EXR of the texture in linear light times `scale` (emission textures × colour × strength)."""
+        p = self.resolve(path) or Path(path)
+        key = ("scaled", str(p), tuple(scale), srgb)
+        if key not in self._memo:
+            from PIL import Image
 
-def _tex_or(value, tex: str | None, raw: bool = False):
+            from ...images import save_exr
+
+            if p.suffix.lower() in (".exr", ".hdr"):
+                from ...images import read_hdr_image
+
+                arr = read_hdr_image(p)[..., :3]
+            else:
+                arr = np.asarray(Image.open(p).convert("RGB"), dtype=np.float32) / 255.0
+                if srgb:
+                    arr = np.where(arr <= 0.04045, arr / 12.92, ((arr + 0.055) / 1.055) ** 2.4)
+            arr = (arr * np.asarray(scale, dtype=np.float32)).astype(np.float32)
+            out = self.dir / f"{hashlib.sha1(repr(key).encode()).hexdigest()[:12]}.exr"
+            save_exr(arr, out)
+            self._memo[key] = str(out)
+        return self._memo[key]
+
+    def normal_strength(self, path: str, strength: float) -> str:
+        """Scale a tangent-space normal map's XY deviation (Mitsuba's normalmap has no strength)."""
+        key = ("nstr", path, strength)
+        if key not in self._memo:
+            from PIL import Image
+
+            n = np.asarray(Image.open(path).convert("RGB"), dtype=np.float32) / 255.0 * 2 - 1
+            n[..., :2] *= strength
+            n /= np.maximum(np.linalg.norm(n, axis=-1, keepdims=True), 1e-6)
+            out = self.dir / f"{hashlib.sha1(repr(key).encode()).hexdigest()[:12]}.png"
+            Image.fromarray(np.clip((n + 1) * 127.5, 0, 255).astype(np.uint8)).save(out)
+            self._memo[key] = str(out)
+        return self._memo[key]
+
+
+def _tex_or(value, tex: str | None, raw: bool = False, uv=None, mi=None):
     if tex:
-        return {"type": "bitmap", "filename": tex, "raw": raw}
+        d = {"type": "bitmap", "filename": tex, "raw": raw}
+        t = uv_transform(uv, mi)
+        if t is not None:
+            d["to_uv"] = t
+        return d
     return value
 
 
-def bsdf_for(mat: Material, textures: TextureCache, vertex_colors: bool = False) -> dict:
+def uv_transform(uv, mi):
+    """Texture-override UV transform (scale_u, scale_v, offset_u, offset_v, rotation_deg) → Mitsuba
+    `to_uv`, composed like KHR_texture_transform: translate(offset) · rotate(rotation) · scale."""
+    if not uv or mi is None or tuple(uv) == (1.0, 1.0, 0.0, 0.0, 0.0):
+        return None
+    sx, sy, ox, oy, rot = uv
+    return (mi.ScalarTransform4f().translate([ox, oy, 0]) @ mi.ScalarTransform4f().rotate([0, 0, 1], rot)
+            @ mi.ScalarTransform4f().scale([sx, sy, 1]))
+
+
+def _raw(mat: Material, slot: str, default: bool) -> bool:
+    cs = mat.tex_colorspace.get(slot)
+    return default if cs is None else cs == "linear"
+
+
+def bsdf_for(mat: Material, textures: TextureCache, vertex_colors: bool = False, mi=None) -> dict:
     if mat.unlit:
         return {"type": "diffuse", "reflectance": {"type": "rgb", "value": [0.0, 0.0, 0.0]}}
-    base = _tex_or({"type": "rgb", "value": list(mat.base_color[:3])}, textures.readable(mat.base_color_tex))
+    uv = mat.tex_uv.get
+    base = _tex_or({"type": "rgb", "value": list(mat.base_color[:3])}, textures.readable(mat.base_color_tex),
+                   _raw(mat, "baseColor", False), uv("baseColor"), mi)
     if vertex_colors and not mat.base_color_tex:
         base = {"type": "mesh_attribute", "name": "vertex_color"}
     rough_tex = textures.readable(mat.roughness_tex) or textures.channel(mat.metallic_roughness_tex, 1)
@@ -79,20 +137,23 @@ def bsdf_for(mat: Material, textures: TextureCache, vertex_colors: bool = False)
     bsdf: dict = {
         "type": "principled",
         "base_color": base,
-        "metallic": _tex_or(float(mat.metallic), metal_tex, raw=True),
-        "roughness": _tex_or(max(float(mat.roughness), 0.02), rough_tex, raw=True),
+        "metallic": _tex_or(float(mat.metallic), metal_tex, _raw(mat, "metallic", True), uv("metallic"), mi),
+        "roughness": _tex_or(max(float(mat.roughness), 0.02), rough_tex, _raw(mat, "roughness", True), uv("roughness"), mi),
         "eta": float(mat.ior),
     }
     if mat.transmission > 0:
         bsdf["spec_trans"] = float(mat.transmission)
     normal = textures.readable(mat.normal_tex)
     if normal:
-        bsdf = {"type": "normalmap", "normalmap": {"type": "bitmap", "filename": normal, "raw": True}, "bsdf": bsdf}
+        nmap = _tex_or(None, normal, True, uv("normal"), mi)
+        if mat.normal_strength != 1.0:
+            nmap["filename"] = textures.normal_strength(normal, mat.normal_strength)
+        bsdf = {"type": "normalmap", "normalmap": nmap, "bsdf": bsdf}
     if mat.double_sided and mat.transmission == 0:  # twosided can't wrap transmissive BSDFs
         bsdf = {"type": "twosided", "bsdf": bsdf}
     opacity_tex = textures.readable(mat.opacity_tex)
     if mat.opacity < 1 or opacity_tex:
-        bsdf = {"type": "mask", "opacity": _tex_or(float(mat.opacity), opacity_tex, raw=True), "bsdf": bsdf}
+        bsdf = {"type": "mask", "opacity": _tex_or(float(mat.opacity), opacity_tex, True, uv("opacity"), mi), "bsdf": bsdf}
     return bsdf
 
 
@@ -183,7 +244,7 @@ def stage_to_dict(stage: Stage, mi=None, textures: TextureCache | None = None, m
         key = mat.name + ("+vc" if vc else "")
         if key not in bsdf_ids:
             bid = f"bsdf_{len(bsdf_ids)}"
-            scene[bid] = bsdf_for(mat, textures, vc)
+            scene[bid] = bsdf_for(mat, textures, vc, mi)
             bsdf_ids[key] = bid
         shape: dict = {
             "type": "ply",
@@ -197,7 +258,13 @@ def stage_to_dict(stage: Stage, mi=None, textures: TextureCache | None = None, m
         elif mat.emission_strength > 0 and max(mat.emission) > 0:
             emit = [float(c) * mat.emission_strength for c in mat.emission]
         if emit is not None:
-            shape["emitter"] = {"type": "area", "radiance": {"type": "rgb", "value": emit}}
+            radiance: dict = {"type": "rgb", "value": emit}
+            tex = textures.readable(mat.emission_tex if not mat.unlit else mat.base_color_tex)
+            if tex:
+                slot = "baseColor" if mat.unlit else "emission"
+                radiance = _tex_or(None, textures.scaled_linear(tex, tuple(emit), not _raw(mat, slot, False)), True,
+                                   mat.tex_uv.get(slot), mi)
+            shape["emitter"] = {"type": "area", "radiance": radiance}
         scene[f"shape_{i}"] = shape
     up = stage.up_vector()
     for j, light in enumerate(stage.lights):

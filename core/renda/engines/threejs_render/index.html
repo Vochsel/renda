@@ -155,11 +155,72 @@ async function loadSplats() {
   await Promise.all(splatMeshes.map((m) => m.initialized));
 }
 
+// Texture overrides (renda/textures.py): job.textures = [{targets: [{material, slot, colorSpace}],
+// frames: {frame: url}, uv: [su, sv, ou, ov, rotDeg], strength}]. Matching already happened in Python.
+const SLOT_MAPS = { baseColor: "map", normal: "normalMap", roughness: "roughnessMap", metallic: "metalnessMap",
+                    emission: "emissiveMap", opacity: "alphaMap" };
+const texCache = new Map();
+const texLoader = new THREE.TextureLoader();
+function materialsByName(root) {
+  const out = new Map();
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+      if (!m) continue;
+      if (!out.has(m.name)) out.set(m.name, []);
+      if (!out.get(m.name).includes(m)) out.get(m.name).push(m);
+    }
+  });
+  return out;
+}
+let matsByName = null;
+async function loadTexture(url, colorSpace, uv) {
+  const key = `${url}|${colorSpace}|${uv.join(",")}`;
+  if (texCache.has(key)) return texCache.get(key);
+  const t = await texLoader.loadAsync(url);
+  t.colorSpace = colorSpace === "srgb" ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+  t.flipY = false; // glTF UV convention (our IR exports glTF)
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  const [su, sv, ou, ov, rot] = uv;
+  t.repeat.set(su, sv);
+  t.offset.set(ou, ov);
+  t.rotation = (rot * Math.PI) / 180;
+  t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  texCache.set(key, t);
+  return t;
+}
+async function applyTextures(frame) {
+  if (!job.textures || !job.textures.length) return;
+  for (const tj of job.textures) {
+    const url = tj.frames[String(frame)];
+    if (!url) continue;
+    for (const tgt of tj.targets) {
+      const mats = matsByName.get(tgt.material) || [];
+      const tex = await loadTexture(url, tgt.colorSpace, tj.uv);
+      for (const m of mats) {
+        const prop = SLOT_MAPS[tgt.slot];
+        m[prop] = tex;
+        if (tgt.slot === "baseColor" && m.color) m.color.setRGB(1, 1, 1);
+        if (tgt.slot === "roughness") m.roughness = 1;
+        if (tgt.slot === "metallic") m.metalness = 1;
+        if (tgt.slot === "emission") {
+          m.emissive?.setRGB(1, 1, 1);
+          m.emissiveIntensity = tj.strength ?? Math.max(m.emissiveIntensity || 0, 1);
+        }
+        if (tgt.slot === "normal" && tj.strength != null) m.normalScale?.set(tj.strength, tj.strength);
+        if (tgt.slot === "opacity") m.transparent = true;
+        m.needsUpdate = true;
+      }
+    }
+  }
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const mixers = [];
 window.renderFrame = async (frame) => {
   const c = job.cameras[String(frame)];
   placeCamera(c);
+  await applyTextures(frame);
   if (mixers.length && job.fps) for (const m of mixers) m.setTime((frame - job.frameStart) / job.fps);
   if (spark) {
     // Splats are depth-sorted asynchronously in a worker: render until the sort for this view settles.
@@ -176,6 +237,12 @@ window.renderFrame = async (frame) => {
 try {
   const root = await loadScene();
   scene.add(root);
+  matsByName = materialsByName(root);
+  for (const tj of job.textures || []) {
+    for (const tgt of tj.targets) {
+      if (!matsByName.has(tgt.material)) warnings.push(`threejs: material ${tgt.material} not found for a texture override`);
+    }
+  }
   await setupEnv();
   addLights();
   fitShadows(root);

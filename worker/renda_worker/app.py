@@ -18,7 +18,11 @@ from fastapi import Header
 
 from renda_worker import hardware as hw
 
-APP_NAME = "renda-worker"
+# Override to deploy a throwaway copy for testing (e.g. RENDA_APP_NAME=renda-worker-d ./deploy.sh) without
+# touching production; volumes/secrets are shared.
+APP_NAME = os.environ.get("RENDA_APP_NAME", "renda-worker")
+# production URLs stay …--renda-submit / …--renda-cancel; test apps get …--renda-worker-d-submit etc.
+_LABEL_PREFIX = "renda-" if APP_NAME == "renda-worker" else f"{APP_NAME}-"
 WORKER_DIR = Path(__file__).resolve().parents[1]
 CORE_DIR = WORKER_DIR.parent / "core"
 
@@ -384,7 +388,7 @@ def _authorize(authorization: str | None) -> None:
 
 
 @app.function(image=api_image, secrets=[worker_secret], scaledown_window=300, cpu=0.25, memory=256)
-@modal.fastapi_endpoint(method="POST", label="renda-submit")
+@modal.fastapi_endpoint(method="POST", label=_LABEL_PREFIX + "submit")
 def submit(body: dict, authorization: str | None = Header(default=None)):
     """POST {jobId, kind, package, priority, inputs, outputPrefix, callbackUrl} → {accepted, callId}."""
     from fastapi import HTTPException
@@ -404,7 +408,7 @@ def submit(body: dict, authorization: str | None = Header(default=None)):
 
 
 @app.function(image=api_image, secrets=[worker_secret], scaledown_window=300, cpu=0.25, memory=256)
-@modal.fastapi_endpoint(method="POST", label="renda-cancel")
+@modal.fastapi_endpoint(method="POST", label=_LABEL_PREFIX + "cancel")
 def cancel(body: dict, authorization: str | None = Header(default=None)):
     """POST {jobId} → {canceled}. Sets the cooperative flag, then cancels the call tree.
     Chunk functions still report usage for time already spent (their `finally` runs on cancel)."""

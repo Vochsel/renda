@@ -81,6 +81,49 @@ def _chromium_ok() -> bool:
     return browsers.exists() and any(p.name.startswith(("chromium", "chromium_headless_shell")) for p in browsers.iterdir())
 
 
+def _texture_jobs(ctx: RenderContext, stage, frames: list[int], work: Path, warnings: list[str]) -> list[dict]:
+    """Texture overrides for the page: match on the IR (before glTF export, so object-scoped material
+    copies are in the file), copy each frame's image next to index.html, and let the page assign them."""
+    from ..textures import TexturePlan, resolve_texture_overrides
+
+    resolved = resolve_texture_overrides(ctx.pkg, ctx.asset_paths, frames, ctx.cache_dir)
+    plan = TexturePlan(stage, resolved)
+    warnings += plan.warnings()
+    tex_dir = work / "tex"
+    tex_dir.mkdir(exist_ok=True)
+    copied: dict[str, str] = {}
+
+    def url(p: Path) -> str:
+        key = str(p)
+        if key not in copied:
+            name = f"t{len(copied):05d}"
+            if p.suffix.lower() in (".exr", ".hdr"):  # the page loads plain images; clamp HDR to LDR
+                import numpy as np
+                from PIL import Image
+
+                from ..images import linear_to_srgb, read_hdr_image
+
+                arr = np.clip(read_hdr_image(p)[..., :3], 0, 1)
+                Image.fromarray((linear_to_srgb(arr) * 255 + 0.5).astype(np.uint8)).save(tex_dir / f"{name}.png")
+                copied[key] = f"tex/{name}.png"
+            else:
+                shutil.copyfile(p, tex_dir / f"{name}{p.suffix.lower()}")
+                copied[key] = f"tex/{name}{p.suffix.lower()}"
+        return copied[key]
+
+    jobs = []
+    for r, targets in zip(resolved, plan.targets):
+        if not targets:
+            continue
+        jobs.append({
+            "targets": [{"material": m, "slot": s, "colorSpace": r.colorspace(s)} for m, s in targets],
+            "frames": {str(f): url(r.path(f)) for f in frames},
+            "uv": list(r.uv()),
+            "strength": r.spec.strength,
+        })
+    return jobs
+
+
 class _Quiet(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *a):  # noqa: D401
         pass
@@ -134,8 +177,10 @@ class ThreeEngine(Engine):
 
         fmt = plan.scene_format
         root = asset_path(pkg, pkg.scene.root, ctx.asset_paths)
-        native = fmt in self.accepts and not pkg.scene.materialOverrides and not pkg.scene.include and pkg.scene.unitScale == 1
+        native = (fmt in self.accepts and not pkg.scene.materialOverrides and not pkg.scene.textureOverrides
+                  and not pkg.scene.include and pkg.scene.unitScale == 1)
         splat_jobs: list[dict] = []
+        texture_jobs: list[dict] = []
         if fmt == "splat" and root.suffix.lower() == ".ksplat":
             # Only Spark decodes .ksplat: hand it over untouched (assumed COLMAP/OpenCV axes).
             from ..ir import Stage
@@ -162,6 +207,8 @@ class ThreeEngine(Engine):
         else:
             stage, w = build_stage(pkg, ctx.asset_paths, ctx.cache_dir)
             warnings += w
+            if pkg.scene.textureOverrides:
+                texture_jobs = _texture_jobs(ctx, stage, frames, work, warnings)
             if stage.meshes or not stage.splats:
                 to_gltf(stage, work / "scene.glb")
                 scene_url, kind = "scene.glb", "gltf"
@@ -210,6 +257,7 @@ class ThreeEngine(Engine):
                     "rotationDeg": env.rotationDeg, "visible": bg == "hdri" and not transparent},
             "lights": lights,
             "cameras": {str(f): c.to_json() for f, c in cams.items()},
+            "textures": texture_jobs,
             "fps": pkg.animation.fps if pkg.animation else None,
             "frameStart": pkg.animation.frames[0] if pkg.animation else 1,
         }

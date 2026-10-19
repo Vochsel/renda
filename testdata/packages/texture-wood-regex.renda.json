@@ -1,0 +1,18 @@
+{
+  "$schema": "https://renda.dev/schema/v1.json",
+  "version": 1,
+  "name": "Regex texture swap: oak on anything wooden, bumps on the metal",
+  "scene": {
+    "root": "../scenes/scene.glb",
+    "materialOverrides": { "/wood/i": { "roughness": 0.55 } },
+    "textureOverrides": [
+      { "match": { "material": "/wood/i" }, "source": "../textures/oak.heic", "uv": { "scale": 3, "rotationDeg": 90 } },
+      { "match": { "material": "/wood/i", "slot": "roughness" }, "source": "../textures/oak_roughness16.tif", "uv": { "scale": 3, "rotationDeg": 90 } },
+      { "match": { "material": "gold*", "slot": "normal" }, "source": "../textures/bumps_normal.png", "uv": { "scale": 2 }, "strength": 0.6 }
+    ]
+  },
+  "camera": { "mode": "auto", "elevationDeg": 22, "azimuthDeg": 30 },
+  "environment": { "hdri": "studio", "background": "#efeee9" },
+  "render": { "engine": "mitsuba", "resolution": [720, 480], "quality": "standard" },
+  "output": { "format": "png" }
+}

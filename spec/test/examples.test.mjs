@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
-import { safeParsePackage, formatFromPath, packageForFile } from "../dist/index.js";
+import { safeParsePackage, formatFromPath, packageForFile, parsePackage, parseTextureFlag } from "../dist/index.js";
 
 const dir = new URL("../examples/", import.meta.url);
 for (const f of readdirSync(dir).filter((f) => f.endsWith(".renda.json"))) {
@@ -28,4 +28,24 @@ test("bare file defaults", () => {
   assert.equal(p.scene.root, "scene");
   assert.equal(p.render.resolution[0], 1920);
   assert.equal(p.camera.mode, "auto");
+});
+
+test("texture overrides parse with defaults", () => {
+  const p = parsePackage({ scene: { root: "a.glb", textureOverrides: [{ source: "oak.jpg", match: { material: "/wood/i" } }] } });
+  const t = p.scene.textureOverrides[0];
+  assert.equal(t.colorSpace, "auto");
+  assert.deepEqual(t.uv, { scale: 1, offset: [0, 0], rotationDeg: 0 });
+  assert.deepEqual(t.video, { loop: true, startSec: 0, speed: 1 });
+});
+
+test("parseTextureFlag", () => {
+  const e = parseTextureFlag("material=/Wood.*,x:y/i,slot=baseColor,scale=4,rotation=90:./oak.jpg");
+  assert.deepEqual(e.match, { material: "/Wood.*,x:y/i", slot: "baseColor" });
+  assert.deepEqual(e.uv, { scale: 4, rotationDeg: 90 });
+  assert.equal(e.source, "./oak.jpg");
+  const v = parseTextureFlag("object=Display,slot=emission,strength=3,loop=false,start=1.5:https://x.test/a.mp4");
+  assert.equal(v.source, "https://x.test/a.mp4");
+  assert.deepEqual(v.video, { loop: false, startSec: 1.5 });
+  assert.equal(parseTextureFlag("./oak.jpg").source, "./oak.jpg");
+  assert.deepEqual(parseTextureFlag("scale=2x3:a.png").uv, { scale: [2, 3] });
 });

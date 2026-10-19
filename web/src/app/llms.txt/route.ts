@@ -36,6 +36,9 @@ Credentials live in ~/.config/renda/credentials.json (or $RENDA_API_KEY).
     renda render model.glb --turntable --format mp4      # 360° video
     renda new model.glb                                  # starter .renda.json: camera, HDRI, lights, materials, frames, output
     renda render capture.spz                             # Gaussian splats → engine gsplat (GPU, cheapest)
+    renda render room.glb --texture "material=/wood/i,scale=4:./oak.jpg"          # swap textures (repeatable)
+    renda render phone.glb --turntable --format mp4 --texture "object=Screen*,slot=emission:./promo.mp4"
+Texture overrides (scene.textureOverrides, CLI --texture, MCP textureOverrides): any image (png/jpg/webp/avif/heic/tiff/exr/hdr/svg/psd/gif) or video (mp4/mov/webm/gif), converted automatically; videos play in sync with the animation. Match material/object/existing-texture names by exact name, glob ("wood*") or "/regex/i", and pick a slot (baseColor, normal, roughness, metallic, emission, opacity). materialOverrides keys accept the same patterns, plus "object" to scope one object.
 Gaussian splats: splat-only scenes render with engine "gsplat"; put meshes inside a capture with scene.include (threejs renders both natively; blender-*/mitsuba composite the splats by depth, without engine lighting on them). Splat .ply/.splat captures are Y-down: scene.upAxis defaults to "-Y"; set "Y" if a render is upside down.
 Identical re-renders are cached and free. Local paths are uploaded automatically (deduped by sha256).
 

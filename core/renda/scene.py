@@ -59,7 +59,7 @@ def build_stage(pkg: RendaPackage, asset_paths: dict[str, Path], cache_dir: Path
         stage.merge(sub, m, prefix=f"inc{i}_")
     if pkg.scene.unitScale != 1:
         stage.apply_transform(np.diag([pkg.scene.unitScale] * 3 + [1.0]))
-    apply_material_overrides(stage, pkg)
+    apply_material_overrides(stage, pkg, warnings)
     return stage, warnings
 
 
@@ -78,39 +78,60 @@ def normalize_up(stage: Stage) -> Stage:
     return stage
 
 
-def apply_material_overrides(stage: Stage, pkg: RendaPackage) -> None:
+def apply_material_overrides(stage: Stage, pkg: RendaPackage, warnings: list[str] | None = None) -> None:
+    """Keys are exact material names, globs, /regex/flags or "*"; entries apply in order (later wins),
+    after "*". An `object` pattern scopes an entry to materials used by matching objects (shared
+    materials are split so other objects keep the original)."""
+    from .engines.blender_scripts._match import compile_pattern
+    from .textures import _ensure_materials, _scope_materials
+
     ovs = pkg.scene.materialOverrides
     if not ovs:
         return
-    # meshes with no material get the default so "*" reaches them
-    for mesh in stage.meshes:
-        if not mesh.material or mesh.material not in stage.materials:
-            stage.material_for(mesh)
-            mesh.material = "__default__"
-    for name, mat in stage.materials.items():
-        for key in ("*", name):
-            ov = ovs.get(key)
-            if not ov:
-                continue
-            if ov.baseColor is not None:
-                c = parse_color(ov.baseColor)
-                mat.base_color = (c[0], c[1], c[2], c[3] if len(c) > 3 else mat.base_color[3])
-                mat.base_color_tex = None
-            if ov.metallic is not None:
-                mat.metallic, mat.metallic_tex, mat.metallic_roughness_tex = ov.metallic, None, None
-            if ov.roughness is not None:
-                mat.roughness, mat.roughness_tex, mat.metallic_roughness_tex = ov.roughness, None, None
-            if ov.emission is not None:
-                mat.emission = tuple(parse_color(ov.emission)[:3])
-                mat.emission_strength = mat.emission_strength or 1.0
-            if ov.emissionStrength is not None:
-                mat.emission_strength = ov.emissionStrength
-            if ov.opacity is not None:
-                mat.opacity = ov.opacity
-            if ov.transmission is not None:
-                mat.transmission = ov.transmission
-            if ov.ior is not None:
-                mat.ior = ov.ior
+    _ensure_materials(stage)  # meshes with no material get the default so "*" reaches them
+    ordered = sorted(ovs.items(), key=lambda kv: kv[0] != "*")
+    for i, (key, ov) in enumerate(ordered):
+        try:
+            compile_pattern(key)
+            if ov.object:
+                compile_pattern(ov.object)
+        except ValueError as e:
+            raise ValueError(f"scene.materialOverrides: {e}") from None
+        used = {m.material for m in stage.meshes}
+        cands = {name for name in used if name in stage.materials and _key_matches(key, name)}
+        edit = _scope_materials(stage, ov.object, cands, f"mo{i}")
+        if not edit and warnings is not None and key != "*":
+            warnings.append(f"materialOverrides[{key!r}] matched no materials (have: {', '.join(sorted(used)) or 'none'})")
+        for name in edit.values():
+            _apply_material_override(stage.materials[name], ov)
+
+
+def _key_matches(key: str, name: str) -> bool:
+    from .engines.blender_scripts._match import matches
+
+    return key == name or matches(key, name)
+
+
+def _apply_material_override(mat, ov) -> None:
+    if ov.baseColor is not None:
+        c = parse_color(ov.baseColor)
+        mat.base_color = (c[0], c[1], c[2], c[3] if len(c) > 3 else mat.base_color[3])
+        mat.base_color_tex = None
+    if ov.metallic is not None:
+        mat.metallic, mat.metallic_tex, mat.metallic_roughness_tex = ov.metallic, None, None
+    if ov.roughness is not None:
+        mat.roughness, mat.roughness_tex, mat.metallic_roughness_tex = ov.roughness, None, None
+    if ov.emission is not None:
+        mat.emission = tuple(parse_color(ov.emission)[:3])
+        mat.emission_strength = mat.emission_strength or 1.0
+    if ov.emissionStrength is not None:
+        mat.emission_strength = ov.emissionStrength
+    if ov.opacity is not None:
+        mat.opacity = ov.opacity
+    if ov.transmission is not None:
+        mat.transmission = ov.transmission
+    if ov.ior is not None:
+        mat.ior = ov.ior
 
 
 def package_lights(pkg: RendaPackage, stage: Stage) -> list[Light]:

@@ -63,7 +63,9 @@ export const Uri = z.string().min(1);
 
 export const Asset = z.strictObject({
   uri: Uri,
-  format: SceneFormat.or(z.enum(["hdr", "exr", "png", "jpg", "webp", "mp4", "other"])).optional()
+  format: SceneFormat.or(z.enum([
+    "hdr", "exr", "png", "jpg", "webp", "avif", "heic", "tiff", "svg", "psd", "gif", "mp4", "mov", "webm", "other",
+  ])).optional()
     .describe("Override format sniffing."),
   sha256: z.string().regex(/^[0-9a-f]{64}$/).optional(),
 });
@@ -74,7 +76,11 @@ export const Transform = z.strictObject({
   scale: z.union([z.number(), Vec3]).default(1),
 });
 
+/** Name pattern: exact name, case-insensitive glob (`*` `?` `[...]`), or `/regex/flags`. */
+export const NamePattern = z.string().min(1);
+
 export const MaterialOverride = z.strictObject({
+  object: NamePattern.optional().describe("Only materials used by objects whose name matches."),
   baseColor: Color.optional(),
   metallic: z.number().min(0).max(1).optional(),
   roughness: z.number().min(0).max(1).optional(),
@@ -88,6 +94,33 @@ export const MaterialOverride = z.strictObject({
 /** Reference to an asset id in `assets`, or an inline uri. */
 const AssetRef = z.string().min(1);
 
+export const TextureSlot = z.enum(["baseColor", "normal", "roughness", "metallic", "emission", "opacity"]);
+export type TextureSlot = z.infer<typeof TextureSlot>;
+
+export const TextureOverride = z.strictObject({
+  match: z.strictObject({
+    material: NamePattern.optional(),
+    object: NamePattern.optional(),
+    texture: NamePattern.optional().describe("File name of a texture the material already uses."),
+    slot: TextureSlot.optional().describe("Default: the slot `texture` matched, else baseColor."),
+  }).default({}).describe("Empty = every material."),
+  source: AssetRef.describe("Any image (png/jpg/webp/avif/heic/tiff/exr/hdr/svg/psd/gif) or video (mp4/mov/webm/gif/apng)."),
+  uv: z.strictObject({
+    scale: z.union([z.number(), z.tuple([z.number(), z.number()])]).default(1),
+    offset: z.tuple([z.number(), z.number()]).default([0, 0]),
+    rotationDeg: z.number().default(0),
+  }).default({ scale: 1, offset: [0, 0], rotationDeg: 0 }),
+  video: z.strictObject({
+    loop: z.boolean().default(true),
+    startSec: z.number().min(0).default(0),
+    speed: z.number().positive().default(1),
+    frame: z.number().int().min(0).optional().describe("Stills: use this source frame instead of startSec."),
+  }).default({ loop: true, startSec: 0, speed: 1 }),
+  colorSpace: z.enum(["auto", "srgb", "linear"]).default("auto")
+    .describe("auto: sRGB for baseColor/emission, linear for data maps."),
+  strength: z.number().min(0).optional().describe("Normal-map strength or emission strength."),
+});
+
 export const Scene = z.strictObject({
   root: AssetRef.describe("Asset id or uri of the main scene file."),
   include: z.array(z.strictObject({ asset: AssetRef, transform: Transform.optional() })).default([]),
@@ -95,7 +128,9 @@ export const Scene = z.strictObject({
     .describe('Defaults to the source format\'s convention. "-Y" = COLMAP/OpenCV (Y down), the usual axes of Gaussian splat captures (.ply/.splat default to it).'),
   unitScale: z.number().positive().default(1),
   materialOverrides: z.record(z.string(), MaterialOverride).default({})
-    .describe('Keys are material names or "*" for all.'),
+    .describe('Keys are material names, globs, /regex/flags, or "*" for all.'),
+  textureOverrides: z.array(TextureOverride).default([])
+    .describe("Replace material textures with images or videos; later entries win."),
 });
 
 export const Camera = z.discriminatedUnion("mode", [
@@ -244,3 +279,58 @@ export function packageForFile(uri: string, overrides: Partial<RendaPackageInput
 }
 
 export const JSON_SCHEMA_ID = "https://renda.dev/schema/v1.json";
+
+const TEX_KEYS = new Set(["material", "object", "texture", "slot", "scale", "offset", "rotation", "colorspace", "cs",
+  "strength", "loop", "start", "speed", "frame"]);
+
+/**
+ * `--texture "material=/Wood.*\/i,slot=baseColor,scale=4:./oak.jpg"` → a textureOverrides entry (mirrors
+ * renda.cli.parse_texture_flag). Before the first top-level `:` come comma-separated key=value pairs
+ * (material, object, texture, slot, scale=4|2x3, offset=0.1x0.2, rotation, colorSpace, strength, loop,
+ * start, speed, frame); after it, the source path/URL. No `=` → the whole value is the source.
+ * Relative paths are returned as written; callers resolve them.
+ */
+export function parseTextureFlag(value: string): z.input<typeof TextureOverride> {
+  const s = value.trim();
+  const spec: Record<string, string> = {};
+  let pos = 0;
+  for (;;) {
+    const m = /^([A-Za-z]+)=/.exec(s.slice(pos));
+    if (!m || !TEX_KEYS.has(m[1].toLowerCase())) break;
+    const key = m[1].toLowerCase();
+    pos += m[0].length;
+    const rest = s.slice(pos);
+    const mm = rest.startsWith("/") ? /^\/(?:\\.|[^/\\])*\/[imsx]*/.exec(rest) : /^[^,:]*/.exec(rest);
+    if (!mm) throw new Error(`--texture: unterminated /regex/ in "${value}"`);
+    spec[key] = mm[0];
+    pos += mm[0].length;
+    if (s[pos] === ",") { pos++; continue; }
+    if (s[pos] === ":") { pos++; break; }
+    throw new Error(`--texture: expected ',' or ':' after ${key}= in "${value}" (format: material=Wood*,slot=baseColor:./oak.jpg)`);
+  }
+  const source = Object.keys(spec).length ? s.slice(pos) : s;
+  if (!source) throw new Error(`--texture: missing image/video after ':' in "${value}"`);
+  const pair = (v: string): [number, number] => {
+    const [a, b] = v.toLowerCase().split("x");
+    return [Number(a), Number(b ?? a)];
+  };
+  const entry: any = { source };
+  const match: any = {};
+  for (const k of ["material", "object", "texture", "slot"]) if (spec[k] !== undefined) match[k] = spec[k];
+  if (Object.keys(match).length) entry.match = match;
+  const uv: any = {};
+  if (spec.scale !== undefined) { const [x, y] = pair(spec.scale); uv.scale = x === y ? x : [x, y]; }
+  if (spec.offset !== undefined) uv.offset = pair(spec.offset);
+  if (spec.rotation !== undefined) uv.rotationDeg = Number(spec.rotation);
+  if (Object.keys(uv).length) entry.uv = uv;
+  const video: any = {};
+  if (spec.loop !== undefined) video.loop = !["0", "false", "no", "off"].includes(spec.loop.toLowerCase());
+  if (spec.start !== undefined) video.startSec = Number(spec.start);
+  if (spec.speed !== undefined) video.speed = Number(spec.speed);
+  if (spec.frame !== undefined) video.frame = Number(spec.frame);
+  if (Object.keys(video).length) entry.video = video;
+  const cs = spec.colorspace ?? spec.cs;
+  if (cs) entry.colorSpace = cs.toLowerCase();
+  if (spec.strength !== undefined) entry.strength = Number(spec.strength);
+  return entry;
+}

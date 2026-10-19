@@ -143,12 +143,13 @@ class ThreeLoader:
         for ch in obj.get("children", []):
             self._index_world(ch, w)
 
-    def _walk(self, obj: dict, parent: np.ndarray) -> None:
+    def _walk(self, obj: dict, parent: np.ndarray, parent_name: str | None = None) -> None:
         world = parent @ _matrix(obj)
         if obj.get("visible", True) is False:
             return
         t = obj.get("type", "Object3D")
-        name = obj.get("name") or f"{t}_{obj.get('uuid', '')[:8]}"
+        # unnamed meshes inherit their group's name (what users see in editors), so overrides can match them
+        name = obj.get("name") or parent_name or f"{t}_{obj.get('uuid', '')[:8]}"
         if t in ("Mesh", "SkinnedMesh", "InstancedMesh", "BatchedMesh"):
             self._mesh(obj, world, name)
         elif t in ("Points", "Line", "LineSegments", "LineLoop", "Sprite"):
@@ -158,7 +159,7 @@ class ThreeLoader:
         elif t.endswith("Light"):
             self._light(obj, world, name)
         for ch in obj.get("children", []):
-            self._walk(ch, world)
+            self._walk(ch, world, obj.get("name") or parent_name if t not in ("Scene",) else None)
 
     # -- meshes --------------------------------------------------------------
     def _mesh(self, obj: dict, world: np.ndarray, name: str) -> None:

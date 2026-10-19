@@ -102,6 +102,27 @@ def save_pass(data: np.ndarray, path: Path, kind: str) -> Path:
     return path
 
 
+def read_hdr_image(path: Path) -> np.ndarray:
+    """Radiance .hdr or OpenEXR → float32 (H, W, C) linear."""
+    path = Path(path)
+    with open(path, "rb") as f:
+        head = f.read(10)
+    if head.startswith((b"#?RADIANCE", b"#?RGBE")):
+        from .hdri import read_hdr
+
+        return read_hdr(path).astype(np.float32)
+    try:
+        import mitsuba as mi
+
+        if not mi.variant():
+            mi.set_variant("scalar_rgb")
+        return np.array(mi.Bitmap(str(path)), dtype=np.float32)
+    except ImportError:
+        import imageio.v3 as iio
+
+        return np.asarray(iio.imread(path), dtype=np.float32)
+
+
 def save_exr(data: np.ndarray, path: Path) -> Path:
     """EXR via mitsuba's Bitmap (always present when the mitsuba extra is) or OpenEXR/imageio."""
     try:
