@@ -107,6 +107,27 @@ describe("render", () => {
     expect(submitted.body.package.assets.scene.uri).toBe(`asset://${"a".repeat(64)}`);
   });
 
+  it("--texture (repeatable) adds texture overrides and uploads their files", async () => {
+    let n = 0;
+    const t = await setup(({ method, url, body }) => {
+      if (url.endsWith("/uploads")) return { json: { assetUri: `asset://${String(++n).repeat(64).slice(0, 64)}`, exists: true } };
+      if (method === "POST" && url.endsWith("/jobs")) return { status: 201, json: job() };
+      if (url.endsWith("/jobs/job_1")) return { json: job({ status: "succeeded", progress: 1, outputs: [] }) };
+    }, { creds: { apiKey: "rnd_live_xxxxxxxxxxxxxxxxxxxxxxxx" } });
+    await writeFile(join(t.dir, "model.glb"), "glTF....");
+    await writeFile(join(t.dir, "oak.jpg"), "JPEG");
+    await writeFile(join(t.dir, "screen.mp4"), "MP4");
+    const code = await run(["render", join(t.dir, "model.glb"),
+      "--texture", `material=/wood,oak/i,scale=4:${join(t.dir, "oak.jpg")}`,
+      "--texture", `object=Display,slot=emission:${join(t.dir, "screen.mp4")}`, "-o", join(t.dir, "out")], t.deps);
+    expect(code).toBe(0);
+    const pkg = t.calls.find((c) => c.method === "POST" && c.url.endsWith("/jobs"))!.body.package;
+    expect(pkg.scene.textureOverrides).toHaveLength(2);
+    expect(pkg.scene.textureOverrides[0]).toMatchObject({ match: { material: "/wood,oak/i" }, uv: { scale: 4 } });
+    expect(pkg.scene.textureOverrides[1]).toMatchObject({ match: { object: "Display", slot: "emission" } });
+    for (const t of pkg.scene.textureOverrides) expect(t.source).toMatch(/^asset:\/\//);
+  });
+
   it("--max-minutes refuses over-budget jobs before submitting", async () => {
     const t = await setup(({ method, url }) => {
       if (url.endsWith("/estimate")) return { json: { engine: "blender-cycles", hardware: "gpu-l4", estSeconds: [300, 900], estCostUsd: [0.2, 0.5] } };

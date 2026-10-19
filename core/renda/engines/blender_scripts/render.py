@@ -19,6 +19,7 @@ from mathutils import Matrix, Vector  # noqa: E402
 from _common import (  # noqa: E402
     import_file, look_at_matrix, open_or_import, read_job, to_blender_space, world_bounds, write_result,
 )
+from _match import basename, matches  # noqa: E402
 
 WARN: list[str] = []
 
@@ -149,20 +150,62 @@ def _set_input(node, names, value, links) -> None:
         return
 
 
-def apply_material_overrides(scene, overrides: dict) -> None:
+def _mesh_objects(scene):
+    return [ob for ob in scene.objects if ob.type == "MESH"]
+
+
+def _ensure_materials(scene) -> None:
+    """Objects without materials get one so "*" and object-scoped overrides reach them."""
+    default = None
+    for ob in _mesh_objects(scene):
+        if len(ob.material_slots) == 0:
+            default = default or bpy.data.materials.new("renda_default")
+            ob.data.materials.append(default)
+
+
+def scoped_materials(scene, object_pattern, material_ok, tag: str) -> dict:
+    """{original material name: material to edit}. With an object pattern, materials shared with
+    non-matching objects are copied for the matching ones (mirrors renda.textures._scope_materials)."""
+    users: dict = {}
+    for ob in _mesh_objects(scene):
+        for slot in ob.material_slots:
+            if slot.material is not None and material_ok(slot.material):
+                users.setdefault(slot.material.name, []).append((ob, slot))
+    edit = {}
+    for name, uses in users.items():
+        hit = [(ob, s) for ob, s in uses if matches(object_pattern, ob.name)]
+        if not hit:
+            continue
+        if object_pattern is None or len(hit) == len(uses):
+            edit[name] = name
+            continue
+        clone = bpy.data.materials.get(f"{name}@{tag}") or bpy.data.materials[name].copy()
+        clone.name = f"{name}@{tag}"
+        for ob, s in hit:
+            if s.link == "OBJECT":
+                s.material = clone
+            else:  # mesh data may be shared with non-matching objects: give this object its own slot link
+                s.link = "OBJECT"
+                s.material = clone
+        edit[name] = clone.name
+    return edit
+
+
+def apply_material_overrides(scene, overrides) -> None:
+    """`overrides`: list of {"key", "object", ...values} in application order ("*" first). A dict
+    (older jobs) means exact names + "*"."""
     if not overrides:
         return
-    if "*" in overrides:  # objects without materials need one for "*" to reach them
-        default = None
-        for ob in scene.objects:
-            if ob.type == "MESH" and len(ob.material_slots) == 0:
-                default = default or bpy.data.materials.new("renda_default")
-                ob.data.materials.append(default)
-    for mat in bpy.data.materials:
-        for key in ("*", mat.name):
-            ov = overrides.get(key)
-            if not ov:
-                continue
+    if isinstance(overrides, dict):
+        overrides = [{"key": k, **v} for k, v in sorted(overrides.items(), key=lambda kv: kv[0] != "*")]
+    _ensure_materials(scene)
+    for i, ov in enumerate(overrides):
+        key = ov["key"]
+        edit = scoped_materials(scene, ov.get("object"), lambda m, k=key: k == m.name or matches(k, m.name), f"mo{i}")
+        if not edit and key != "*":
+            WARN.append(f"blender: materialOverrides[{key!r}] matched no materials")
+        for name in edit.values():
+            mat = bpy.data.materials[name]
             node = principled(mat)
             if node is None:
                 WARN.append(f"blender: material {mat.name!r} has no Principled BSDF; override skipped")
@@ -188,6 +231,169 @@ def apply_material_overrides(scene, overrides: dict) -> None:
                 _set_input(node, ["Transmission Weight", "Transmission"], ov["transmission"], links)
             if "ior" in ov:
                 _set_input(node, ["IOR"], ov["ior"], links)
+
+
+# -- texture overrides -------------------------------------------------------------
+
+_SLOT_SOCKETS = {
+    "baseColor": ["Base Color"],
+    "normal": ["Normal"],
+    "roughness": ["Roughness"],
+    "metallic": ["Metallic"],
+    "emission": ["Emission Color", "Emission"],
+    "opacity": ["Alpha"],
+}
+COLOR_SLOTS = {"baseColor", "emission"}
+
+
+def _upstream_images(sock, depth: int = 4) -> list:
+    """Image Texture nodes feeding a socket (through normal-map/mix/separate nodes)."""
+    out, frontier = [], [sock]
+    for _ in range(depth):
+        nxt = []
+        for s in frontier:
+            for link in s.links:
+                n = link.from_node
+                if n.type == "TEX_IMAGE":
+                    out.append(n)
+                else:
+                    nxt += list(n.inputs)
+        frontier = nxt
+    return out
+
+
+def slot_texture_names(mat) -> dict:
+    """{slot: [image file names]} for a Principled-based material."""
+    node = principled(mat)
+    if node is None:
+        return {}
+    names = {}
+    for slot, socks in _SLOT_SOCKETS.items():
+        for sname in socks:
+            sock = node.inputs.get(sname)
+            if sock is not None:
+                for img_node in _upstream_images(sock):
+                    if img_node.image is not None:
+                        names.setdefault(slot, []).append(basename(img_node.image.filepath) or img_node.image.name)
+    return names
+
+
+def texture_targets(scene, ov: dict) -> list:
+    """[(material name, slot)] for one override; uses the precomputed IR match when given."""
+    if ov.get("targets") is not None:
+        return [tuple(t) for t in ov["targets"] if t[0] in bpy.data.materials]
+    m = ov.get("match") or {}
+    cands = {}
+
+    def ok(mat) -> bool:
+        if not matches(m.get("material"), mat.name):
+            return False
+        if m.get("texture") is None:
+            cands[mat.name] = [ov.get("slot") or "baseColor"]
+            return True
+        hits = [slot for slot, names in slot_texture_names(mat).items() if any(matches(m["texture"], n) for n in names)]
+        if not hits:
+            return False
+        cands[mat.name] = [ov["slot"]] if ov.get("slot") else hits
+        return True
+
+    edit = scoped_materials(scene, m.get("object"), ok, f"tex{ov['index']}")
+    return [(edit[orig], s) for orig, slots in cands.items() if orig in edit for s in slots]
+
+
+def _image(path: str, colorspace: str):
+    img = bpy.data.images.load(path, check_existing=True)
+    try:
+        img.colorspace_settings.name = "sRGB" if colorspace == "srgb" else "Non-Color"
+    except TypeError:
+        pass
+    return img
+
+
+def setup_texture_overrides(scene, overrides: list, first_frame: int) -> list:
+    """Wire an Image Texture node (with a Mapping node for the UV transform) into each target slot.
+    Returns [(override, [image nodes])] so the frame loop can swap images for video textures."""
+    _ensure_materials(scene)
+    wired = []
+    for ov in overrides:
+        targets = texture_targets(scene, ov)
+        if not targets:
+            WARN.append(f"blender: textureOverrides[{ov['index']}] matched no material texture slots")
+            continue
+        nodes_for = []
+        for mat_name, slot in targets:
+            mat = bpy.data.materials[mat_name]
+            bsdf = principled(mat)
+            if bsdf is None:
+                WARN.append(f"blender: material {mat_name!r} has no Principled BSDF; texture override skipped")
+                continue
+            nt = mat.node_tree
+            cs = ov.get("colorSpace") or "auto"
+            cs = ("srgb" if slot in COLOR_SLOTS else "linear") if cs == "auto" else cs
+            tex = nt.nodes.new("ShaderNodeTexImage")
+            tex.image = _image(ov["frames"][str(first_frame)], cs)
+            tex.interpolation = "Linear"
+            tex.extension = "REPEAT"
+            sx, sy, ox, oy, rot = ov.get("uv") or (1, 1, 0, 0, 0)
+            no_uvs = _material_lacks_uvs(scene, mat_name)
+            if no_uvs:  # STL/scans: box-project from generated coordinates instead of UVs
+                tex.projection = "BOX"
+                tex.projection_blend = 0.2
+            if no_uvs or (sx, sy, ox, oy, rot) != (1, 1, 0, 0, 0):
+                coord = nt.nodes.new("ShaderNodeTexCoord")
+                mapping = nt.nodes.new("ShaderNodeMapping")
+                mapping.vector_type = "POINT"  # scale → rotate → translate, like KHR_texture_transform
+                mapping.inputs["Location"].default_value = (ox, oy, 0)
+                mapping.inputs["Rotation"].default_value = (0, 0, math.radians(rot))
+                mapping.inputs["Scale"].default_value = (sx, sy, 1 if not no_uvs else sx)
+                nt.links.new(coord.outputs["Generated" if no_uvs else "UV"], mapping.inputs["Vector"])
+                nt.links.new(mapping.outputs["Vector"], tex.inputs["Vector"])
+            strength = ov.get("strength")
+            if slot == "normal":
+                nmap = nt.nodes.new("ShaderNodeNormalMap")
+                if strength is not None:
+                    nmap.inputs["Strength"].default_value = strength
+                nt.links.new(tex.outputs["Color"], nmap.inputs["Color"])
+                _link(nt, nmap.outputs["Normal"], bsdf, _SLOT_SOCKETS[slot])
+            else:
+                _link(nt, tex.outputs["Color"], bsdf, _SLOT_SOCKETS[slot])
+            if slot == "baseColor":
+                mat.diffuse_color = (1, 1, 1, 1)
+            if slot == "emission":
+                sock = bsdf.inputs.get("Emission Strength")
+                if sock is not None:
+                    sock.default_value = strength if strength is not None else max(sock.default_value, 1.0)
+            nodes_for.append((tex, cs))
+        wired.append((ov, nodes_for))
+    return wired
+
+
+def _material_lacks_uvs(scene, mat_name: str) -> bool:
+    for ob in _mesh_objects(scene):
+        if any(s.material is not None and s.material.name == mat_name for s in ob.material_slots):
+            if len(ob.data.uv_layers) == 0:
+                return True
+    return False
+
+
+def _link(nt, out_sock, bsdf, names) -> None:
+    for name in names:
+        sock = bsdf.inputs.get(name)
+        if sock is not None:
+            for link in list(sock.links):
+                nt.links.remove(link)
+            nt.links.new(out_sock, sock)
+            return
+
+
+def update_texture_frame(wired: list, frame: int) -> None:
+    for ov, nodes in wired:
+        path = ov["frames"].get(str(frame))
+        if path is None:
+            continue
+        for tex, cs in nodes:
+            if tex.image is None or bpy.path.abspath(tex.image.filepath) != path:
+                tex.image = _image(path, cs)
 
 
 def setup_world(scene, env: dict) -> None:
@@ -364,6 +570,7 @@ def main() -> None:
     add_includes(job, conv)
     apply_unit_scale(scene, float(job.get("unit_scale", 1.0)))
     apply_material_overrides(scene, job.get("material_overrides", {}))
+    wired_textures = setup_texture_overrides(scene, job.get("texture_overrides") or [], job["frames"][0])
     setup_world(scene, job["environment"])
     add_lights(scene, job.get("lights", []), conv)
     configure_engine(scene, job)
@@ -385,6 +592,7 @@ def main() -> None:
     written = []
     for f in job["frames"]:
         scene.frame_set(f)
+        update_texture_frame(wired_textures, f)
         if frame_cams:
             fc = frame_cams[str(f)]
             pos, tgt, up = conv(fc["position"]), conv(fc["target"]), conv(fc["up"])

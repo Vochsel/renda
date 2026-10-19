@@ -25,6 +25,13 @@ describe("package uri validation", () => {
     expect(code(() => parseJobPackage("scene", { scene: { root: "./model.glb" } }))).toBe("local_uri");
     expect(code(() => parseJobPackage("scene", { assets: { a: { uri: "teapot.blend" } }, scene: { root: "a" } }))).toBe("local_uri");
   });
+  it("texture override sources are checked like other assets", () => {
+    const tex = (source: string) => ({ scene: { root: `asset://${SHA}`, textureOverrides: [{ source, match: { material: "/wood/i" } }] } });
+    const p = parseJobPackage("scene", tex(`asset://${"d".repeat(64)}`));
+    expect(p.uris.assetShas).toContain("d".repeat(64));
+    expect(code(() => parseJobPackage("scene", tex("./oak.jpg")))).toBe("local_uri");
+    expect(code(() => parseJobPackage("scene", tex("https://cdn.example.com/screen.mp4")))).toBe("ok");
+  });
   it("hdri asset refs are checked but built-ins are allowed", () => {
     expect(code(() => parseJobPackage("scene", { scene: { root: `asset://${SHA}` }, environment: { hdri: "studio" } }))).toBe("ok");
     expect(code(() => parseJobPackage("scene", { scene: { root: `asset://${SHA}` }, environment: { hdri: "./sky.hdr" } }))).toBe("local_uri");

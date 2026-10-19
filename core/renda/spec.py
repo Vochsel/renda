@@ -62,7 +62,8 @@ class Asset(_M):
     uri: str = Field(min_length=1)
     format: Literal[
         "blend", "usd", "gltf", "threejs", "fbx", "obj", "stl", "ply", "dae", "3mf", "abc", "splat", "rir",
-        "hdr", "exr", "png", "jpg", "webp", "mp4", "other",
+        "hdr", "exr", "png", "jpg", "webp", "avif", "heic", "tiff", "svg", "psd", "gif",
+        "mp4", "mov", "webm", "other",
     ] | None = None
     sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
@@ -74,6 +75,8 @@ class Transform(_M):
 
 
 class MaterialOverride(_M):
+    # Restrict the override to materials used by objects whose name matches (glob or /regex/flags).
+    object: str | None = Field(default=None, min_length=1)
     baseColor: Color | None = None
     metallic: float | None = Field(default=None, ge=0, le=1)
     roughness: float | None = Field(default=None, ge=0, le=1)
@@ -84,6 +87,42 @@ class MaterialOverride(_M):
     ior: float | None = Field(default=None, ge=1)
 
     _c = field_validator("baseColor", "emission")(_check_color)
+
+
+TextureSlot = Literal["baseColor", "normal", "roughness", "metallic", "emission", "opacity"]
+TEXTURE_SLOTS: tuple[str, ...] = ("baseColor", "normal", "roughness", "metallic", "emission", "opacity")
+
+
+class TextureMatch(_M):
+    """Which material texture slots a texture override replaces. Each pattern is a glob
+    (case-insensitive, `*` `?` `[...]`), an exact name, or `/regex/flags`. Empty = every material."""
+
+    material: str | None = Field(default=None, min_length=1)
+    object: str | None = Field(default=None, min_length=1)
+    texture: str | None = Field(default=None, min_length=1)  # file name of a texture the material already uses
+    slot: TextureSlot | None = None  # default: the slot `texture` matched, else baseColor
+
+
+class TextureUV(_M):
+    scale: float | tuple[float, float] = 1
+    offset: tuple[float, float] = (0, 0)
+    rotationDeg: float = 0
+
+
+class TextureVideo(_M):
+    loop: bool = True
+    startSec: float = Field(default=0, ge=0)
+    speed: float = Field(default=1, gt=0)
+    frame: Annotated[int, Field(ge=0)] | None = None  # stills: use this source frame instead of startSec
+
+
+class TextureOverride(_M):
+    match: TextureMatch = Field(default_factory=TextureMatch)
+    source: str = Field(min_length=1)  # asset id or uri: any image (png/jpg/webp/avif/heic/tiff/exr/hdr/svg/psd/gif) or video
+    uv: TextureUV = Field(default_factory=TextureUV)
+    video: TextureVideo = Field(default_factory=TextureVideo)
+    colorSpace: Literal["auto", "srgb", "linear"] = "auto"  # auto: sRGB for baseColor/emission, linear otherwise
+    strength: float | None = Field(default=None, ge=0)  # normal-map strength / emission strength
 
 
 class Include(_M):
@@ -97,6 +136,7 @@ class Scene(_M):
     upAxis: Literal["Y", "Z", "-Y"] | None = None  # "-Y": COLMAP/OpenCV, Gaussian splat captures
     unitScale: float = Field(default=1, gt=0)
     materialOverrides: dict[str, MaterialOverride] = Field(default_factory=dict)
+    textureOverrides: list[TextureOverride] = Field(default_factory=list)
 
 
 class AutoCamera(_M):

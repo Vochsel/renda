@@ -26,16 +26,43 @@ JSON Schema at `renda://schema/v1`.
 - `include` `[{ asset, transform? }]` = `[]`
 - `upAxis` `"Y" | "Z" | "-Y"`, optional: defaults to the format's convention (`"-Y"` = Y down, COLMAP/OpenCV, the default for splat `.ply`/`.splat`)
 - `unitScale` number > 0 = 1: multiply scene units to get metres
-- `materialOverrides` `{ [materialName | "*"]: MaterialOverride }` = `{}`
+- `materialOverrides` `{ [pattern]: MaterialOverride }` = `{}`: keys are an exact material name, a
+  case-insensitive glob (`"wood*"`), `/regex/flags` (`"/^wood(_\\d+)?$/i"`) or `"*"`. `"*"` applies first, then
+  the rest in order (later wins).
+- `textureOverrides` `TextureOverride[]` = `[]`: replace material textures with any image or video (below)
+
+### Name patterns
+Used by `materialOverrides` keys and `textureOverrides[].match`: exact name, glob (`*` `?` `[ab]`,
+case-insensitive), or `/regex/flags` (flags `i m s x`). Material, object and texture names come from the file
+(glTF/USD/FBX/.blend object + material names; OBJ `o`/`usemtl`; three.js object/material names; COLLADA
+material names). A rule that matches nothing adds a job warning listing what was there.
+
+### TextureOverride
+- `source` asset id or uri, **required**: any image — png jpg webp avif heic tiff (16-bit) bmp tga gif exr hdr
+  svg (rasterised at 2048 px) psd (flattened) — or video — mp4 mov webm mkv avi, animated gif/png/webp.
+  Converted automatically; extensionless uploads are sniffed.
+- `match` = `{}` (every material): `material`, `object` (scopes to objects whose name matches; shared
+  materials are copied so other objects keep the original), `texture` (file name of a texture the material
+  already uses, e.g. `"*_diffuse.png"`), `slot` `baseColor | normal | roughness | metallic | emission | opacity`
+  (default: the slot `texture` matched, else `baseColor`)
+- `uv` = `{ scale: 1, offset: [0,0], rotationDeg: 0 }`: `scale` number or [u,v]; applied as
+  translate · rotate · scale (KHR_texture_transform order)
+- `video` = `{ loop: true, startSec: 0, speed: 1 }`; `frame` (stills: show this source frame). Render frame
+  `f` shows source time `startSec + (f − animation.frames[0]) / fps × speed`, looped or held on the last frame.
+- `colorSpace` `auto | srgb | linear` = `auto` (sRGB for baseColor/emission, linear for data maps)
+- `strength` ≥ 0, optional: normal-map strength or emission strength
+- Meshes with no UVs (STL, scans) get box-projected UVs automatically. Later overrides win. Gaussian splats
+  have no materials: overrides apply to meshes only.
+
+### MaterialOverride (all optional)
+`object` (pattern: only materials used by matching objects), `baseColor` (#rrggbb | #rrggbbaa | [r,g,b] linear
+0–1), `metallic` 0–1, `roughness` 0–1, `emission` colour, `emissionStrength` ≥ 0, `opacity` 0–1,
+`transmission` 0–1, `ior` ≥ 1.
 
 ### Transform
 - `translate` [x,y,z] = [0,0,0]
 - `rotateDeg` [x,y,z] = [0,0,0]: XYZ Euler in degrees
 - `scale` number | [x,y,z] = 1
-
-### MaterialOverride (all optional)
-`baseColor` (#rrggbb | #rrggbbaa | [r,g,b] linear 0–1), `metallic` 0–1, `roughness` 0–1,
-`emission` colour, `emissionStrength` ≥ 0, `opacity` 0–1, `transmission` 0–1, `ior` ≥ 1.
 
 ## camera (discriminated by `mode`)
 - `auto`: `fovDeg` = 35, `elevationDeg` = 20, `azimuthDeg` = 35, `padding` = 0.1 (fraction of the bounds)

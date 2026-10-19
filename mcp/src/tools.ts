@@ -343,7 +343,7 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
   }
 
   // ---------- render ----------
-  const resolvePackage = async (args: { package?: Record<string, unknown>; file?: string; packagePath?: string; packageDir?: string; options?: StarterOpts }) => {
+  const resolvePackage = async (args: { package?: Record<string, unknown>; file?: string; packagePath?: string; packageDir?: string; options?: StarterOpts; textureOverrides?: any[] }) => {
     let pkg: any;
     let baseDir = args.packageDir ? resolve(args.packageDir) : process.cwd();
     if (args.package) pkg = args.package;
@@ -353,6 +353,9 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
       baseDir = args.packageDir ? baseDir : packageDir(args.packagePath);
     } else if (args.file) pkg = starterPackage(args.file, args.options ?? {});
     else throw new Error("Provide one of: package, packagePath, or file.");
+    if (args.textureOverrides?.length) {
+      pkg = { ...pkg, scene: { ...(pkg.scene ?? {}), textureOverrides: [...(pkg.scene?.textureOverrides ?? []), ...args.textureOverrides] } };
+    }
     const v = validatePackage(pkg);
     if (!v.valid) return { issues: v.issues } as const;
     let uploaded: unknown[] = [];
@@ -361,7 +364,9 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
       pkg = r.package;
       uploaded = r.uploaded;
     } else {
-      const localRefs = [...Object.values<any>(pkg.assets ?? {}).map((a) => a.uri), pkg.scene?.root].filter((u) => typeof u === "string" && isLocalUri(u) && !(u in (pkg.assets ?? {})));
+      const localRefs = [...Object.values<any>(pkg.assets ?? {}).map((a) => a.uri), pkg.scene?.root,
+        ...(pkg.scene?.textureOverrides ?? []).map((t: any) => t.source)]
+        .filter((u) => typeof u === "string" && isLocalUri(u) && !(u in (pkg.assets ?? {})));
       if (localRefs.length) throw new RendaApiError(400, "local_path_in_remote_mode", `Remote MCP can't read local files: ${localRefs.join(", ")}`,
         "Use https:// URLs or asset:// URIs (upload via POST /api/v1/uploads or the local @rendahq/mcp server).");
     }
@@ -374,6 +379,12 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
     file: z.string().optional().describe("A scene file path/URL to render with default settings (use instead of package)."),
     options: z.object(StarterOptions).optional().describe("Starter options when using file."),
     ...(local ? { packageDir: z.string().optional().describe("Directory relative paths resolve against (default: package file dir or cwd).") } : {}),
+    textureOverrides: z.array(z.record(z.string(), z.any())).optional().describe(
+      "Swap material textures (appended to scene.textureOverrides; later entries win). Each: {source: image or video "
+      + (local ? "path/URL" : "https/asset URI") + " (png/jpg/webp/avif/heic/tiff/exr/hdr/svg/psd/gif/mp4/mov/webm — converted automatically), "
+      + "match?: {material?, object?, texture?, slot?: baseColor|normal|roughness|metallic|emission|opacity} (exact name, glob like \"wood*\", or \"/regex/i\"), "
+      + "uv?: {scale, offset, rotationDeg}, video?: {loop, startSec, speed, frame}, colorSpace?, strength?}. "
+      + "Videos play in sync with the animation. Example: [{source: \"./oak.jpg\", match: {material: \"/wood/i\"}, uv: {scale: 4}}]."),
   };
 
   server.registerTool("renda_estimate", {

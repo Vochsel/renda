@@ -60,7 +60,11 @@ framed studio render.
     "root": "teapot",                                    // asset id or uri of the main scene file
     "include": [{ "asset": "prop", "transform": { "translate": [1, 0, 0] } }],
     "upAxis": "Z", "unitScale": 1,
-    "materialOverrides": { "*": { "baseColor": "#d0d0d0", "roughness": 0.4 } }
+    "materialOverrides": { "*": { "baseColor": "#d0d0d0", "roughness": 0.4 } },   // keys: name, glob, /regex/
+    "textureOverrides": [                                // any image (png/jpg/webp/avif/heic/tiff/exr/hdr/svg/psd) or video
+      { "match": { "material": "/wood/i" }, "source": "./oak.jpg", "uv": { "scale": 4 } },
+      { "match": { "object": "Screen*", "slot": "emission" }, "source": "./promo.mp4", "strength": 2 }
+    ]
   },
   "camera": { "mode": "auto", "fovDeg": 35, "elevationDeg": 20, "azimuthDeg": 35, "padding": 0.1 },
   // or { "mode": "scene", "name": "Camera.001" }

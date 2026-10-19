@@ -34,6 +34,9 @@ def render_frames(
     named = with_extensions({k: Path(v) for k, v in asset_paths.items()}, Path(cache_dir or out_dir) / "named")
     t0 = time.time()
     result = engine.render(RenderContext(plan, pkg, named, out_dir, cache_dir), frames)
+    if plan.engine == "gsplat" and pkg.scene.textureOverrides:
+        result.warnings.append("gsplat: Gaussian splats have no material textures; textureOverrides were ignored "
+                               "(they apply to meshes in the other engines)")
     result.seconds = time.time() - t0
     return result
 

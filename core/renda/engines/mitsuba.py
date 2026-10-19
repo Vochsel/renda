@@ -117,7 +117,16 @@ class MitsubaEngine(Engine):
         bg = env.background
         hide_env = bg != "hdri" or pkg.output.transparent or hybrid  # hybrid: compositor draws the background
 
-        scene = stage_to_dict(stage, mi, TextureCache(stage.base_dir), (ctx.cache_dir or ctx.out_dir) / "mi-meshes")
+        tex_plan = None
+        if pkg.scene.textureOverrides:
+            from ..textures import TexturePlan, resolve_texture_overrides
+
+            tex_plan = TexturePlan(stage, resolve_texture_overrides(pkg, ctx.asset_paths, frames, ctx.cache_dir))
+            warnings += tex_plan.warnings()
+            tex_plan.apply(stage, frames[0])
+        tex_cache = TextureCache(stage.base_dir)
+        mesh_dir = (ctx.cache_dir or ctx.out_dir) / "mi-meshes"
+        scene = stage_to_dict(stage, mi, tex_cache, mesh_dir)
         from ..ir.exporters.mitsuba import light_dict
 
         for i, lt in enumerate(package_lights(pkg, stage)):
@@ -194,6 +203,14 @@ class MitsubaEngine(Engine):
         depths: dict[int, np.ndarray] = {}
         for f in frames:
             cam = cams[f]
+            if tex_plan is not None and tex_plan.animated and f != frames[0]:
+                # video textures: swap in this frame's images and rebuild the scene (simpler and sturdier
+                # than poking nested bitmap parameters; meshes are small next to the render)
+                tex_plan.apply(stage, f)
+                rebuilt = stage_to_dict(stage, mi, tex_cache, mesh_dir)
+                rebuilt.update({k: v for k, v in scene.items() if not k.startswith(("shape_", "bsdf_"))})
+                mi_scene = mi.load_dict(rebuilt)
+                params = mi.traverse(mi_scene)
             if cam is not first:
                 params["camera.to_world"] = mi.Transform4f().look_at(origin=cam.position.tolist(), target=cam.target.tolist(), up=cam.up.tolist()) \
                     if first.ortho_height is None else params["camera.to_world"]

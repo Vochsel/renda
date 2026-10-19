@@ -2,6 +2,8 @@
 export interface Parsed {
   positionals: string[];
   flags: Record<string, string | boolean>;
+  /** Every value given for each flag, in order (for repeatable flags whose values contain commas). */
+  lists?: Record<string, string[]>;
 }
 
 /** Flags that never take a value. */
@@ -14,6 +16,7 @@ const ALIASES: Record<string, string> = { o: "output", y: "yes", h: "help", v: "
 export function parseArgs(argv: string[]): Parsed {
   const positionals: string[] = [];
   const flags: Record<string, string | boolean> = {};
+  const lists: Record<string, string[]> = {};
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--") {
@@ -38,13 +41,18 @@ export function parseArgs(argv: string[]): Parsed {
         flags.wait = false;
         continue;
       }
-      // repeatable flags (e.g. --agent a --agent b) collect as comma-joined
+      // repeatable flags (e.g. --agent a --agent b) collect as comma-joined; `lists` keeps them apart
       flags[name] = typeof flags[name] === "string" && typeof value === "string" ? `${flags[name]},${value}` : value;
+      if (typeof value === "string") (lists[name] ??= []).push(value);
     } else {
       positionals.push(a);
     }
   }
-  return { positionals, flags };
+  return { positionals, flags, lists };
+}
+
+export function list(parsed: Parsed, name: string): string[] {
+  return parsed.lists?.[name] ?? [];
 }
 
 export function str(flags: Parsed["flags"], name: string): string | undefined {

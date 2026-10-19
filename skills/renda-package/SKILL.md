@@ -43,6 +43,8 @@ rewritten to `asset://<sha256>` automatically; `https://` URLs are fetched by th
 | Want the file's camera | `"camera": { "mode": "scene", "name": "Camera.001" }` (omit `name` for the active camera) |
 | Exact shot | `"camera": { "mode": "lookat", "position": [x,y,z], "target": [x,y,z], "fovDeg": 35 }`, coordinates in the scene's up-axis convention |
 | Grey / flat STL or OBJ | `scene.materialOverrides: { "*": { "baseColor": "#3b82f6", "roughness": 0.5 } }` |
+| Swap a texture / put a logo or video on it | `scene.textureOverrides: [{ "match": { "material": "/wood/i" }, "source": "./oak.jpg", "uv": { "scale": 4 } }]`. Any image or video; a video plays in sync with the animation. Match by `material`, `object`, existing `texture` file name, `slot` (glob or `/regex/i`). CLI: `--texture "material=/wood/i,scale=4:./oak.jpg"` |
+| Only one object should change | add `"object": "Chair*"` to the material/texture override; shared materials are split automatically |
 | Too dark / blown out | `environment.intensity`; add `lights` (a `sun` gives crisp shadows) |
 | Need a cut-out | `output.transparent: true` + png/webp/exr (video: webm/mov) |
 | Noisy | raise `render.quality` (draft → standard → final) before touching `samples` |

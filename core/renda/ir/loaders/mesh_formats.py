@@ -82,7 +82,78 @@ def load(path: Path, fmt: str) -> Stage:
 
     if fmt == "gltf":
         _gltf_cameras_lights(path, stage)
+    elif fmt == "obj":
+        _obj_object_names(path, stage)
+    elif fmt == "dae":
+        _collada_names(path, stage)
     return stage
+
+
+def _obj_object_names(path: Path, stage: Stage) -> None:
+    """trimesh splits OBJs per material and names the parts after the material; put the `o`/`g`
+    object names back (when a material belongs to one object) so overrides can target objects."""
+    users: dict[str, set[str]] = {}
+    current = None
+    try:
+        with open(path, errors="replace") as f:
+            for line in f:
+                if line.startswith(("o ", "g ")):
+                    current = line[2:].strip() or current
+                elif line.startswith("usemtl "):
+                    users.setdefault(line[7:].strip(), set()).add(current or "")
+    except OSError:
+        return
+    for mesh in stage.meshes:
+        objs = users.get(mesh.material or "") or users.get(mesh.name) or set()
+        objs.discard("")
+        if len(objs) == 1:
+            mesh.name = next(iter(objs))
+
+
+def _collada_names(path: Path, stage: Stage) -> None:
+    """trimesh's COLLADA reader drops material names; recover them (and node names) with pycollada."""
+    try:
+        import collada
+    except ImportError:
+        return
+    try:
+        dae = collada.Collada(str(path), ignore=[collada.common.DaeUnsupportedError, collada.common.DaeBrokenRefError])
+    except Exception:
+        return
+    geom_mat: dict[str, str] = {}
+    geom_node: dict[str, str] = {}
+
+    def walk(node, owner):
+        for ch in getattr(node, "children", []):
+            if isinstance(ch, collada.scene.GeometryNode):
+                gid = ch.geometry.id
+                geom_node.setdefault(gid, owner)
+                for mn in ch.materials:
+                    if mn.target is not None:
+                        geom_mat.setdefault(gid, mn.target.name or mn.target.id)
+            elif isinstance(ch, collada.scene.Node):
+                walk(ch, ch.id or owner)
+
+    if dae.scene is not None:
+        for n in dae.scene.nodes:
+            walk(n, n.id)
+    renames: dict[str, str] = {}
+    for mesh in stage.meshes:
+        gid = mesh.name
+        if gid in geom_node and geom_node[gid]:
+            mesh.name = geom_node[gid]
+        target = geom_mat.get(gid)
+        if target and mesh.material and mesh.material.startswith("material_") and mesh.material in stage.materials:
+            renames.setdefault(mesh.material, target)
+    for old, new in renames.items():
+        if new in stage.materials and new != old:
+            continue
+        mat = stage.materials.pop(old)
+        mat.name = new
+        stage.materials[new] = mat
+        for mesh in stage.meshes:
+            if mesh.material == old:
+                mesh.material = new
 
 
 def _unique(name: str, existing: dict) -> str:
