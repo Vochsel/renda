@@ -14,8 +14,9 @@ from renda.spec import load_package
 TESTDATA = Path(__file__).resolve().parents[2] / "testdata"
 SCENES = sorted(p for p in (TESTDATA / "scenes").glob("*.*") if p.suffix not in (".mtl", ".bin", ".png")) + [
     TESTDATA / "scenes" / "threejs" / "scene.json"
-]
+] + sorted((TESTDATA / "scenes" / "cad").glob("*.*"))
 NEEDS_BLENDER = {".blend", ".fbx", ".abc"}
+CAD = {".step", ".stp", ".iges", ".igs"}
 
 
 @pytest.mark.parametrize("path", SCENES, ids=lambda p: str(p.relative_to(TESTDATA / "scenes")))
@@ -24,10 +25,14 @@ def test_scene_loads(path, tmp_path):
         pytest.skip("needs Blender")
     if path.suffix in (".usda", ".usdz"):
         pytest.importorskip("pxr")
-    stage = load_stage(path, cache_dir=tmp_path) if path.suffix in NEEDS_BLENDER else load_stage(path)
+    if path.suffix in CAD:
+        pytest.importorskip("cascadio")
+    stage = load_stage(path, cache_dir=tmp_path) if path.suffix in NEEDS_BLENDER | CAD else load_stage(path)
     assert stage.meshes
-    assert sum(len(m.indices) for m in stage.meshes) > 1000
-    if path.suffix not in (".stl", ".ply", ".3mf", ".abc"):  # formats/exports without materials
+    # CAD samples are mostly planar: IGES is 12 flat patches, the STEP bracket ~870 triangles at default density
+    min_tris = {".iges": 20, ".igs": 20, ".step": 500, ".stp": 500}.get(path.suffix, 1000)
+    assert sum(len(m.indices) for m in stage.meshes) > min_tris
+    if path.suffix not in (".stl", ".ply", ".3mf", ".abc", ".iges", ".igs"):  # formats/exports without materials
         assert stage.materials
 
 

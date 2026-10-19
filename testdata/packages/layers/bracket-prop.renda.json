@@ -1,0 +1,11 @@
+{
+  "$schema": "https://renda.dev/schema/v1.json",
+  "name": "the STEP bracket as a reusable prop (scaled up 3×, brushed metal plate)",
+  "assets": { "part": { "uri": "../../scenes/cad/bracket_assembly.stp" } },
+  "scene": {
+    "root": "part",
+    "unitScale": 3,
+    "materialOverrides": { "mat_0": { "metallic": 0.8, "roughness": 0.3 } }
+  },
+  "lights": [{ "type": "point", "position": [0.06, 0.04, 0.25], "intensity": 4 }]
+}

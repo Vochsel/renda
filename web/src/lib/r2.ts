@@ -30,6 +30,15 @@ export async function objectExists(key: string): Promise<boolean> {
   }
 }
 
+/** Read a small object as text, refusing anything larger than maxBytes. */
+export async function getObjectText(key: string, maxBytes: number): Promise<string> {
+  const res = await s3().send(new GetObjectCommand({ Bucket: bucket(), Key: key }));
+  if ((res.ContentLength ?? 0) > maxBytes) throw new Error(`object is ${res.ContentLength} bytes (limit ${maxBytes})`);
+  const text = (await res.Body?.transformToString("utf-8")) ?? "";
+  if (text.length > maxBytes) throw new Error(`object exceeds ${maxBytes} bytes`);
+  return text;
+}
+
 export function presignPut(key: string, contentType: string, size: number, expiresIn = 3600) {
   return getSignedUrl(
     s3(),

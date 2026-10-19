@@ -2,7 +2,9 @@
 
 MCP server for [Renda](https://renda.vochsel.com): cloud rendering of 3D files and scenes
 (`.blend`, `.usd/.usdz`, `.glb/.gltf`, three.js JSON, `.fbx`, `.obj`, `.stl`, `.ply`,
-`.dae`, `.3mf`, `.abc`) and HyperFrames videos, from any agent. Billed per render-second.
+`.dae`, `.3mf`, `.abc`, CAD `.step/.iges`, Gaussian splats) and HyperFrames videos, from any agent.
+Layered packages (`extends`, `scene.include[].package`) are flattened automatically;
+`renda_flatten_package` shows the composed result. Billed per render-second.
 
 ## Install
 

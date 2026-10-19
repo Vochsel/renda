@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { RendaPackage, formatFromPath, safeParsePackage, type RendaPackageInput } from "@rendahq/spec";
+import { RendaPackage, LayerError, flattenPackage, formatFromPath, isLayered, safeParsePackage, type FlattenResult, type RendaPackageInput } from "@rendahq/spec";
 import { type TrialResponse, RendaApiError, TERMINAL_STATUSES, type HyperframesPackage, type Job, type RendaClient } from "./client.js";
 import { PACKAGE_GUIDE } from "./docs.js";
 import { isLocalUri, packageDir, uploadBytes, uploadFile, uploadLocalPaths, zipDirectory } from "./local.js";
@@ -46,6 +46,10 @@ function safe<A>(fn: (args: A, extra: any) => Promise<ToolResult>) {
       return await fn(args, extra);
     } catch (e) {
       if (e instanceof RendaApiError) return fail(e.toAgentText());
+      if (e instanceof LayerError) {
+        return fail(`Layer error (${e.code}) in ${e.layer}${e.field ? ` at ${e.field}` : ""}: ${e.message}`,
+          "Fix that field in that layer; renda_flatten_package shows how the layers combine.");
+      }
       return fail(`Error: ${(e as Error).message}`);
     }
   };
@@ -297,12 +301,29 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
   }));
 
   // ---------- packages ----------
+  /**
+   * Resolve `extends` / package references. Local mode reads files and fetches https layers itself
+   * (SSRF-guarded); remote mode asks the API, which can also read asset:// layers.
+   */
+  const flatten = async (pkg: Record<string, unknown>, baseDir: string, label?: string): Promise<FlattenResult> => {
+    if (!isLayered(pkg)) return { package: pkg, provenance: {}, layers: [] };
+    if (local) {
+      const { nodeLoaders } = await import("@rendahq/spec/node");
+      return flattenPackage(pkg, { ...nodeLoaders(), base: baseDir, label });
+    }
+    return client.flattenPackage(pkg);
+  };
+
   server.registerTool("renda_validate_package", {
     title: "Validate a Renda package",
-    description: "Validate a .renda.json package locally (no network, free). Returns each issue with its JSON path and a concrete fix, or the normalized package with defaults applied.",
-    inputSchema: { package: PackageArg },
+    description: "Validate a .renda.json package (free). Layered packages (extends / package references) are flattened first. Returns each issue with its JSON path and a concrete fix, or the normalized package with defaults applied.",
+    inputSchema: {
+      package: PackageArg,
+      ...(local ? { packageDir: z.string().optional().describe("Directory relative layer paths resolve against (default cwd).") } : {}),
+    },
     annotations: { readOnlyHint: true },
-  }, safe(async ({ package: pkg }: { package: Record<string, unknown> }) => {
+  }, safe(async ({ package: input, packageDir: dir }: { package: Record<string, unknown>; packageDir?: string }) => {
+    const pkg = (await flatten(input, dir ? resolve(dir) : process.cwd())).package;
     const r = validatePackage(pkg);
     if (r.valid) return ok({ valid: true, normalized: r.package }, "Package is valid. Call renda_estimate or renda_render.");
     return { ...ok({ valid: false, issues: r.issues }, "Apply the fixes and validate again."), isError: true };
@@ -318,7 +339,7 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
     },
   }, safe(async (args: { file: string; writeTo?: string } & StarterOpts) => {
     const { file, writeTo, ...o } = args;
-    if (!formatFromPath(file)) return fail(`Unrecognized scene format for ${file}.`, "Supported: .blend .usd .usda .usdc .usdz .gltf .glb .json(three.js) .fbx .obj .stl .ply .dae .3mf .abc, splats .ply .splat .spz .ksplat");
+    if (!formatFromPath(file)) return fail(`Unrecognized scene format for ${file}.`, "Supported: .blend .usd .usda .usdc .usdz .gltf .glb .json(three.js) .fbx .obj .stl .ply .dae .3mf .abc, CAD .step .stp .iges .igs, splats .ply .splat .spz .ksplat");
     const pkg = starterPackage(file, o);
     const v = validatePackage(pkg);
     if (!v.valid) return fail(`Generated package is invalid: ${JSON.stringify(v.issues)}`);
@@ -327,6 +348,36 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
       return ok({ path: resolve(writeTo), package: pkg }, `Edit as needed, then renda_render {packagePath:"${writeTo}"}.`);
     }
     return ok(pkg, "Adjust fields if needed, then renda_render {package}. Relative paths resolve against packageDir (or the working directory).");
+  }));
+
+  server.registerTool("renda_flatten_package", {
+    title: "Flatten a layered package",
+    description: "Resolve a package's `extends` layers (applied in order, later wins; objects merge, arrays replace, null removes) and `scene.include[].package` references (another package's scene placed by a transform, its asset ids namespaced) into one flat package. Layers can be paths"
+      + (local ? " (relative to the file that names them)" : "") + ", https:// URLs or asset:// URIs. With provenance, also says which layer set each field — use it to debug \"why is this value here?\".",
+    inputSchema: {
+      package: PackageArg.optional(),
+      ...(local ? {
+        packagePath: z.string().optional().describe("Path to a .renda.json file."),
+        packageDir: z.string().optional().describe("Directory relative layer paths in `package` resolve against (default cwd)."),
+      } : {}),
+      provenance: z.boolean().optional().describe("Include field → layer provenance (default true)."),
+    },
+    annotations: { readOnlyHint: true, openWorldHint: true },
+  }, safe(async (args: { package?: Record<string, unknown>; packagePath?: string; packageDir?: string; provenance?: boolean }) => {
+    let r: FlattenResult;
+    if (args.packagePath && local) {
+      const { flattenFile } = await import("@rendahq/spec/node");
+      r = await flattenFile(resolve(/* turbopackIgnore: true */ args.packagePath));
+    } else if (args.package) {
+      r = await flatten(args.package, args.packageDir ? resolve(args.packageDir) : process.cwd());
+    } else {
+      return fail("Provide package" + (local ? " or packagePath" : "") + ".");
+    }
+    const v = validatePackage(r.package);
+    const body: Record<string, unknown> = { package: r.package, layers: r.layers };
+    if (args.provenance !== false) body.provenance = r.provenance;
+    if (!v.valid) body.issues = v.issues;
+    return ok(body, v.valid ? "Render it with renda_render {package} (or pass the original file; it's flattened automatically)." : "The composed package has issues; fix them in the layer named by provenance.");
   }));
 
   // ---------- files ----------
@@ -346,13 +397,16 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
   const resolvePackage = async (args: { package?: Record<string, unknown>; file?: string; packagePath?: string; packageDir?: string; options?: StarterOpts }) => {
     let pkg: any;
     let baseDir = args.packageDir ? resolve(args.packageDir) : process.cwd();
+    let label: string | undefined;
     if (args.package) pkg = args.package;
     else if (args.packagePath) {
       if (!local) throw new Error("packagePath requires local mode; pass the package object instead.");
-      pkg = JSON.parse(await readFile(resolve(/* turbopackIgnore: true */ args.packagePath), "utf8"));
+      label = resolve(/* turbopackIgnore: true */ args.packagePath);
+      pkg = JSON.parse(await readFile(label, "utf8"));
       baseDir = args.packageDir ? baseDir : packageDir(args.packagePath);
     } else if (args.file) pkg = starterPackage(args.file, args.options ?? {});
     else throw new Error("Provide one of: package, packagePath, or file.");
+    pkg = (await flatten(pkg, baseDir, label)).package;
     const v = validatePackage(pkg);
     if (!v.valid) return { issues: v.issues } as const;
     let uploaded: unknown[] = [];

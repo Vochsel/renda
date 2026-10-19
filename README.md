@@ -3,8 +3,9 @@
 **Open-source, agent-first cloud rendering for 3D files and scenes.**
 
 Hand Renda a `.blend`, `.usdz`, `.glb`, `.fbx`, `.obj`, `.stl`, `.ply`, `.dae`, `.3mf`, `.abc`,
-a three.js JSON scene or a Gaussian splat capture (`.ply`, `.splat`, `.spz`) — on its own or with
-meshes placed inside it — and get back a still, a turntable, or a video. Renders run in
+a CAD part (`.step`, `.iges`), a three.js JSON scene or a Gaussian splat capture (`.ply`, `.splat`,
+`.spz`) — on its own, with meshes placed inside it, or composed from layered packages
+(`extends`, package references) — and get back a still, a turntable, or a video. Renders run in
 the cloud on [Modal](https://modal.com) and are billed per second of render time
 (shown in render-minutes). Or run the same CLI locally, for free.
 

@@ -6,6 +6,7 @@ import turntable from "../../../../spec/examples/turntable.renda.json";
 import threejs from "../../../../spec/examples/threejs-scene.renda.json";
 import splatRoom from "../../../../spec/examples/splat-room-mixed.renda.json";
 import stl from "../../../../spec/examples/stl-print-preview.renda.json";
+import cad from "../../../../spec/examples/cad-step.renda.json";
 import { SiteHeader } from "@/components/site-header";
 import { installSnippets } from "@/lib/install-snippets";
 import { Code } from "@/components/code";
@@ -14,7 +15,21 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 
 export const metadata: Metadata = { title: "Docs" };
 
-const EXAMPLES = { minimal, "hero still": hero, turntable, "three.js": threejs, "stl preview": stl, "splats + mesh": splatRoom };
+const EXAMPLES = { minimal, "hero still": hero, turntable, "three.js": threejs, "stl preview": stl, "STEP assembly": cad, "splats + mesh": splatRoom };
+
+const LAYERED = `// shot.renda.json — layers underneath (later wins), then this file on top
+{
+  "extends": ["https://cdn.example.com/studio.renda.json", "./brand.renda.json"],
+  "scene": {
+    "root": "./product.step",
+    "include": [
+      { "package": "./props/chair.renda.json", "as": "chair",
+        "transform": { "translate": [1, 0, -0.5], "rotateDeg": [0, 90, 0] } }
+    ]
+  },
+  "environment": { "hdri": null },          // null removes a field — here it means "no HDRI"
+  "render": { "resolution": [3840, 2160] }
+}`;
 
 type JsonSchema = { type?: string | string[]; description?: string; properties?: Record<string, JsonSchema>; enum?: unknown[]; anyOf?: JsonSchema[]; oneOf?: JsonSchema[]; default?: unknown; $ref?: string; items?: JsonSchema; required?: string[] };
 
@@ -76,6 +91,22 @@ export default function DocsPage() {
             <TabsContent key={k} value={k}><Code>{JSON.stringify(v, null, 2)}</Code></TabsContent>
           ))}
         </Tabs>
+
+        <h2 className="mt-10 text-lg font-semibold">Composing packages</h2>
+        <p className="text-muted-foreground mt-2 max-w-3xl text-sm">
+          <span className="font-mono">extends</span> layers other packages underneath this one, in order: objects merge, arrays
+          (<span className="font-mono">lights</span>, <span className="font-mono">passes</span>, <span className="font-mono">include</span>) replace,
+          and <span className="font-mono">null</span> removes a field. <span className="font-mono">scene.include[].package</span> places another
+          package&apos;s scene — its assets (namespaced <span className="font-mono">chair.&lt;id&gt;</span>), lights, material overrides, unit scale
+          and up axis. Refs are paths (relative to the file that wrote them), <span className="font-mono">https://</span> URLs or{" "}
+          <span className="font-mono">asset://</span> uploads.
+        </p>
+        <Code className="mt-3">{LAYERED}</Code>
+        <p className="text-muted-foreground mt-2 text-sm">
+          <span className="font-mono">renda flatten shot.renda.json --provenance</span> prints the composed package and which layer set each field.
+          Render, estimate and validate flatten automatically; the API flattens <span className="font-mono">https://</span> and your{" "}
+          <span className="font-mono">asset://</span> layers (<span className="font-mono">POST /api/v1/packages/flatten</span>).
+        </p>
 
         <h2 className="mt-10 text-lg font-semibold">Uploading and rendering</h2>
         <Code className="mt-3">{`# 1. register each file by sha256; PUT bytes if the server doesn't have them

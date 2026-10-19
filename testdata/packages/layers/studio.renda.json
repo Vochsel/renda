@@ -1,0 +1,9 @@
+{
+  "$schema": "https://renda.dev/schema/v1.json",
+  "name": "shared studio layer (no scene)",
+  "environment": { "hdri": "studio", "intensity": 1.1, "background": "#efeee9" },
+  "lights": [{ "type": "area", "position": [2.5, 3, 2.5], "target": [0, 0.3, 0], "size": [2, 2], "intensity": 60 }],
+  "camera": { "mode": "auto", "elevationDeg": 22, "azimuthDeg": 32, "fovDeg": 32 },
+  "render": { "engine": "blender-cycles", "resolution": [1920, 1080], "quality": "standard" },
+  "output": { "format": "webp" }
+}

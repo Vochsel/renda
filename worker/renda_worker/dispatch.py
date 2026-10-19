@@ -134,6 +134,6 @@ def scene_formats(asset_paths: dict[str, Path] | Any) -> list[str]:
     from .assets import FORMAT_EXT
 
     ext_to_fmt = {v: k for k, v in FORMAT_EXT.items()}
-    ext_to_fmt.update({".usd": "usd", ".usda": "usd", ".usdc": "usd", ".gltf": "gltf"})
+    ext_to_fmt.update({".usd": "usd", ".usda": "usd", ".usdc": "usd", ".gltf": "gltf", ".stp": "step", ".igs": "iges"})
     paths = asset_paths.values() if hasattr(asset_paths, "values") else asset_paths
     return sorted({ext_to_fmt[Path(p).suffix.lower()] for p in paths if Path(p).suffix.lower() in ext_to_fmt})

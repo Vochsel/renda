@@ -3,6 +3,7 @@ import { api, readJson } from "@/lib/http";
 import { authenticate } from "@/lib/auth";
 import { parseJobPackage } from "@/lib/packages";
 import { estimateFor } from "@/lib/jobs";
+import { flattenForOrg } from "@/lib/layers";
 
 const Body = z.object({
   package: z.unknown(),
@@ -11,8 +12,9 @@ const Body = z.object({
 });
 
 export const POST = api(async (req) => {
-  await authenticate(req);
+  const auth = await authenticate(req);
   const b = Body.parse(await readJson(req));
-  const parsed = parseJobPackage(b.kind, b.package);
+  const pkg = b.kind === "scene" ? (await flattenForOrg(auth.org.id, b.package)).package : b.package;
+  const parsed = parseJobPackage(b.kind, pkg);
   return Response.json(estimateFor(parsed, b.priority));
 });

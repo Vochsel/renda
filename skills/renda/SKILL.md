@@ -1,6 +1,6 @@
 ---
 name: renda
-description: Render 3D files and scenes in the cloud with Renda: .blend, USD/USDZ, glTF/GLB, three.js JSON, FBX, OBJ, STL, PLY, DAE, 3MF, Alembic, and Gaussian splats (.ply/.splat/.spz captures, alone or mixed with meshes). Produces images (png/jpg/webp/exr) or video (mp4/webm/gif/mov) with Blender Cycles/Eevee, Mitsuba, three.js, or gsplat. Use this skill whenever the user wants to render, preview, visualise, thumbnail, screenshot or "see" a 3D model or scene, make product shots or turntables, batch-render assets, or mentions Renda, even if they don't say "render" (e.g. "what does this .glb look like?", "make a hero image of my STL").
+description: Render 3D files and scenes in the cloud with Renda: .blend, USD/USDZ, glTF/GLB, three.js JSON, FBX, OBJ, STL, PLY, DAE, 3MF, Alembic, CAD STEP/IGES (.step/.stp/.iges/.igs), and Gaussian splats (.ply/.splat/.spz captures, alone or mixed with meshes). Produces images (png/jpg/webp/exr) or video (mp4/webm/gif/mov) with Blender Cycles/Eevee, Mitsuba, three.js, or gsplat. Use this skill whenever the user wants to render, preview, visualise, thumbnail, screenshot or "see" a 3D model or scene, make product shots or turntables, batch-render assets, or mentions Renda, even if they don't say "render" (e.g. "what does this .glb look like?", "make a hero image of my STL", "render this STEP part").
 ---
 
 # Renda: cloud rendering for agents

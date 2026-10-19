@@ -92,8 +92,45 @@ Rules:
 - A bare scene file submitted without a package is wrapped in the default package.
 - Fields an engine can't honour produce a **warning** in the job, never a silent drop.
 
+### Composing packages (layers + references)
+
+A package can be built from others, USD-style but small:
+
+```jsonc
+{
+  "extends": ["https://cdn.example.com/studio.renda.json", "./brand.renda.json"],
+  "scene": {
+    "root": "./product.glb",
+    "include": [{ "package": "./props/chair.renda.json", "as": "chair", "transform": { "translate": [1, 0, 0] } }]
+  },
+  "render": { "resolution": [3840, 2160] }
+}
+```
+
+- **`extends`** layers packages underneath, in order; later layers win and the file itself wins over all.
+  Objects deep-merge, arrays (`lights`, `passes`, `scene.include`) replace, `null` removes a field —
+  except where `null` is a value (`environment.hdri`, `render.samples`). Objects whose kind differs
+  (`camera.mode`) replace rather than mix. A layer's `null` removes from the layers *it* extends.
+- **`scene.include[].package`** places another package's scene: its assets (ids namespaced `<as>.<id>`),
+  root + includes, lights, scoped `materialOverrides`, `unitScale` and `upAxis`. Its camera, environment,
+  render and output are ignored. Flattening emits plain includes with `transform` (placement in the
+  root's axes), `upAxis` (converted to the root's up) and `localTransform` (anything in the referenced
+  package's own axes), so `world = transform · C(upAxis → root up) · localTransform · content`.
+- **Refs** are paths, `https://` URLs or `asset://` URIs. Relative paths — in `extends`, `package`, asset
+  uris, `scene.root`, includes, HDRIs — resolve against the file that wrote them (a directory or a URL).
+  A ref that's an asset id in the same layer stays an id; a ref that looks like a file path is a path.
+- **Limits:** cycles are errors, depth ≤ 8, ≤ 64 layers, ≤ 1 MB per layer. Errors name the layer and field.
+- **Where:** `flattenPackage` in `@rendahq/spec` (canonical) and `renda.layers` (Python port) share
+  `spec/fixtures/layers`. CLIs and the local MCP flatten before upload (local layers + SSRF-safe https);
+  the API flattens anything still layered with https (public addresses only, re-validated redirects,
+  size + time caps) and the org's own `asset://` uploads, stores the flat package plus provenance on the
+  job (`jobs.source`), and the worker only ever sees flat packages. `renda flatten pkg --provenance`,
+  MCP `renda_flatten_package` and `POST /api/v1/packages/flatten` show the composed result.
+
 The TS types/Zod live in `spec/src/index.ts`; the Python mirror (pydantic) lives in
 `core/renda/spec.py`. Shared fixtures in `spec/examples/` are validated by both test suites.
+`schema/renda.v1.json` is the *authoring* schema (accepts `extends`, package references and layers
+without a `scene`); `parsePackage` / `load_package(dict)` accept only flat packages.
 
 ## 2. Scene IR + conversion layer (Hydra-lite)
 
@@ -119,6 +156,7 @@ without Hydra's weight. In `core/renda/ir/`:
   | 3MF | `3mf` | trimesh | |
   | FBX | `fbx` | Blender headless import → extract | no good pure-python FBX reader |
   | Alembic | `abc` | Blender headless import → extract | animated caches |
+  | CAD | `step` (`.step/.stp`, ISO-10303-21 header), `iges` (`.iges/.igs`, column-73 section letters) | `ir/loaders/cad.py` via cascadio (OpenCASCADE → glTF), extra `renda[cad]` | STEP → metres with part/assembly colours; IGES → metres (OpenCASCADE always emits mm), no colours. Z-up. Tessellation: chord error 0.05% of bbox diagonal, 0.3 rad (`scene.tessellation` overrides, metres/radians), cached by content hash + tolerances. Planner treats CAD like STL product shots |
   | Gaussian splats | `splat` (3DGS `.ply` — detected by `f_dc_0/scale_0/rot_0/opacity` — `.splat`, `.spz` v2/v3; `.ksplat` threejs-only) | `ir/loaders/splat.py` | `Splats` primitive: means, log scales, quats, logit opacities, SH degree 0–3; robust (floater-free) bounds |
 
 - **Splats** (`ir/splats.py`) live next to meshes on the Stage. `baked()` applies the object transform to

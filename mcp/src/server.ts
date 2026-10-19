@@ -4,7 +4,7 @@ import { registerRendaTools, type RegisterOptions } from "./tools.js";
 
 export const SERVER_INFO = { name: "renda", version: "0.1.0" };
 
-const INSTRUCTIONS = `Renda renders 3D files (.blend, .usd/.usdz, .glb/.gltf, three.js JSON, .fbx, .obj, .stl, .ply, .dae, .3mf, .abc, Gaussian splats .ply/.splat/.spz) and HyperFrames videos in the cloud, billed per render-second.
+const INSTRUCTIONS = `Renda renders 3D files (.blend, .usd/.usdz, .glb/.gltf, three.js JSON, .fbx, .obj, .stl, .ply, .dae, .3mf, .abc, CAD .step/.iges, Gaussian splats .ply/.splat/.spz) and HyperFrames videos in the cloud, billed per render-second. Packages can layer each other (extends) and place other packages' scenes (scene.include[].package); renda_flatten_package shows the composed result.
 No account? Fastest: renda_trial (no signup, ~5 free minutes) and give the human the claim link. Or renda_signup {email} → ask the human for the 6-digit emailed code → renda_verify.
 Workflow: renda_render {file} gives a cheap draft with a preview image; iterate on the package (renda://docs/package), renda_estimate before final/video renders, then render final.
 If a tool returns payment_required, call renda_billing_link and give the URL to the human.`;
