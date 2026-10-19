@@ -86,6 +86,11 @@ def _err_payload(e: Exception) -> dict:
         issues = [{"path": ".".join(str(p) for p in err["loc"]), "message": err["msg"]} for err in e.errors()]
         return {"code": "invalid_package", "message": f"{len(issues)} problem(s) in package", "issues": issues,
                 "hint": "fix the listed fields; schema: https://renda.dev/schema/v1.json"}
+    from .layers import LayerError
+
+    if isinstance(e, LayerError):
+        return {"code": e.code, "message": str(e), "layer": e.layer, **({"field": e.field} if e.field else {}),
+                "hint": "fix that field in that layer; `renda flatten <pkg> --provenance` shows how layers combine"}
     if isinstance(e, UnknownFormat):
         return {"code": "unknown_format", "message": str(e), "hint": "run `renda info <file>` or set assets.<id>.format"}
     if isinstance(e, AssetError):
@@ -152,15 +157,19 @@ def emit(as_json: bool, data: Any, human: Callable[[], None] | None = None, next
 
 
 def load_input(path: Path) -> tuple[dict, Path]:
-    """A .renda.json package, or a bare scene file wrapped in the default package. Returns (raw dict, base dir)."""
+    """A .renda.json package (flattened: `extends` and package references resolved), or a bare scene
+    file wrapped in the default package. Returns (raw dict, base dir)."""
     path = Path(path)
     if not path.exists():
         raise CliError("not_found", f"{path} does not exist")
     if path.suffix.lower() == ".json":
         data = json.loads(path.read_text())
-        is_pkg = path.name.lower().endswith(".renda.json") or (isinstance(data, dict) and "scene" in data and "metadata" not in data)
+        is_pkg = path.name.lower().endswith(".renda.json") or (
+            isinstance(data, dict) and ("scene" in data or "extends" in data) and "metadata" not in data)
         if is_pkg:
-            return data, path.parent.resolve()
+            from .layers import flatten_file
+
+            return flatten_file(path).package, path.parent.resolve()
     return {"assets": {"scene": {"uri": path.name}}, "scene": {"root": "scene"}}, path.parent.resolve()
 
 
@@ -473,6 +482,38 @@ def validate(package: Annotated[Path, typer.Argument(help=".renda.json file")], 
             warnings.append(f"asset {key!r}: {p} not found")
     emit(json_out, {"valid": True, "warnings": warnings, "package": pkg.dump()},
          lambda: (console.print("[green]valid[/]"), [console.print(f"[yellow]warning[/]: {w}") for w in warnings]))
+
+
+@command
+def flatten(
+    package: Annotated[Path, typer.Argument(help=".renda.json that uses `extends` / package references")],
+    provenance: Annotated[bool, typer.Option("--provenance", help="Also show which layer set each field")] = False,
+    output: Annotated[Optional[Path], typer.Option("-o", help="Write the flat package here")] = None,
+    json_out: JsonOpt = False,
+):
+    """Resolve layers (`extends`) and package references into one flat package."""
+    from .layers import flatten_file
+    from .spec import load_package
+
+    r = flatten_file(package)
+    load_package(r.package)  # validate the composed result
+    data: dict[str, Any] = {"package": r.package, "layers": r.layers}
+    if provenance:
+        data["provenance"] = r.provenance
+    if output:
+        output.write_text(json.dumps(r.package, indent=2) + "\n")
+        data["path"] = str(output)
+
+    def human() -> None:
+        out.print_json(data=r.package)
+        if provenance:
+            width = max((len(k) for k in r.provenance), default=0)
+            for k, v in r.provenance.items():
+                console.print(f"[dim]{k.ljust(width)}  ← {v}[/]")
+        if output:
+            console.print(f"[green]wrote[/] {output}")
+
+    emit(json_out, data, human, next=[f"renda render {output or package}"])
 
 
 @command

@@ -205,3 +205,39 @@ describe("signup / verify", () => {
     expect(saved.claimUrl).toBeUndefined();
   });
 });
+
+describe("layers + CAD", () => {
+  it("flatten shows provenance; render submits the flat package with every layer's files uploaded", async () => {
+    const t = await setup(({ method, url, body }) => {
+      if (url.endsWith("/uploads")) return { json: { assetUri: `asset://${body.sha256}`, exists: true } };
+      if (method === "POST" && url.endsWith("/jobs")) return { json: { id: "job_1", status: "queued", progress: 0, outputs: [], warnings: [] } };
+    }, { creds: { apiKey: "rnd_live_xxxxxxxxxxxxxxxxxxxxxxxx" } });
+    await mkdir(join(t.dir, "layers"));
+    await writeFile(join(t.dir, "layers", "studio.renda.json"), JSON.stringify({ assets: { sky: { uri: "./sky.hdr" } }, environment: { hdri: "sky" }, render: { quality: "final" } }));
+    await writeFile(join(t.dir, "layers", "sky.hdr"), "#?RADIANCE");
+    await writeFile(join(t.dir, "part.stp"), "ISO-10303-21;");
+    const shot = join(t.dir, "shot.renda.json");
+    await writeFile(shot, JSON.stringify({ extends: "./layers/studio.renda.json", scene: { root: "./part.stp" } }));
+    expect(await run(["flatten", shot, "--provenance"], t.deps)).toBe(0);
+    const flat = t.json();
+    expect(flat.provenance["render.quality"]).toBe(join(t.dir, "layers", "studio.renda.json"));
+    expect(flat.package.assets.sky.uri).toBe(join(t.dir, "layers", "sky.hdr"));
+    t.out.length = 0;
+    expect(await run(["render", shot, "--no-wait"], t.deps)).toBe(0);
+    const sent = t.calls.find((c) => c.method === "POST" && c.url.endsWith("/jobs"))!.body.package;
+    expect(sent.extends).toBeUndefined();
+    expect(sent.scene.root).toMatch(/^asset:\/\/[0-9a-f]{64}$/);
+    expect(t.calls.filter((c) => c.url.endsWith("/uploads")).map((c) => c.body.filename).sort()).toEqual(["part.stp", "sky.hdr"]);
+  });
+
+  it("layer errors name the layer and field", async () => {
+    const t = await setup(() => undefined);
+    const shot = join(t.dir, "shot.renda.json");
+    await writeFile(shot, JSON.stringify({ extends: ["./missing.renda.json"], scene: { root: "./a.stl" } }));
+    expect(await run(["validate", shot], t.deps)).toBe(1);
+    const e = t.json();
+    expect(e.reason).toBe("layer_fetch");
+    expect(e.field).toBe("extends[0]");
+    expect(e.layer).toBe(shot);
+  });
+});

@@ -1,0 +1,41 @@
+{
+  "package": {
+    "render": {
+      "quality": "final",
+      "resolution": [
+        1600,
+        1000
+      ],
+      "engine": "mitsuba"
+    },
+    "output": {
+      "format": "webp"
+    },
+    "assets": {
+      "sky": {
+        "uri": "https://example.test/layers/hdri/studio.hdr"
+      }
+    },
+    "environment": {
+      "hdri": "sky",
+      "rotationDeg": 45
+    },
+    "scene": {
+      "root": "https://example.test/models/kettle.glb"
+    }
+  },
+  "provenance": {
+    "render.quality": "https://example.test/base/common.renda.json",
+    "render.resolution": "https://example.test/base/common.renda.json",
+    "output.format": "https://example.test/base/common.renda.json",
+    "assets.sky.uri": "https://example.test/layers/studio.renda.json",
+    "environment.hdri": "https://example.test/layers/studio.renda.json",
+    "environment.rotationDeg": "https://example.test/layers/studio.renda.json",
+    "scene.root": "<root>",
+    "render.engine": "<root>"
+  },
+  "layers": [
+    "https://example.test/layers/studio.renda.json",
+    "https://example.test/base/common.renda.json"
+  ]
+}

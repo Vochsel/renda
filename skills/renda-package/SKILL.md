@@ -1,6 +1,6 @@
 ---
 name: renda-package
-description: Author and debug Renda packages (*.renda.json), the typed JSON that tells Renda how to render a scene: camera, HDRI/lighting, material overrides, resolution, quality, engine, passes, animation and output format. Includes per-format quirks (.blend, USD/USDZ, glTF/GLB, three.js JSON, FBX, OBJ, STL, PLY, Alembic, Gaussian splats .ply/.splat/.spz) and an engine capability matrix. Use whenever you write or edit a .renda.json, need to fix framing/orientation/lighting/materials of a Renda render, choose an engine, or render a format with special needs (STL with no materials, three.js scenes, Gaussian splat captures, scene cameras).
+description: Author and debug Renda packages (*.renda.json), the typed JSON that tells Renda how to render a scene: camera, HDRI/lighting, material overrides, resolution, quality, engine, passes, animation and output format, plus composing scenes from layered packages (extends, package references). Includes per-format quirks (.blend, USD/USDZ, glTF/GLB, three.js JSON, FBX, OBJ, STL, PLY, Alembic, CAD STEP/IGES, Gaussian splats .ply/.splat/.spz) and an engine capability matrix. Use whenever you write or edit a .renda.json, need to fix framing/orientation/lighting/materials of a Renda render, reuse a studio setup across shots, place one package's scene inside another, choose an engine, or render a format with special needs (STL/STEP with no materials or mm units, three.js scenes, Gaussian splat captures, scene cameras).
 ---
 
 # Authoring Renda packages
@@ -94,6 +94,13 @@ silent drop. Read them.
   small spheres in Blender engines.
 - **Alembic (.abc)**: imported via Blender; set `animation.frames` to the cache range.
 - **DAE / 3MF**: loaded via the IR loaders; simple materials only.
+- **STEP (.step/.stp) and IGES (.iges/.igs)**: tessellated with OpenCASCADE. Units are converted to
+  metres automatically (don't add `unitScale: 0.001` for a mm file; `unitScale` applies on top), Z up,
+  STEP part/assembly colours become materials. Treat like a product shot (studio HDRI, auto camera).
+  Faceting visible on curves? Tighten `scene.tessellation`: `{"linearDeflection": 0.00005, "angularDeflection": 0.15}`
+  (metres, radians; default = 0.05% of the bounding-box diagonal and 0.3 rad). Big assemblies: loosen it
+  for drafts. IGES carries no colours here — add `materialOverrides`. Local renders need
+  `uvx --with 'renda[cad]' renda …`; the cloud always has it.
 - **Gaussian splats** (3DGS `.ply`, antimatter15 `.splat`, Niantic `.spz`; `.ksplat` with
   `engine: "threejs"` + a lookat camera only): `auto` renders splat-only scenes with `gsplat` (CUDA,
   cheapest). Put a mesh *inside* a capture with `scene.include` (root = the splat, include = the
@@ -134,3 +141,35 @@ Add props with `scene.include`:
 ```json
 "scene": { "root": "car", "include": [{ "asset": "ground", "transform": { "translate": [0,0,-0.01], "scale": 10 } }] }
 ```
+
+An include can carry its own `materialOverrides` (only that file) and `upAxis` (its axes, converted to the
+root's — e.g. a Z-up STL dropped into a Y-up glTF scene).
+
+## Composing scenes (layers)
+
+Split reusable setup from per-shot files instead of copying JSON around:
+
+```jsonc
+// studio.renda.json — shared lighting/output (no scene needed)
+{ "environment": { "hdri": "studio", "background": "#f2f2f0" },
+  "lights": [{ "type": "area", "position": [2, 3, 2], "target": [0, 0, 0], "intensity": 80 }],
+  "render": { "engine": "blender-cycles", "quality": "final" }, "output": { "format": "webp" } }
+
+// shot.renda.json
+{ "extends": "./studio.renda.json",
+  "scene": { "root": "./product.step",
+             "include": [{ "package": "./props/stand.renda.json", "as": "stand", "transform": { "translate": [0, -0.2, 0] } }] },
+  "render": { "resolution": [3840, 2160] } }
+```
+
+- `extends` (string or list): applied in order, later wins, this file wins over all. Objects merge;
+  **arrays replace** (to add a light you must restate the list); `null` removes a field
+  (`environment.hdri: null` = no HDRI). Switching `camera.mode` replaces the whole camera.
+- `scene.include[].package`: places another package's *scene* — its assets (renamed `stand.<id>`),
+  its includes, lights (moved with it), scoped material overrides, `unitScale` and `upAxis`. Its
+  camera/environment/render/output are ignored. `as` sets the namespace (default `ref<i>`).
+- Paths resolve against the file that wrote them; layers can be `https://` URLs (relative paths inside
+  resolve against that URL) or `asset://` uploads. Cycles, >8 levels, >64 layers or >1 MB layers fail
+  with the layer and field named.
+- Debug with `renda flatten shot.renda.json --provenance` (or MCP `renda_flatten_package`): it prints
+  the composed package and which file set each field. Render/estimate/validate flatten automatically.

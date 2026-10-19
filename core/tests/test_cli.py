@@ -172,3 +172,25 @@ def test_bake_rejects_unknown_mode(tmp_path):
     scene = Path(__file__).parents[2] / "testdata" / "scenes" / "scene.obj"
     r = CliRunner().invoke(app, ["bake", str(scene), "--mode", "shiny", "--json"])
     assert r.exit_code != 0 and "unlit" in r.output
+
+
+def test_flatten_and_layered_validate(tmp_path):
+    (tmp_path / "base.renda.json").write_text(json.dumps({"render": {"quality": "final"}, "output": {"format": "webp"}}))
+    shot = tmp_path / "shot.renda.json"
+    shot.write_text(json.dumps({"extends": "./base.renda.json", "scene": {"root": "./a.stl"}, "render": {"resolution": [640, 480]}}))
+    code, data = run("flatten", shot, "--provenance")
+    assert code == 0
+    assert data["package"]["render"] == {"quality": "final", "resolution": [640, 480]}
+    assert data["provenance"]["render.quality"].endswith("base.renda.json")
+    assert data["provenance"]["render.resolution"].endswith("shot.renda.json")
+    code, data = run("validate", shot)
+    assert code == 0 and data["package"]["output"]["format"] == "webp"
+
+
+def test_layer_errors_name_the_layer_and_field(tmp_path):
+    shot = tmp_path / "shot.renda.json"
+    shot.write_text(json.dumps({"extends": ["./missing.renda.json"], "scene": {"root": "./a.stl"}}))
+    code, data = run("flatten", shot)
+    assert code == 1
+    assert data["reason"] == "layer_fetch" and data["error"]["field"] == "extends[0]"
+    assert data["error"]["layer"].endswith("shot.renda.json")

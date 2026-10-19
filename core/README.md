@@ -36,6 +36,7 @@ commands are in `npx @rendahq/cli …`.
 | three.js JSON | `.json` (`metadata.type: "Object"`) | pure Python: BufferGeometry (indexed, groups, interleaved), primitives, InstancedMesh, Standard/Physical/Basic/Lambert/Phong materials, data-URI textures, cameras, lights |
 | OBJ / STL / PLY / COLLADA / 3MF | `.obj .stl .ply .dae .3mf` | trimesh. STL is welded and auto-smoothed at 30°, so CAD parts stay crisp |
 | FBX / Alembic | `.fbx .abc` | Blender headless import → IR |
+| CAD | `.step .stp .iges .igs` | OpenCASCADE via `cascadio` (extra `renda[cad]`): metres, Z-up, STEP colours, `scene.tessellation` density (default 0.05% of the bbox diagonal), cached |
 | Gaussian splats | `.ply` (3DGS) `.splat` `.spz` (`.ksplat`: threejs only) | pure Python (`ir/loaders/splat.py`): SH degree 0–3; `.ply`/`.splat` are Y-down (`upAxis: "-Y"`), `.spz` Y-up |
 | Renda IR | `.rir/` | directory: `stage.json` + `meshes/*.npz` + `splats/*.npz` + `textures/` |
 
@@ -78,6 +79,11 @@ studio HDRI.
 
 Built-in HDRIs (`studio`, `sunset`, `night`, `white`) are generated procedurally on first use, so the repo
 ships no binaries.
+
+Layered packages (`extends`, `scene.include[].package`) are flattened by `renda.layers` (a port of
+`flattenPackage` in `../spec`, checked against the same fixtures). `load_package(path)` and every CLI command
+flatten automatically; `renda flatten pkg.renda.json --provenance` shows the result and which file set each
+field. https layers are fetched through `renda.netsafe` (public addresses only, no redirects to private ones).
 
 ## Python API (used by the cloud worker)
 

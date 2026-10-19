@@ -1,0 +1,5 @@
+{
+  "extends": "https://example.test/layers/studio.renda.json",
+  "scene": { "root": "https://example.test/models/kettle.glb" },
+  "render": { "engine": "mitsuba" }
+}

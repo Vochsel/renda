@@ -1,0 +1,9 @@
+{
+  "scene": {
+    "textureOverrides": [
+      { "match": { "material": "/label/i" }, "source": "./logo.png" },
+      { "match": { "object": "Screen*", "slot": "emission" }, "source": "https://cdn.example.test/promo.mp4" }
+    ]
+  },
+  "output": { "format": "glb", "bake": { "mode": "ao", "size": 1024 } }
+}

@@ -218,6 +218,12 @@ export class RendaClient {
   estimate(pkg: RendaPackageInput | HyperframesPackage, kind: JobKind = "scene") {
     return this.request<Estimate>("POST", "/estimate", { package: pkg, kind });
   }
+
+  /** Resolve `extends` / package references server-side (https and asset:// layers). */
+  flattenPackage(pkg: Record<string, unknown>) {
+    return this.request<{ package: Record<string, unknown>; provenance: Record<string, string>; layers: string[] }>(
+      "POST", "/packages/flatten", { package: pkg });
+  }
   createJob(input: { package: RendaPackageInput | HyperframesPackage; kind?: JobKind; priority?: Priority; idempotencyKey?: string }) {
     return this.request<Job>("POST", "/jobs", input);
   }

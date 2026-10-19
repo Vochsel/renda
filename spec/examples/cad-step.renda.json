@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "name": "bracket assembly",
+  "assets": { "part": { "uri": "./bracket_assembly.stp" } },
+  "scene": { "root": "part", "tessellation": { "angularDeflection": 0.2 } },
+  "camera": { "mode": "auto", "elevationDeg": 25, "azimuthDeg": 30, "fovDeg": 30 },
+  "environment": { "hdri": "studio", "background": "#f2f2f0" },
+  "render": { "engine": "auto", "resolution": [1600, 1000], "quality": "standard" },
+  "output": { "format": "webp" }
+}

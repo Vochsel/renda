@@ -1,0 +1,49 @@
+{
+  "package": {
+    "scene": {
+      "textureOverrides": [
+        {
+          "match": {
+            "material": "/label/i"
+          },
+          "source": "${DIR}/brand/logo.png"
+        },
+        {
+          "match": {
+            "object": "Screen*",
+            "slot": "emission"
+          },
+          "source": "https://cdn.example.test/promo.mp4"
+        }
+      ],
+      "root": "${DIR}/bottle.glb"
+    },
+    "output": {
+      "format": "glb",
+      "bake": {
+        "mode": "ao",
+        "size": 1024
+      }
+    },
+    "assets": {
+      "decal": {
+        "uri": "${DIR}/decal.svg"
+      }
+    },
+    "render": {
+      "engine": "blender-cycles"
+    }
+  },
+  "provenance": {
+    "scene.textureOverrides": "${DIR}/brand/brand.renda.json",
+    "output.format": "${DIR}/brand/brand.renda.json",
+    "output.bake.mode": "${DIR}/brand/brand.renda.json",
+    "output.bake.size": "${DIR}/brand/brand.renda.json",
+    "assets.decal.uri": "<root>",
+    "scene.root": "<root>",
+    "render.engine": "<root>"
+  },
+  "layers": [
+    "${DIR}/brand/brand.renda.json"
+  ]
+}

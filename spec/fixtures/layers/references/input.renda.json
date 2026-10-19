@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "assets": { "room": { "uri": "./room.glb" } },
+  "scene": {
+    "root": "room",
+    "include": [
+      { "package": "./props/chair.renda.json", "as": "chair", "transform": { "translate": [1, 0, -0.5], "rotateDeg": [0, 90, 0] },
+        "materialOverrides": { "Fabric": { "baseColor": "#3355aa" } } },
+      { "package": "./props/chair.renda.json", "transform": { "translate": [-1, 0, -0.5] } },
+      { "asset": "./lamp.stl", "transform": { "translate": [0, 0, 1] } }
+    ]
+  },
+  "lights": [{ "type": "sun", "direction": [0, -1, 0] }]
+}

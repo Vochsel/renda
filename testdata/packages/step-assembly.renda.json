@@ -1,0 +1,10 @@
+{
+  "$schema": "https://renda.dev/schema/v1.json",
+  "version": 1,
+  "name": "STEP assembly (mm, coloured parts)",
+  "scene": { "root": "../scenes/cad/bracket_assembly.stp" },
+  "camera": { "mode": "auto", "elevationDeg": 28, "azimuthDeg": 35, "fovDeg": 30 },
+  "environment": { "hdri": "studio", "background": "#f2f2f0" },
+  "render": { "engine": "auto", "resolution": [1280, 800], "quality": "standard" },
+  "output": { "format": "webp" }
+}

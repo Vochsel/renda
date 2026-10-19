@@ -1,0 +1,1 @@
+{ "scene": { "root": "./a.glb", "include": [{ "package": "./cycle-b.renda.json", "as": "b" }] } }

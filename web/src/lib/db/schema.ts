@@ -113,6 +113,8 @@ export const jobs = pgTable("jobs", {
   modalCallId: text("modal_call_id"),
   idempotencyKey: text("idempotency_key"),
   estimate: jsonb("estimate"),
+  /** For layered submissions: the package as sent plus which layer set each field of `package`. */
+  source: jsonb("source").$type<{ submitted: unknown; layers: string[]; provenance: Record<string, string> }>(),
   createdAt: createdAt(),
   startedAt: timestamp("started_at", { withTimezone: true }),
   finishedAt: timestamp("finished_at", { withTimezone: true }),

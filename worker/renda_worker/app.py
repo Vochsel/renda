@@ -19,7 +19,7 @@ from fastapi import Header
 from renda_worker import hardware as hw
 
 # Override to deploy a throwaway copy for testing (e.g. RENDA_APP_NAME=renda-worker-d ./deploy.sh) without
-# touching production; volumes/secrets are shared.
+# touching production. Volumes, dicts and secrets are shared (all content-addressed or keyed by job id).
 APP_NAME = os.environ.get("RENDA_APP_NAME", "renda-worker")
 # production URLs stay …--renda-submit / …--renda-cancel; test apps get …--renda-worker-d-submit etc.
 _LABEL_PREFIX = "renda-" if APP_NAME == "renda-worker" else f"{APP_NAME}-"
@@ -95,7 +95,7 @@ def _blender(image: modal.Image) -> modal.Image:
 
 
 blender_image = _blender(_llvm(modal.Image.debian_slim(python_version="3.11")))
-blender_image = _with_core(blender_image, "mitsuba,usd").add_local_python_source("renda_worker")
+blender_image = _with_core(blender_image, "mitsuba,usd,cad").add_local_python_source("renda_worker")
 
 # Gaussian splats on GPU: the Blender image's contents plus torch + gsplat (CUDA rasteriser). Only jobs
 # with splats use it (engine=gsplat, or Blender/Mitsuba scenes with splats composited in), so the much
@@ -123,11 +123,11 @@ cpu_image = (
     .pip_install(*_WORKER_DEPS)
     .env({"RENDA_ASSET_ROOT": ASSET_ROOT})
 )
-cpu_image = _with_core(cpu_image, "mitsuba,usd").add_local_python_source("renda_worker")
+cpu_image = _with_core(cpu_image, "mitsuba,usd,cad").add_local_python_source("renda_worker")
 
 # three.js engine: headless Chromium via Playwright, software WebGL (SwiftShader).
 threejs_image = _node(modal.Image.debian_slim(python_version="3.11")).apt_install("ffmpeg").pip_install(*_WORKER_DEPS)
-threejs_image = _with_core(threejs_image, "threejs").env({"RENDA_CACHE_DIR": "/opt/renda-cache"}).run_commands(
+threejs_image = _with_core(threejs_image, "threejs,cad").env({"RENDA_CACHE_DIR": "/opt/renda-cache"}).run_commands(
     "playwright install --with-deps chromium",
     # vendor three.js + Spark (splats) at build time instead of on every cold start
     "python -c 'from renda.engines.threejs import three_dir, spark_dir; three_dir(); spark_dir()'",

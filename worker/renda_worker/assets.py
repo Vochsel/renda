@@ -22,7 +22,7 @@ ASSET_RE = re.compile(r"^asset://([0-9a-f]{64})$")
 FORMAT_EXT = {
     "blend": ".blend", "usd": ".usdz", "gltf": ".glb", "threejs": ".json", "fbx": ".fbx",
     "obj": ".obj", "stl": ".stl", "ply": ".ply", "dae": ".dae", "3mf": ".3mf", "abc": ".abc",
-    "rir": ".rir", "hdr": ".hdr", "exr": ".exr", "png": ".png", "jpg": ".jpg", "webp": ".webp",
+    "step": ".step", "iges": ".iges", "rir": ".rir", "hdr": ".hdr", "exr": ".exr", "png": ".png", "jpg": ".jpg", "webp": ".webp",
     "mp4": ".mp4", "zip": ".zip",
 }
 

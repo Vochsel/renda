@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from . import hdri
-from .ir import Light, Stage, load_stage, look_at, trs
+from .ir import Light, Stage, load_stage, look_at
 from .spec import RendaPackage, parse_color
 
 
@@ -43,7 +43,7 @@ def build_stage(pkg: RendaPackage, asset_paths: dict[str, Path], cache_dir: Path
     warnings: list[str] = []
     root = asset_path(pkg, pkg.scene.root, asset_paths)
     fmt = pkg.assets[pkg.scene.root].format if pkg.scene.root in pkg.assets else None
-    stage = load_stage(root, fmt if fmt in _SCENE else None, cache_dir)
+    stage = load_stage(root, fmt if fmt in _SCENE else None, cache_dir, tessellation=pkg.scene.tessellation)
     warnings += stage.meta.pop("warnings", [])
     if pkg.scene.upAxis:
         stage.up_axis = pkg.scene.upAxis
@@ -51,11 +51,22 @@ def build_stage(pkg: RendaPackage, asset_paths: dict[str, Path], cache_dir: Path
         warnings.append('splats: assumed COLMAP/OpenCV axes (Y down); if the render is upside down set scene.upAxis to "Y" (or "Z")')
     normalize_up(stage)
     for i, inc in enumerate(pkg.scene.include):
-        sub = load_stage(asset_path(pkg, inc.asset, asset_paths))
+        ref = inc.asset
+        ifmt = pkg.assets[ref].format if ref in pkg.assets else None
+        sub = load_stage(asset_path(pkg, ref, asset_paths), ifmt if ifmt in _SCENE else None, cache_dir,
+                         tessellation=pkg.scene.tessellation)
         warnings += sub.meta.pop("warnings", [])
-        normalize_up(sub)
-        t = inc.transform
-        m = trs(t.translate, t.rotateDeg, t.scale) if t else None
+        if inc.materialOverrides:
+            apply_material_overrides(sub, inc.materialOverrides, warnings)
+        # world = transform · C(include up → root up) · localTransform · content
+        m = inc.localTransform.to_matrix() if inc.localTransform else np.eye(4)
+        if inc.upAxis:
+            sub.up_axis = inc.upAxis
+            m = up_conversion(inc.upAxis, stage.up_axis) @ m
+        else:
+            normalize_up(sub)
+        if inc.transform:
+            m = inc.transform.to_matrix() @ m
         stage.merge(sub, m, prefix=f"inc{i}_")
     if pkg.scene.unitScale != 1:
         stage.apply_transform(np.diag([pkg.scene.unitScale] * 3 + [1.0]))
@@ -63,10 +74,20 @@ def build_stage(pkg: RendaPackage, asset_paths: dict[str, Path], cache_dir: Path
     return stage, warnings
 
 
-_SCENE = {"blend", "usd", "gltf", "threejs", "fbx", "obj", "stl", "ply", "dae", "3mf", "abc", "splat", "rir"}
+_SCENE = {"blend", "usd", "gltf", "threejs", "fbx", "obj", "stl", "ply", "dae", "3mf", "abc", "splat", "step", "iges", "rir"}
 
 # 180° about X: COLMAP/OpenCV (x right, y down, z forward) → three.js/glTF (x right, y up, z back)
 FLIP_Y_DOWN = np.diag([1.0, -1.0, -1.0, 1.0])
+# Z-up → Y-up: (x, y, z) → (x, z, -y), and its inverse
+Z_TO_Y = np.array([[1.0, 0, 0, 0], [0, 0, 1, 0], [0, -1, 0, 0], [0, 0, 0, 1]])
+Y_TO_Z = Z_TO_Y.T.copy()
+
+
+def up_conversion(frm: str, to: str) -> np.ndarray:
+    """Matrix taking coordinates in `frm` up-axis convention to `to` (same as spec/src/layers.ts)."""
+    to_y = FLIP_Y_DOWN if frm == "-Y" else Z_TO_Y if frm == "Z" else np.eye(4)
+    from_y = FLIP_Y_DOWN if to == "-Y" else Y_TO_Z if to == "Z" else np.eye(4)
+    return from_y @ to_y
 
 
 def normalize_up(stage: Stage) -> Stage:
@@ -78,14 +99,15 @@ def normalize_up(stage: Stage) -> Stage:
     return stage
 
 
-def apply_material_overrides(stage: Stage, pkg: RendaPackage, warnings: list[str] | None = None) -> None:
-    """Keys are exact material names, globs, /regex/flags or "*"; entries apply in order (later wins),
-    after "*". An `object` pattern scopes an entry to materials used by matching objects (shared
-    materials are split so other objects keep the original)."""
+def apply_material_overrides(stage: Stage, overrides: RendaPackage | dict, warnings: list[str] | None = None) -> None:
+    """Apply `{key: MaterialOverride}` (or a package's scene overrides) to a stage. Keys are exact
+    material names, globs, /regex/flags or "*"; entries apply in order (later wins), after "*". An
+    `object` pattern scopes an entry to materials used by matching objects (shared materials are
+    split so other objects keep the original)."""
     from .engines.blender_scripts._match import compile_pattern
     from .textures import _ensure_materials, _scope_materials
 
-    ovs = pkg.scene.materialOverrides
+    ovs = overrides.scene.materialOverrides if isinstance(overrides, RendaPackage) else overrides
     if not ovs:
         return
     _ensure_materials(stage)  # meshes with no material get the default so "*" reaches them

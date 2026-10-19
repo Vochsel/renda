@@ -6,6 +6,7 @@ import { appUrl, env, envOptional } from "./env";
 import { ApiError } from "./errors";
 import { assertCanRender, consumeFreeSeconds, reportMeter, splitUsage } from "./billing";
 import { estimateHyperframes, estimateScene, type Priority } from "./estimate";
+import { flattenForOrg } from "./layers";
 import { parseJobPackage } from "./packages";
 import { assertWithinTrialLimits } from "./trials";
 import { assetKey, objectExists, outputPrefix, presignGet } from "./r2";
@@ -34,6 +35,8 @@ export type Job = {
   warnings: string[];
   error?: string;
   estimate?: unknown;
+  /** Layer files the submitted package was flattened from (layered submissions only). */
+  layers?: string[];
   outputs: { name: string; url: string; contentType: string; bytes: number }[];
 };
 
@@ -59,6 +62,7 @@ export async function serializeJob(j: JobRow): Promise<Job> {
     warnings: j.warnings ?? [],
     error: j.error ?? undefined,
     estimate: j.estimate ?? undefined,
+    layers: j.source?.layers,
     outputs,
   };
 }
@@ -100,7 +104,12 @@ export async function submitJob(input: SubmitInput): Promise<Job> {
     if (prior) return serializeJob(prior);
   }
 
-  const parsed = parseJobPackage(input.kind, input.package);
+  // `extends` / package references → one flat package (https + this org's asset:// layers)
+  const layered = input.kind === "scene" ? await flattenForOrg(input.orgId, input.package) : null;
+  const source = layered && layered.layers.length
+    ? { submitted: input.package, layers: layered.layers, provenance: layered.provenance }
+    : null;
+  const parsed = parseJobPackage(input.kind, layered ? layered.package : input.package);
   if (input.org) {
     const resolution = parsed.kind === "scene"
       ? parsed.pkg.render.resolution
@@ -136,7 +145,7 @@ export async function submitJob(input: SubmitInput): Promise<Job> {
       const [row] = await db().insert(jobs).values({
         orgId: input.orgId, createdBy: input.userId, kind: parsed.kind, priority: input.priority, package: parsed.raw, name,
         status: "succeeded", progress: 1, engine: hit.engine, hardware: hit.hardware, outputs: hit.outputs, cached: true,
-        cacheKey, idempotencyKey: input.idempotencyKey, estimate, startedAt: now, finishedAt: now,
+        cacheKey, idempotencyKey: input.idempotencyKey, estimate, source, startedAt: now, finishedAt: now,
         warnings: [`served from cache of ${hit.id}; billed $0`],
       }).returning();
       return serializeJob(row);
@@ -146,7 +155,7 @@ export async function submitJob(input: SubmitInput): Promise<Job> {
   const [row] = await db().insert(jobs).values({
     orgId: input.orgId, createdBy: input.userId, kind: parsed.kind, priority: input.priority, package: parsed.raw, name,
     cacheKey, idempotencyKey: input.idempotencyKey, estimate, engine: estimate.engine, hardware: estimate.hardware,
-    warnings: estimate.warnings,
+    warnings: estimate.warnings, source,
   }).returning();
 
   const inputs: Record<string, string> = {};

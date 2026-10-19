@@ -13,7 +13,7 @@ describe("tool registration", () => {
     const mcp = await connect(new RendaClient({ baseUrl: "https://x.test" }));
     const names = (await mcp.listTools()).tools.map((t) => t.name).sort();
     expect(names).toEqual([
-      "renda_bake", "renda_billing_link", "renda_cancel_job", "renda_claim", "renda_download", "renda_estimate", "renda_get_job", "renda_init_package",
+      "renda_bake", "renda_billing_link", "renda_cancel_job", "renda_claim", "renda_download", "renda_estimate", "renda_flatten_package", "renda_get_job", "renda_init_package",
       "renda_list_jobs", "renda_pricing", "renda_render", "renda_render_video", "renda_signup", "renda_trial", "renda_upload",
       "renda_usage", "renda_validate_package", "renda_verify", "renda_whoami",
     ]);
@@ -214,6 +214,52 @@ describe("anonymous trial", () => {
     expect(jobCall.headers.authorization).toBe("Bearer rnd_live_trialtrialtrialtrialtrial");
     const claim: any = await mcp.callTool({ name: "renda_claim", arguments: {} });
     expect(claim.content[0].text).toContain("claim?token=t");
+  });
+
+  it("flattens layered packages locally, uploads every layer's files, and submits a flat package", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "renda-layers-"));
+    await writeFile(join(dir, "studio.renda.json"), JSON.stringify({ assets: { sky: { uri: "./sky.hdr" } }, environment: { hdri: "sky" }, render: { quality: "final" } }));
+    await writeFile(join(dir, "sky.hdr"), "#?RADIANCE");
+    await writeFile(join(dir, "part.step"), "ISO-10303-21;");
+    await writeFile(join(dir, "shot.renda.json"), JSON.stringify({ extends: "./studio.renda.json", scene: { root: "./part.step" } }));
+    const f = fakeFetch(({ method, url, body }) => {
+      if (url.endsWith("/uploads")) return { json: { assetUri: `asset://${body.sha256}`, exists: true } };
+      if (method === "POST" && url.endsWith("/jobs")) return { json: job({ status: "queued" }) };
+    });
+    const mcp = await connect(new RendaClient({ baseUrl: "https://x.test", apiKey: "k", fetch: f.fetch }));
+    const r: any = await mcp.callTool({ name: "renda_render", arguments: { packagePath: join(dir, "shot.renda.json"), wait: false } });
+    expect(r.isError).toBeFalsy();
+    const sent = f.calls.find((c) => c.method === "POST" && c.url.endsWith("/jobs"))!.body.package;
+    expect(sent.extends).toBeUndefined();
+    expect(sent.render.quality).toBe("final");
+    expect(sent.assets.sky.uri).toMatch(/^asset:\/\/[0-9a-f]{64}$/);
+    expect(sent.scene.root).toMatch(/^asset:\/\/[0-9a-f]{64}$/);
+    expect(f.calls.filter((c) => c.url.endsWith("/uploads")).map((c) => c.body.filename).sort()).toEqual(["part.step", "sky.hdr"]);
+  });
+
+  it("renda_flatten_package reports provenance and layer errors with the field", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "renda-flatten-"));
+    await writeFile(join(dir, "base.renda.json"), JSON.stringify({ render: { quality: "final" } }));
+    await writeFile(join(dir, "shot.renda.json"), JSON.stringify({ extends: "./base.renda.json", scene: { root: "./a.stl" } }));
+    const mcp = await connect(new RendaClient({ baseUrl: "https://x.test" }));
+    const r: any = await mcp.callTool({ name: "renda_flatten_package", arguments: { packagePath: join(dir, "shot.renda.json") } });
+    const body = JSON.parse(r.content[0].text.split("\n\nNext step")[0]);
+    expect(body.provenance["render.quality"]).toBe(join(dir, "base.renda.json"));
+    await writeFile(join(dir, "bad.renda.json"), JSON.stringify({ extends: ["./nope.renda.json"], scene: { root: "./a.stl" } }));
+    const bad: any = await mcp.callTool({ name: "renda_flatten_package", arguments: { packagePath: join(dir, "bad.renda.json") } });
+    expect(bad.isError).toBe(true);
+    expect(text(bad)).toContain("extends[0]");
+  });
+
+  it("remote mode asks the API to flatten", async () => {
+    const f = fakeFetch(({ url }) => {
+      if (url.endsWith("/packages/flatten")) return { json: { package: { scene: { root: "https://h/a.step" } }, provenance: {}, layers: ["https://h/base.renda.json"] } };
+      if (url.endsWith("/jobs")) return { json: job({ status: "queued" }) };
+    });
+    const mcp = await connect(new RendaClient({ baseUrl: "https://x.test", apiKey: "k", fetch: f.fetch }), "remote");
+    const r: any = await mcp.callTool({ name: "renda_render", arguments: { package: { extends: "https://h/base.renda.json", scene: { root: "https://h/a.step" } }, wait: false } });
+    expect(r.isError).toBeFalsy();
+    expect(f.calls.find((c) => c.url.endsWith("/jobs"))!.body.package).toEqual({ scene: { root: "https://h/a.step" } });
   });
 
   it("listJobs accepts the {jobs: [...]} envelope", async () => {

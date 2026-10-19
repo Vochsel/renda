@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "assets": {
+    "mesh": { "uri": "./chair.glb" },
+    "cushion": { "uri": "./cushion.obj" }
+  },
+  "scene": {
+    "root": "mesh",
+    "unitScale": 0.01,
+    "upAxis": "Z",
+    "include": [{ "asset": "cushion", "transform": { "translate": [0, 0, 45] } }],
+    "materialOverrides": { "*": { "roughness": 0.5 } }
+  },
+  "lights": [{ "type": "point", "position": [0, 0, 200], "intensity": 30 }],
+  "camera": { "mode": "scene" },
+  "render": { "resolution": [512, 512] }
+}

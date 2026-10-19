@@ -29,7 +29,8 @@ mitsuba = ["mitsuba>=3.5", "drjit>=0.4.6"]
 usd = ["usd-core>=24.5"]
 blender = ["bpy>=4.2"]
 threejs = ["playwright>=1.45"]
-all = ["renda[mitsuba,usd,threejs]"]
+cad = ["cascadio>=0.1.1"]  # STEP/IGES via OpenCASCADE (~25 MB wheels; the cloud worker always has it)
+all = ["renda[mitsuba,usd,threejs,cad]"]
 
 [project.scripts]
 renda = "renda.cli:app"

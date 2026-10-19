@@ -1,4 +1,5 @@
 import { RendaApiError } from "@rendahq/mcp";
+import { LayerError } from "@rendahq/spec";
 import { UsageError } from "./args.js";
 
 /** gh-style exit codes, shared with the Python CLI. */
@@ -78,6 +79,11 @@ export class Out {
       message = e.message;
       exit = EXIT.usage;
       hint = "Run `renda --help` for usage.";
+    } else if (e instanceof LayerError) {
+      code = e.code;
+      message = e.message;
+      hint = "Fix that field in that layer; `renda flatten <pkg> --provenance` shows how layers combine.";
+      extra = { layer: e.layer, ...(e.field ? { field: e.field } : {}) };
     } else if (e instanceof Error) {
       message = e.message;
     }

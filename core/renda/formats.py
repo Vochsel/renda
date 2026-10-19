@@ -66,6 +66,18 @@ def _is_gltf_json(path: Path) -> bool:
     return isinstance(data, dict) and isinstance(data.get("asset"), dict) and "version" in data["asset"]
 
 
+def is_step(head: bytes) -> bool:
+    """STEP Part 21 files start with the ISO-10303-21 keyword (maybe after a BOM/whitespace)."""
+    return head.lstrip(b"\xef\xbb\xbf \t\r\n").startswith(b"ISO-10303-21")
+
+
+def is_iges(head: bytes) -> bool:
+    """IGES: fixed 80-column records whose column 73 holds the section letter; the file opens with
+    Start ('S') records (or, rarely, a compressed-format 'C' flag)."""
+    first = head.split(b"\n", 1)[0].rstrip(b"\r")
+    return len(first) >= 73 and first[72:73] in (b"S", b"C") and first[73:80].strip().isdigit()
+
+
 def is_binary_stl(path: Path) -> bool:
     """Binary STL: 80-byte header + uint32 count, size must match. ASCII starts with 'solid' (but some binaries do too)."""
     size = path.stat().st_size
@@ -118,6 +130,10 @@ def detect(path: str | Path) -> str:
             return zipped
     if head.startswith(b"NGSP"):  # .spz v4: uncompressed header, zstd streams
         return "splat"
+    if is_step(head):
+        return "step"
+    if is_iges(head):
+        return "iges"
     if head.startswith(b"\x1f\x8b"):
         from .ir.loaders.splat import is_spz
 

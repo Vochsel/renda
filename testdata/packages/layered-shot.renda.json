@@ -1,0 +1,12 @@
+{
+  "$schema": "https://renda.dev/schema/v1.json",
+  "extends": "./layers/studio.renda.json",
+  "name": "Layers: studio layer + the table scene + the STEP bracket placed as a package",
+  "scene": {
+    "root": "../scenes/scene.glb",
+    "include": [
+      { "package": "./layers/bracket-prop.renda.json", "as": "bracket", "transform": { "translate": [0.55, 0, 0.6] } }
+    ]
+  },
+  "render": { "resolution": [1280, 720] }
+}

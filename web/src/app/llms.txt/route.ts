@@ -10,7 +10,7 @@ export function GET() {
   const base = appUrl();
   const body = `# Renda — setup instructions for agents
 
-> Renda renders 3D files in the cloud: .blend, .usd/.usda/.usdc/.usdz, .gltf/.glb, three.js JSON, .fbx, .obj, .stl, .ply, .dae, .3mf, .abc, Gaussian splats (3DGS .ply, .splat, .spz), or a .renda.json package → png/jpg/webp/exr stills, mp4/webm/gif/mov video, or a .glb with the lighting baked into its textures. It also renders HyperFrames HTML videos. Billed per render-second. You are reading this because the user asked you to set up Renda. Follow the steps in order, run the commands yourself, and report back.
+> Renda renders 3D files in the cloud: .blend, .usd/.usda/.usdc/.usdz, .gltf/.glb, three.js JSON, .fbx, .obj, .stl, .ply, .dae, .3mf, .abc, CAD .step/.stp/.iges/.igs, Gaussian splats (3DGS .ply, .splat, .spz), or a .renda.json package → png/jpg/webp/exr stills, mp4/webm/gif/mov video, or a .glb with the lighting baked into its textures. It also renders HyperFrames HTML videos. Billed per render-second. You are reading this because the user asked you to set up Renda. Follow the steps in order, run the commands yourself, and report back.
 
 ## 1. Pick a path (both use the same account and credentials file)
 - Node available (\`node --version\` ≥ 20): use \`npx ${CLI_PACKAGE} …\` (alias after install: \`renda\`).
@@ -40,6 +40,8 @@ Credentials live in ~/.config/renda/credentials.json (or $RENDA_API_KEY).
     renda render phone.glb --turntable --format mp4 --texture "object=Screen*,slot=emission:./promo.mp4"
 Texture overrides (scene.textureOverrides, CLI --texture, MCP textureOverrides): any image (png/jpg/webp/avif/heic/tiff/exr/hdr/svg/psd/gif) or video (mp4/mov/webm/gif), converted automatically; videos play in sync with the animation. Match material/object/existing-texture names by exact name, glob ("wood*") or "/regex/i", and pick a slot (baseColor, normal, roughness, metallic, emission, opacity). materialOverrides keys accept the same patterns, plus "object" to scope one object.
 Gaussian splats: splat-only scenes render with engine "gsplat"; put meshes inside a capture with scene.include (threejs renders both natively; blender-*/mitsuba composite the splats by depth, without engine lighting on them). Splat .ply/.splat captures are Y-down: scene.upAxis defaults to "-Y"; set "Y" if a render is upside down.
+CAD: \`renda render bracket.step\` (also .stp, .iges/.igs). STEP keeps part colours; units become metres; Z up. Meshing density: scene.tessellation {linearDeflection (m), angularDeflection (rad)}. IGES colours aren't imported — use scene.materialOverrides.
+Composing scenes: a package can \`"extends": ["./studio.renda.json", "https://…/brand.renda.json"]\` (later wins; objects merge, arrays replace, null removes) and place other packages with \`scene.include: [{"package": "./props/chair.renda.json", "as": "chair", "transform": {...}}]\`. Relative paths resolve against the file that wrote them. \`renda flatten pkg.renda.json --provenance\` shows the result and which layer set each field; render/estimate/validate flatten automatically.
 Identical re-renders are cached and free. Local paths are uploaded automatically (deduped by sha256).
 
 Bake lighting into a model and get a GLB back (works in any glTF viewer / game engine with no lights):
@@ -53,7 +55,7 @@ Package form: output: {"format": "glb", "bake": {"mode": "unlit", "size": 2048}}
 ## 5. MCP (if you'd rather use tools than the CLI)
 - Local stdio: \`${installSnippets.mcp.claudeCode}\` (or \`renda mcp add --agent cursor|codex|claude-code\`).
 - Remote (streamable HTTP): ${base}/api/mcp with header \`Authorization: Bearer <apiKey>\`.
-Tools: renda_trial, renda_claim, renda_signup, renda_verify, renda_render, renda_bake, renda_estimate, renda_get_job, renda_list_jobs, renda_render_video, renda_usage, renda_billing_link, …
+Tools: renda_trial, renda_claim, renda_signup, renda_verify, renda_render, renda_bake, renda_estimate, renda_flatten_package, renda_get_job, renda_list_jobs, renda_render_video, renda_usage, renda_billing_link, …
 Skills: \`npx skills add ${GITHUB_REPO}\` · Claude Code plugin: \`/plugin marketplace add ${GITHUB_REPO}\` then \`/plugin install renda@renda\`.
 
 ## 6. Errors and money
@@ -69,6 +71,7 @@ ${HARDWARE.map((h) => `  - ${HARDWARE_LABEL[h]} (${h}): $${PRICE_PER_MINUTE[h]}`
 - Upload: POST /api/v1/uploads {filename, size, sha256} → PUT bytes to uploadUrl (skip when exists) → use asset://<sha256>
 - Estimate: POST /api/v1/estimate {package} · Submit: POST /api/v1/jobs {package, kind?, priority?, idempotencyKey?} · Poll: GET /api/v1/jobs/{id}
 - Past renders: GET /api/v1/outputs?limit=30&kind=image|video|model → {items:[{jobId, name, url, thumbUrl, width, height, …}], nextCursor} (pass cursor=nextCursor for the next page)
+- Layered packages: the API flattens https:// and your asset:// layers itself (local paths must be flattened/uploaded client-side). POST /api/v1/packages/flatten {package} → {package, provenance, layers}.
 - Send \`Authorization: Bearer <apiKey>\` on everything except auth routes.
 
 ## Links

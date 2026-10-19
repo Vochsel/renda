@@ -1,0 +1,6 @@
+{
+  "extends": "./brand/brand.renda.json",
+  "assets": { "decal": { "uri": "./decal.svg" } },
+  "scene": { "root": "./bottle.glb" },
+  "render": { "engine": "blender-cycles" }
+}

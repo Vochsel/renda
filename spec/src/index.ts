@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isLayered } from "./layers.js";
 
 /** Scene file formats Renda can ingest. */
 export const SceneFormat = z.enum([
@@ -14,6 +15,8 @@ export const SceneFormat = z.enum([
   "3mf",
   "abc",
   "splat",
+  "step",
+  "iges",
   "rir",
 ]);
 export type SceneFormat = z.infer<typeof SceneFormat>;
@@ -38,6 +41,10 @@ export const EXTENSION_FORMATS: Record<string, SceneFormat> = {
   ".splat": "splat",
   ".spz": "splat",
   ".ksplat": "splat",
+  ".step": "step",
+  ".stp": "step",
+  ".iges": "iges",
+  ".igs": "iges",
   ".rir": "rir",
 };
 
@@ -74,6 +81,8 @@ export const Transform = z.strictObject({
   translate: Vec3.default([0, 0, 0]),
   rotateDeg: Vec3.default([0, 0, 0]).describe("XYZ euler, degrees"),
   scale: z.union([z.number(), Vec3]).default(1),
+  matrix: z.array(z.number()).length(16).optional()
+    .describe("4×4 column-major (glTF order). When set, translate/rotateDeg/scale are ignored. Written by layer flattening when transforms compose."),
 });
 
 /** Name pattern: exact name, case-insensitive glob (`*` `?` `[...]`), or `/regex/flags`. */
@@ -121,16 +130,47 @@ export const TextureOverride = z.strictObject({
   strength: z.number().min(0).optional().describe("Normal-map strength or emission strength."),
 });
 
+const UpAxis = z.enum(["Y", "Z", "-Y"]);
+
+/** An extra scene file placed into the scene (flattened form). */
+export const Include = z.strictObject({
+  asset: AssetRef,
+  transform: Transform.optional().describe("Placement in the root scene's axes."),
+  upAxis: UpAxis.optional()
+    .describe("Axes of this file; converted to the root scene's up axis before `transform`. Unset = no conversion."),
+  localTransform: Transform.optional()
+    .describe("Applied in the file's own axes, before the up-axis conversion (written by layer flattening for nested references)."),
+  materialOverrides: z.record(z.string(), MaterialOverride).optional()
+    .describe('Overrides applied to this include only. Keys are material names or "*".'),
+});
+
+/** Before flattening: another package's whole scene (assets, lights, material overrides), placed by a transform. */
+export const PackageInclude = z.strictObject({
+  package: Uri.describe("Path, https:// URL or asset:// URI of a .renda.json whose scene is placed here."),
+  as: z.string().regex(/^[A-Za-z0-9_-]+$/).optional()
+    .describe("Namespace for the referenced package's asset ids (default ref<index>)."),
+  transform: Transform.optional(),
+  materialOverrides: z.record(z.string(), MaterialOverride).optional(),
+});
+
+export const Tessellation = z.strictObject({
+  linearDeflection: z.number().positive().optional()
+    .describe("Max chord error in metres. Default: 0.05% of the part's bounding-box diagonal."),
+  angularDeflection: z.number().positive().max(3.14).optional().describe("Max angle between facets, radians. Default 0.3."),
+});
+
 export const Scene = z.strictObject({
   root: AssetRef.describe("Asset id or uri of the main scene file."),
-  include: z.array(z.strictObject({ asset: AssetRef, transform: Transform.optional() })).default([]),
-  upAxis: z.enum(["Y", "Z", "-Y"]).optional()
+  include: z.array(Include).default([]),
+  upAxis: UpAxis.optional()
     .describe('Defaults to the source format\'s convention. "-Y" = COLMAP/OpenCV (Y down), the usual axes of Gaussian splat captures (.ply/.splat default to it).'),
-  unitScale: z.number().positive().default(1),
+  unitScale: z.number().positive().default(1)
+    .describe("Multiplies scene units. STEP/IGES are converted to metres from their declared units first; this applies on top."),
   materialOverrides: z.record(z.string(), MaterialOverride).default({})
     .describe('Keys are material names, globs, /regex/flags, or "*" for all.'),
   textureOverrides: z.array(TextureOverride).default([])
     .describe("Replace material textures with images or videos; later entries win."),
+  tessellation: Tessellation.optional().describe("Meshing density for CAD (STEP/IGES) inputs."),
 });
 
 export const Camera = z.discriminatedUnion("mode", [
@@ -222,7 +262,7 @@ export const Output = z.strictObject({
     .describe('Bake lighting into textures (needs format "glb"). Omit/null with format "glb" = plain conversion to GLB.'),
 });
 
-export const RendaPackage = z.strictObject({
+const packageShape = {
   $schema: z.string().optional(),
   version: z.literal(1).default(1),
   name: z.string().max(200).optional(),
@@ -236,7 +276,9 @@ export const RendaPackage = z.strictObject({
   }),
   animation: Animation.optional(),
   output: Output.default({ format: "png", passes: ["beauty"], transparent: false, video: { crf: 18 }, keepFrames: false }),
-}).superRefine((pkg, ctx) => {
+};
+
+export const RendaPackage = z.strictObject(packageShape).superRefine((pkg, ctx) => {
   const isVideo = VideoFormat.safeParse(pkg.output.format).success;
   if (isVideo && !pkg.animation) {
     ctx.addIssue({ code: "custom", path: ["animation"], message: `output.format "${pkg.output.format}" needs an animation range` });
@@ -258,14 +300,37 @@ export const RendaPackage = z.strictObject({
 export type RendaPackageInput = z.input<typeof RendaPackage>;
 export type RendaPackage = z.output<typeof RendaPackage>;
 
+/**
+ * What authors write: a package that may layer others (`extends`) and reference other packages'
+ * scenes (`scene.include[].package`). Flatten it (`flattenPackage` in ./layers) to get a
+ * {@link RendaPackage}. `scene` is optional because a layer (e.g. shared lighting) may omit it.
+ */
+export const RendaPackageSource = z.strictObject({
+  ...packageShape,
+  extends: z.union([Uri, z.array(Uri)]).optional()
+    .describe("Packages layered underneath this one, applied in order (later wins; this file wins over all). Objects deep-merge, arrays replace, null removes a field."),
+  scene: Scene.extend({ include: z.array(z.union([Include, PackageInclude])).default([]) }).partial({ root: true }).optional(),
+});
+export type RendaPackageSource = z.input<typeof RendaPackageSource>;
+
+export const LAYERED_MESSAGE =
+  "This package uses `extends` or package references; flatten it first (flattenPackage from @rendahq/spec, or `renda flatten`).";
+
 /** Parse + apply defaults. Throws ZodError with paths on failure. */
 export function parsePackage(input: unknown): RendaPackage {
-  return RendaPackage.parse(input);
+  const r = safeParsePackage(input);
+  if (!r.success) throw r.error;
+  return r.data;
 }
 
-export function safeParsePackage(input: unknown) {
+export function safeParsePackage(input: unknown): ReturnType<typeof RendaPackage.safeParse> {
+  if (isLayered(input)) {
+    return { success: false, error: new z.ZodError([{ code: "custom", path: ["extends"], message: LAYERED_MESSAGE, input }]) } as ReturnType<typeof RendaPackage.safeParse>;
+  }
   return RendaPackage.safeParse(input);
 }
+
+export * from "./layers.js";
 
 /** Format from a file name/uri, or undefined. */
 export function formatFromPath(path: string): SceneFormat | undefined {

@@ -13,8 +13,8 @@ from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-SceneFormat = Literal["blend", "usd", "gltf", "threejs", "fbx", "obj", "stl", "ply", "dae", "3mf", "abc", "splat", "rir"]
-SCENE_FORMATS: tuple[str, ...] = ("blend", "usd", "gltf", "threejs", "fbx", "obj", "stl", "ply", "dae", "3mf", "abc", "splat", "rir")
+SceneFormat = Literal["blend", "usd", "gltf", "threejs", "fbx", "obj", "stl", "ply", "dae", "3mf", "abc", "splat", "step", "iges", "rir"]
+SCENE_FORMATS: tuple[str, ...] = ("blend", "usd", "gltf", "threejs", "fbx", "obj", "stl", "ply", "dae", "3mf", "abc", "splat", "step", "iges", "rir")
 
 EXTENSION_FORMATS: dict[str, str] = {
     ".blend": "blend",
@@ -35,6 +35,10 @@ EXTENSION_FORMATS: dict[str, str] = {
     ".splat": "splat",
     ".spz": "splat",
     ".ksplat": "splat",
+    ".step": "step",
+    ".stp": "step",
+    ".iges": "iges",
+    ".igs": "iges",
     ".rir": "rir",
 }
 
@@ -61,7 +65,7 @@ class _M(BaseModel):
 class Asset(_M):
     uri: str = Field(min_length=1)
     format: Literal[
-        "blend", "usd", "gltf", "threejs", "fbx", "obj", "stl", "ply", "dae", "3mf", "abc", "splat", "rir",
+        "blend", "usd", "gltf", "threejs", "fbx", "obj", "stl", "ply", "dae", "3mf", "abc", "splat", "step", "iges", "rir",
         "hdr", "exr", "png", "jpg", "webp", "avif", "heic", "tiff", "svg", "psd", "gif",
         "mp4", "mov", "webm", "other",
     ] | None = None
@@ -72,6 +76,17 @@ class Transform(_M):
     translate: Vec3 = (0, 0, 0)
     rotateDeg: Vec3 = (0, 0, 0)
     scale: float | Vec3 = 1
+    matrix: list[float] | None = Field(default=None, min_length=16, max_length=16)  # column-major; wins over TRS
+
+    def to_matrix(self):
+        """4×4 numpy matrix (row-major indexing, like core.ir.trs)."""
+        import numpy as np
+
+        from .ir import trs
+
+        if self.matrix is not None:
+            return np.asarray(self.matrix, dtype=np.float64).reshape(4, 4).T
+        return trs(self.translate, self.rotateDeg, self.scale)
 
 
 class MaterialOverride(_M):
@@ -125,18 +140,30 @@ class TextureOverride(_M):
     strength: float | None = Field(default=None, ge=0)  # normal-map strength / emission strength
 
 
+UpAxis = Literal["Y", "Z", "-Y"]  # "-Y": COLMAP/OpenCV, Gaussian splat captures
+
+
 class Include(_M):
     asset: str = Field(min_length=1)
-    transform: Transform | None = None
+    transform: Transform | None = None  # placement in the root scene's axes
+    upAxis: UpAxis | None = None  # this file's axes, converted to the root's before `transform`
+    localTransform: Transform | None = None  # in the file's own axes, before the conversion
+    materialOverrides: dict[str, MaterialOverride] | None = None  # this include only
+
+
+class Tessellation(_M):
+    linearDeflection: float | None = Field(default=None, gt=0)  # metres; default 0.05% of bbox diagonal
+    angularDeflection: float | None = Field(default=None, gt=0, le=3.14)  # radians; default 0.3
 
 
 class Scene(_M):
     root: str = Field(min_length=1)
     include: list[Include] = Field(default_factory=list)
-    upAxis: Literal["Y", "Z", "-Y"] | None = None  # "-Y": COLMAP/OpenCV, Gaussian splat captures
+    upAxis: UpAxis | None = None
     unitScale: float = Field(default=1, gt=0)
     materialOverrides: dict[str, MaterialOverride] = Field(default_factory=dict)
     textureOverrides: list[TextureOverride] = Field(default_factory=list)
+    tessellation: Tessellation | None = None  # CAD (STEP/IGES) meshing density
 
 
 class AutoCamera(_M):
@@ -327,14 +354,29 @@ class RendaPackage(_M):
         return self.model_dump(mode="json", by_alias=True, exclude_none=True)
 
 
+LAYERED_MESSAGE = ("This package uses `extends` or package references; flatten it first "
+                   "(renda.layers.flatten / flatten_file, or `renda flatten`).")
+
+
 def load_package(path_or_dict: str | Path | dict[str, Any]) -> RendaPackage:
-    """Parse a package from a dict, a path to a .renda.json, or a JSON string."""
+    """Parse a package from a dict, a path to a .renda.json, or a JSON string.
+
+    A path is flattened first (its `extends` and package references resolved relative to the file).
+    Dicts and JSON strings must already be flat — they have no location to resolve against.
+    """
+    from .layers import flatten_file, is_layered
+
     if isinstance(path_or_dict, dict):
-        return RendaPackage.model_validate(path_or_dict)
-    s = str(path_or_dict)
-    if s.lstrip().startswith("{"):
-        return RendaPackage.model_validate(json.loads(s))
-    return RendaPackage.model_validate(json.loads(Path(s).read_text()))
+        data = path_or_dict
+    else:
+        s = str(path_or_dict)
+        if s.lstrip().startswith("{"):
+            data = json.loads(s)
+        else:
+            return RendaPackage.model_validate(flatten_file(s).package)
+    if is_layered(data):
+        raise ValueError(LAYERED_MESSAGE)
+    return RendaPackage.model_validate(data)
 
 
 def package_for_file(uri: str, **overrides: Any) -> RendaPackage:

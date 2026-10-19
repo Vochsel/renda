@@ -1,0 +1,13 @@
+{
+  "$schema": "https://renda.dev/schema/v1.json",
+  "version": 1,
+  "name": "IGES surfaces with a material override and fine tessellation",
+  "scene": {
+    "root": "../scenes/cad/plate_block.igs",
+    "materialOverrides": { "*": { "baseColor": "#8fa3b8", "metallic": 0.6, "roughness": 0.35 } },
+    "tessellation": { "linearDeflection": 0.00005, "angularDeflection": 0.2 }
+  },
+  "camera": { "mode": "auto", "elevationDeg": 30, "azimuthDeg": -40 },
+  "render": { "engine": "mitsuba", "resolution": [1024, 768], "quality": "standard" },
+  "output": { "format": "png" }
+}

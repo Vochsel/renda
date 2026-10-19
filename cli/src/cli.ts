@@ -7,6 +7,7 @@ import {
   starterPackage, uploadBytes, uploadLocalPaths, validatePackage, zipDirectory, type Credentials, type Job,
 } from "@rendahq/mcp";
 import { parseTextureFlag } from "@rendahq/spec";
+import { flattenFile } from "@rendahq/spec/node";
 import { bool, num, parseArgs, parseFrames, parseRes, str, UsageError, type Parsed } from "./args.js";
 import { addMcp, installSkills, parseAgents, realSys, removeMcp, writeAgentsSnippet, type StepResult, type Sys } from "./agents.js";
 import { CLI_PACKAGE, DEFAULT_API_URL, MCP_PACKAGE, UV_INSTALL_HINT, VERSION } from "./constants.js";
@@ -71,6 +72,7 @@ Render
   renda estimate <file|pkg>                  time + cost before rendering
   renda jobs [id] [--cancel] [--download dir]
   renda validate <pkg.renda.json>            check a package against the spec
+  renda flatten <pkg.renda.json> [--provenance] [-o out.json]   resolve extends / package references
   renda new <file>                           write a starter .renda.json
   renda video <hyperframes-dir>              render a HyperFrames composition
 
@@ -384,10 +386,32 @@ const COMMANDS: Record<string, Handler> = {
 
   async validate(ctx, [file]) {
     if (!file) throw new UsageError("usage: renda validate <package.renda.json>");
-    const raw = JSON.parse(await readFile(file, "utf8"));
+    const raw = (await flattenFile(file)).package;
     const r = validatePackage(raw);
     if (!r.valid) throw new CliError("invalid_package", `${file} is not a valid Renda package.`, EXIT.error, "Fix the fields listed in `issues`.", [], { issues: r.issues });
     ctx.out.ok({ valid: true, package: r.package }, `${file} is valid.`);
+  },
+
+  async flatten(ctx, [file]) {
+    if (!file) throw new UsageError("usage: renda flatten <package.renda.json> [--provenance] [-o out.json]");
+    const r = await flattenFile(file);
+    const v = validatePackage(r.package);
+    const dest = str(ctx.flags, "output");
+    if (dest) await writeFile(dest, JSON.stringify(r.package, null, 2) + "\n");
+    const data: Record<string, unknown> = { package: r.package, layers: r.layers };
+    if (bool(ctx.flags, "provenance")) data.provenance = r.provenance;
+    if (!v.valid) data.issues = v.issues;
+    if (dest) data.path = dest;
+    const human = () => {
+      let s = JSON.stringify(r.package, null, 2);
+      if (bool(ctx.flags, "provenance")) {
+        const w = Math.max(0, ...Object.keys(r.provenance).map((k) => k.length));
+        s += "\n\n" + Object.entries(r.provenance).map(([k, l]) => `${k.padEnd(w)}  ← ${l}`).join("\n");
+      }
+      return s + (v.valid ? "" : `\n\ninvalid: ${JSON.stringify(v.issues)}`);
+    };
+    if (!v.valid) throw new CliError("invalid_package", "The composed package is invalid.", EXIT.error, "Fix the fields listed in `issues` in the layer named by provenance.", [], data);
+    ctx.out.ok(data, human, [`renda render ${dest ?? file}`]);
   },
 
   async new(ctx, [file]) {
@@ -440,7 +464,7 @@ async function buildPackage(ctx: Ctx, file: string, mutate?: (pkg: any) => void)
   if (remote) {
     pkg = starterPackage(file, packageOverrides(ctx.flags) as any);
   } else if (file.endsWith(".renda.json")) {
-    pkg = JSON.parse(await readFile(abs, "utf8"));
+    pkg = (await flattenFile(abs)).package; // extends / package references resolved against the file
     const f = ctx.flags;
     if (str(f, "engine") || str(f, "res") || str(f, "quality")) pkg.render = { ...(pkg.render ?? {}) };
     if (str(f, "engine")) pkg.render.engine = str(f, "engine");

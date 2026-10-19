@@ -27,6 +27,7 @@ SCENES = sorted(
     [p for p in (HERE / "scenes").glob("*.*") if p.suffix not in (".mtl", ".bin", ".png")]
     + [HERE / "scenes" / "threejs" / "scene.json"]
     + [HERE / "scenes" / "splats" / n for n in ("garden.ply", "garden.splat", "garden.spz")]
+    + [HERE / "scenes" / "cad" / n for n in ("bracket.step", "bracket_assembly.stp", "plate_block.igs")]
 )
 SPLAT_SCENES = {p for p in SCENES if p.parent.name == "splats"}
 PACKAGES = sorted((HERE / "packages").glob("*.renda.json"))
@@ -126,13 +127,16 @@ def zod_validate(paths: list[Path]) -> dict[str, str | None]:
     dist = ROOT / "spec" / "dist" / "index.js"
     if not dist.exists() or not shutil.which("node"):
         return {}
-    script = (
+    node = dist.with_name("node.js")
+    script = (  # layered packages are flattened (TS resolver) before validation
         f"import {{ safeParsePackage }} from {json.dumps(dist.as_uri())};"
-        "import { readFileSync } from 'node:fs';"
+        f"import {{ flattenFile }} from {json.dumps(node.as_uri())};"
         "const out = {};"
         "for (const p of process.argv.slice(1)) {"
-        "  const r = safeParsePackage(JSON.parse(readFileSync(p, 'utf8')));"
-        "  out[p] = r.success ? null : r.error.issues.map(i => i.path.join('.') + ': ' + i.message).join('; ');"
+        "  try {"
+        "    const r = safeParsePackage((await flattenFile(p)).package);"
+        "    out[p] = r.success ? null : r.error.issues.map(i => i.path.join('.') + ': ' + i.message).join('; ');"
+        "  } catch (e) { out[p] = String(e.message ?? e); }"
         "}"
         "console.log(JSON.stringify(out));"
     )
