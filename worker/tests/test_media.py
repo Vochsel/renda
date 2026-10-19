@@ -1,3 +1,4 @@
+import pytest
 import base64
 import io
 from pathlib import Path
@@ -74,7 +75,11 @@ def test_video_uses_poster_frame(tmp_path):
 def test_video_poster_extracted_with_ffmpeg(tmp_path):
     import subprocess
 
-    from renda.video import ffmpeg_binary
+    try:
+        ffmpeg_binary = media._ffmpeg  # core's bundled ffmpeg when installed, else the system one
+        ffmpeg_binary()
+    except RuntimeError:
+        pytest.skip("no ffmpeg available")
 
     for i in range(3):
         _png(tmp_path / f"f{i}.png", size=(320, 180))
