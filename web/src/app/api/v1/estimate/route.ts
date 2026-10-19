@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { api, readJson } from "@/lib/http";
 import { authenticate } from "@/lib/auth";
+import { rateLimit } from "@/lib/ratelimit";
 import { parseJobPackage } from "@/lib/packages";
 import { estimateFor } from "@/lib/jobs";
 import { flattenForOrg } from "@/lib/layers";
@@ -13,6 +14,7 @@ const Body = z.object({
 
 export const POST = api(async (req) => {
   const auth = await authenticate(req);
+  await rateLimit("api_write_key", auth.keyId);
   const b = Body.parse(await readJson(req));
   const pkg = b.kind === "scene" ? (await flattenForOrg(auth.org.id, b.package)).package : b.package;
   const parsed = parseJobPackage(b.kind, pkg);

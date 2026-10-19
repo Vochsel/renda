@@ -40,6 +40,12 @@ def _http_download(url: str, dest: Path) -> None:
                 f.write(block)
 
 
+def _safe_download(url: str, dest: Path) -> None:
+    from renda_worker.netsafe import safe_download
+
+    safe_download(url, dest)
+
+
 def _sha256(path: Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -71,11 +77,14 @@ class AssetCache:
         hints: Mapping[str, str] | None = None,
         download: Downloader = _http_download,
         on_new: Callable[[], None] | None = None,
+        download_untrusted: Downloader | None = None,
     ):
         self.root = Path(root)
         self.inputs = {k: str(v) for k, v in inputs.items()}
         self.hints = dict(hints or {})
         self.download = download
+        # User-supplied https:// URLs (not our presigned R2 links) go through the SSRF-safe fetcher.
+        self.download_untrusted = download_untrusted or _safe_download
         self.on_new = on_new
         self.hits = 0
         self.misses = 0
@@ -115,7 +124,7 @@ class AssetCache:
         os.close(fd)
         tmp_path = Path(tmp)
         try:
-            self.download(url, tmp_path)
+            (self.download if m else self.download_untrusted)(url, tmp_path)
             if m and _sha256(tmp_path) != key:
                 raise ValueError(f"hash mismatch for {uri}")
             target = d / name

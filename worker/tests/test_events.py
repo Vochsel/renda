@@ -2,7 +2,7 @@ import hashlib
 import hmac
 import json
 
-from renda_worker.events import EventSink, encode, sign, verify
+from renda_worker.events import EventSink, encode, sign, sign_timed, verify
 
 
 def test_sign_matches_reference_hmac():
@@ -14,11 +14,19 @@ def test_sign_matches_reference_hmac():
     assert not verify(body, "k", "")
 
 
-def test_emitted_event_is_signed_over_exact_body(recorder):
-    EventSink("j1", "https://x/cb", "sec", poster=recorder).usage("gpu-l4", 37.21234, 3)
+def test_timed_signature_vector():
+    # Same vector as web/test/hmac.test.ts, so both sides agree byte for byte.
+    body = b'{"jobId":"j","type":"status"}'
+    expected = "v1=" + hmac.new(b"k", b"1700000000." + body, hashlib.sha256).hexdigest()
+    assert sign_timed(body, 1700000000, "k") == expected
+
+
+def test_emitted_event_is_signed_over_timestamp_and_exact_body(recorder):
+    EventSink("j1", "https://x/cb", "sec", poster=recorder, clock=lambda: 1700000123.9).usage("gpu-l4", 37.21234, 3)
     url, body, headers = recorder.calls[0]
     assert url == "https://x/cb"
-    assert verify(body, "sec", headers["x-renda-signature"])
+    assert headers["x-renda-timestamp"] == "1700000123"
+    assert headers["x-renda-signature"] == sign_timed(body, 1700000123, "sec")
     assert headers["idempotency-key"] == "j1:3"
     assert json.loads(body) == {"jobId": "j1", "type": "usage", "hardware": "gpu-l4", "seconds": 37.212, "chunk": 3}
 

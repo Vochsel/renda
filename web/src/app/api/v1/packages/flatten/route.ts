@@ -2,6 +2,7 @@ import { z } from "zod";
 import { safeParsePackage } from "@rendahq/spec";
 import { api, readJson, zodIssues } from "@/lib/http";
 import { authenticate } from "@/lib/auth";
+import { rateLimit } from "@/lib/ratelimit";
 import { flattenForOrg } from "@/lib/layers";
 
 const Body = z.object({ package: z.record(z.string(), z.unknown()) });
@@ -12,6 +13,7 @@ const Body = z.object({ package: z.record(z.string(), z.unknown()) });
  */
 export const POST = api(async (req) => {
   const auth = await authenticate(req);
+  await rateLimit("api_write_key", auth.keyId);
   const { package: input } = Body.parse(await readJson(req));
   const r = await flattenForOrg(auth.org.id, input);
   const v = safeParsePackage(r.package);

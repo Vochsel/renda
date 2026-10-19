@@ -8,11 +8,12 @@ import { assertCanRender, consumeFreeSeconds, reportMeter, splitUsage } from "./
 import { estimateHyperframes, estimateScene, type Priority } from "./estimate";
 import { flattenForOrg } from "./layers";
 import { parseJobPackage } from "./packages";
+import { ensureVerifiedAssets } from "./assets";
 import { assertWithinTrialLimits } from "./trials";
-import { assetKey, objectExists, outputPrefix, presignGet } from "./r2";
+import { outputPrefix, presignGet } from "./r2";
 import { HARDWARE, type Hardware } from "./pricing";
 
-const { jobs, assets, usageEvents } = schema;
+const { jobs, usageEvents } = schema;
 type JobRow = typeof jobs.$inferSelect;
 
 export const TERMINAL = new Set(["succeeded", "failed", "canceled"]);
@@ -116,16 +117,8 @@ export async function submitJob(input: SubmitInput): Promise<Job> {
       : parsed.pkg.width && parsed.pkg.height ? ([parsed.pkg.width, parsed.pkg.height] as [number, number]) : null;
     assertWithinTrialLimits(input.org, { resolution, priority: input.priority });
   }
-  const shas = parsed.uris.assetShas;
-  if (shas.length) {
-    const found = await db().select({ sha256: assets.sha256 }).from(assets)
-      .where(and(eq(assets.orgId, input.orgId), inArray(assets.sha256, shas)));
-    const have = new Set(found.map((f) => f.sha256));
-    // Registered via POST /uploads *and* bytes actually PUT to R2.
-    const present = await Promise.all(shas.map((s) => (have.has(s) ? objectExists(assetKey(s)) : false)));
-    const missing = shas.filter((_, i) => !present[i]).map((s) => `asset://${s}`);
-    if (missing.length) throw new ApiError("asset_missing", undefined, { missing });
-  }
+  // Registered by this org via POST /uploads *and* bytes uploaded + hash-verified (lib/assets.ts).
+  const verified = await ensureVerifiedAssets(input.orgId, parsed.uris.assetShas);
 
   await assertCanRender(input.orgId);
   const estimate = estimateFor(parsed, input.priority);
@@ -159,7 +152,7 @@ export async function submitJob(input: SubmitInput): Promise<Job> {
   }).returning();
 
   const inputs: Record<string, string> = {};
-  await Promise.all(shas.map(async (s) => { inputs[`asset://${s}`] = await presignGet(assetKey(s), 6 * 3600); }));
+  await Promise.all(verified.map(async ({ sha, key }) => { inputs[`asset://${sha}`] = await presignGet(key, 6 * 3600); }));
 
   try {
     const res = await fetch(env("MODAL_SUBMIT_URL"), {
@@ -306,6 +299,8 @@ export async function applyWorkerEvent(ev: WorkerEvent) {
       return { ok: true, ...split };
     }
     case "warning":
+      // Deliveries can repeat (retries, replays inside the signature window): keep each message once.
+      if ((job.warnings as string[] | null)?.includes(ev.message)) return { duplicate: true };
       await db().update(jobs).set({ warnings: sql`${jobs.warnings} || ${JSON.stringify([ev.message])}::jsonb` }).where(eq(jobs.id, job.id));
       return { ok: true };
     case "status":

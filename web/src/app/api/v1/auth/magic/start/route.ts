@@ -2,16 +2,21 @@ import { z } from "zod";
 import { api, readJson } from "@/lib/http";
 import { workos } from "@/lib/workos";
 import { ApiError } from "@/lib/errors";
+import { clientIp } from "@/lib/clientip";
+import { rateLimit } from "@/lib/ratelimit";
 
 const Body = z.object({ email: z.email() });
 
 /** Email a 6-digit Magic Auth code. Works for new and existing users. */
 export const POST = api(async (req) => {
   const { email } = Body.parse(await readJson(req));
+  const ip = clientIp(req);
+  await rateLimit("magic_start_ip", ip);
+  await rateLimit("magic_start_email", email.toLowerCase());
   try {
     await workos().userManagement.createMagicAuth({
       email: email.toLowerCase(),
-      ipAddress: req.headers.get("x-forwarded-for")?.split(",")[0]?.trim(),
+      ipAddress: ip,
       userAgent: req.headers.get("user-agent") ?? undefined,
     });
   } catch (err) {

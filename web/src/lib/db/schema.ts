@@ -70,8 +70,19 @@ export const assets = pgTable("assets", {
   filename: text("filename").notNull(),
   size: bigint("size", { mode: "number" }).notNull(),
   contentType: text("content_type").notNull(),
+  // Set once this org's uploaded bytes have been hashed and matched sha256 (see lib/assets.ts).
+  // Until then the asset can't be used: knowing a hash isn't proof of having the file.
+  verifiedAt: timestamp("verified_at", { withTimezone: true }),
   createdAt: createdAt(),
 }, (t) => [primaryKey({ columns: [t.orgId, t.sha256] })]);
+
+/** Fixed-window request counters for rate limiting (keys are hashed; see lib/ratelimit.ts). */
+export const rateLimits = pgTable("rate_limits", {
+  bucket: text("bucket").notNull(),
+  key: text("key").notNull(),
+  windowStart: timestamp("window_start", { withTimezone: true }).notNull(),
+  count: bigint("count", { mode: "number" }).notNull().default(0),
+}, (t) => [primaryKey({ columns: [t.bucket, t.key, t.windowStart] }), index("rate_limits_window_idx").on(t.windowStart)]);
 
 export type JobOutput = {
   name: string;

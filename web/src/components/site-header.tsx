@@ -14,8 +14,9 @@ export function SiteHeader() {
           <a href="https://github.com/vochsel/renda" className="hover:text-foreground">GitHub</a>
         </nav>
         <div className="ml-auto flex items-center gap-2">
-          <Button asChild variant="ghost" size="sm"><Link href="/sign-in">Sign in</Link></Button>
-          <Button asChild size="sm"><Link href="/dashboard">Dashboard</Link></Button>
+          {/* No prefetch: signed-out, both redirect to WorkOS, which a background fetch can't follow. */}
+          <Button asChild variant="ghost" size="sm"><Link href="/sign-in" prefetch={false}>Sign in</Link></Button>
+          <Button asChild size="sm"><Link href="/dashboard" prefetch={false}>Dashboard</Link></Button>
         </div>
       </div>
     </header>

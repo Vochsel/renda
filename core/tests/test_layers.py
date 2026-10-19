@@ -178,3 +178,47 @@ def test_layers_compose_with_texture_overrides_and_bake(tmp_path):
     pkg = load_package(flat)
     assert pkg.output.format == "glb" and pkg.output.bake.mode == "ao" and pkg.output.bake.size == 1024
     assert pkg.scene.textureOverrides[0].match.material == "/label/i"
+
+
+def test_safe_fetch_total_deadline_stops_slow_drip(monkeypatch):
+    """A server trickling bytes never trips the per-recv timeout; the whole fetch must still give up."""
+    import http.client
+    import threading
+    import time
+
+    import renda.netsafe as ns
+
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+    stop = threading.Event()
+
+    def drip():
+        conn, _ = srv.accept()
+        conn.recv(4096)
+        conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n")
+        while not stop.is_set():
+            try:
+                conn.sendall(b" ")
+            except OSError:
+                break
+            time.sleep(0.05)
+        conn.close()
+
+    threading.Thread(target=drip, daemon=True).start()
+
+    class PlainPinned(http.client.HTTPConnection):  # same pinning, no TLS, for the local test server
+        def __init__(self, host, ip, port_, timeout):
+            super().__init__(ip, port, timeout=timeout)
+
+    monkeypatch.setattr(ns, "_PinnedHTTPSConnection", PlainPinned)
+    monkeypatch.setattr(ns, "_resolve_public", lambda host, p: "127.0.0.1")
+    t0 = time.monotonic()
+    try:
+        with pytest.raises((TimeoutError, OSError)):
+            safe_fetch_text("https://slow.example/a.json", timeout=1.0, total_timeout=0.6)
+    finally:
+        stop.set()
+        srv.close()
+    assert time.monotonic() - t0 < 3

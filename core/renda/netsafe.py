@@ -11,6 +11,7 @@ import http.client
 import ipaddress
 import socket
 import ssl
+import time
 import urllib.parse
 
 from .layers import LIMITS
@@ -59,7 +60,18 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
         self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
 
 
-def safe_fetch_text(url: str, *, timeout: float = 10.0, max_bytes: int = LIMITS["max_bytes"], max_redirects: int = 3) -> str:
+def safe_fetch_text(url: str, *, timeout: float = 10.0, max_bytes: int = LIMITS["max_bytes"], max_redirects: int = 3,
+                    total_timeout: float = 30.0) -> str:
+    # `timeout` bounds each socket operation; `total_timeout` bounds the whole fetch, redirects included,
+    # so a server dripping one byte at a time can't hold the request open.
+    deadline = time.monotonic() + total_timeout
+
+    def remaining() -> float:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError(f"fetch exceeded {total_timeout:g}s")
+        return min(timeout, left)
+
     current = url
     for _ in range(max_redirects + 1):
         u = urllib.parse.urlsplit(current)
@@ -80,7 +92,7 @@ def safe_fetch_text(url: str, *, timeout: float = 10.0, max_bytes: int = LIMITS[
             ip = host
         else:
             ip = _resolve_public(host, port)
-        conn = _PinnedHTTPSConnection(host, ip, port, timeout)
+        conn = _PinnedHTTPSConnection(host, ip, port, remaining())
         try:
             path = urllib.parse.urlunsplit(("", "", u.path or "/", u.query, ""))
             conn.request("GET", path, headers={"User-Agent": "renda-layers/1", "Accept": "application/json"})
@@ -96,10 +108,20 @@ def safe_fetch_text(url: str, *, timeout: float = 10.0, max_bytes: int = LIMITS[
             length = int(r.getheader("Content-Length") or 0)
             if length > max_bytes:
                 raise ValueError(f"response is {length} bytes (limit {max_bytes})")
-            body = r.read(max_bytes + 1)
-            if len(body) > max_bytes:
-                raise ValueError(f"response exceeds {max_bytes} bytes")
-            return body.decode("utf-8")
+            chunks: list[bytes] = []
+            size = 0
+            while True:
+                left = remaining()  # raises once the whole-fetch budget is spent
+                if conn.sock is not None:
+                    conn.sock.settimeout(left)
+                chunk = r.read1(min(65536, max_bytes + 1 - size))  # read1: return what has arrived
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > max_bytes:
+                    raise ValueError(f"response exceeds {max_bytes} bytes")
+                chunks.append(chunk)
+            return b"".join(chunks).decode("utf-8")
         finally:
             conn.close()
     raise ValueError("too many redirects")
