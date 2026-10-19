@@ -98,6 +98,12 @@ def _http_download(url: str, dest: Path) -> None:
                 f.write(block)
 
 
+def _safe_download(url: str, dest: Path) -> None:
+    from renda_worker.netsafe import safe_download
+
+    safe_download(url, dest)
+
+
 def _sha256(path: Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -132,11 +138,14 @@ class AssetCache:
         scratch: Path | None = None,
         defer_commit: bool = False,
         clock: Callable[[], float] | None = None,
+        download_untrusted: Downloader | None = None,
     ):
         self.root = Path(root)
         self.inputs = {k: str(v) for k, v in inputs.items()}
         self.hints = dict(hints or {})
         self.download = download
+        # User-supplied https:// URLs (not our presigned R2 links) go through the SSRF-safe fetcher.
+        self.download_untrusted = download_untrusted or _safe_download
         self.on_new = on_new
         # Downloads land on local disk first (the Volume is network-backed: many small writes are slow),
         # then move into the Volume in one copy.
@@ -195,7 +204,9 @@ class AssetCache:
         os.close(fd)
         tmp_path = Path(tmp)
         try:
-            self.download(url, tmp_path)
+            # asset:// → our own presigned R2 URL: fast parallel/ranged download, then hash-verified.
+            # Plain https:// came from the user: SSRF-safe fetch (public IPs only, size/time caps).
+            (self.download if verify else self.download_untrusted)(url, tmp_path)
             if verify and _sha256(tmp_path) != key:
                 raise ValueError(f"hash mismatch for {uri}")
             target = d / name

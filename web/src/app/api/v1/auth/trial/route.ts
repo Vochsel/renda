@@ -1,13 +1,13 @@
 import { api } from "@/lib/http";
 import { createTrial, trialLimits } from "@/lib/trials";
+import { clientIp } from "@/lib/clientip";
 
 /**
  * Anonymous, claimable trial: an API key with a few free render-minutes, no signup.
  * The human opens `claimUrl` later to keep the workspace (and its renders).
  */
 export const POST = api(async (req) => {
-  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? req.headers.get("x-real-ip");
-  const t = await createTrial(ip);
+  const t = await createTrial(clientIp(req));
   return Response.json(
     {
       status: "ok",

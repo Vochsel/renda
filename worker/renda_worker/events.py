@@ -12,11 +12,18 @@ from typing import Any, Callable
 log = logging.getLogger("renda.events")
 
 SIGNATURE_HEADER = "x-renda-signature"
+TIMESTAMP_HEADER = "x-renda-timestamp"
 IDEMPOTENCY_HEADER = "idempotency-key"
 
 
 def sign(body: bytes, secret: str) -> str:
+    """Legacy untimed signature (still verified by the server during rollouts)."""
     return "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+
+
+def sign_timed(body: bytes, timestamp: int, secret: str) -> str:
+    """`v1=` HMAC over "<timestamp>.<body>"; the server rejects timestamps outside ±5 minutes."""
+    return "v1=" + hmac.new(secret.encode(), f"{timestamp}.".encode() + body, hashlib.sha256).hexdigest()
 
 
 def verify(body: bytes, secret: str, signature: str) -> bool:
@@ -49,6 +56,7 @@ class EventSink:
         poster: Poster | None = None,
         attempts: int = 5,
         sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.time,
     ):
         self.job_id = job_id
         self.callback_url = callback_url
@@ -56,15 +64,19 @@ class EventSink:
         self.poster = poster or _requests_poster
         self.attempts = attempts
         self.sleep = sleep
+        self.clock = clock
 
     def emit(self, type: str, idempotency_key: str | None = None, **fields: Any) -> bool:
         event = {"jobId": self.job_id, "type": type, **{k: v for k, v in fields.items() if v is not None}}
         body = encode(event)
-        headers = {"content-type": "application/json", SIGNATURE_HEADER: sign(body, self.secret)}
+        base = {"content-type": "application/json"}
         if idempotency_key:
-            headers[IDEMPOTENCY_HEADER] = idempotency_key
+            base[IDEMPOTENCY_HEADER] = idempotency_key
         delay = 0.5
         for attempt in range(1, self.attempts + 1):
+            # Re-signed per attempt: retries after backoff carry a fresh timestamp.
+            ts = int(self.clock())
+            headers = {**base, TIMESTAMP_HEADER: str(ts), SIGNATURE_HEADER: sign_timed(body, ts, self.secret)}
             try:
                 status = self.poster(self.callback_url, body, headers)
                 if status < 400:

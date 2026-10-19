@@ -9,7 +9,11 @@ export function api<C>(handler: Handler<C>): Handler<C> {
     try {
       return await handler(req, ctx);
     } catch (e) {
-      if (e instanceof ApiError) return Response.json(e.toBody(), { status: e.status });
+      if (e instanceof ApiError) {
+        const retryAfter = e.extra.retryAfter;
+        const headers = typeof retryAfter === "number" ? { "retry-after": String(retryAfter) } : undefined;
+        return Response.json(e.toBody(), { status: e.status, headers });
+      }
       if (e instanceof ZodError) {
         const err = new ApiError("invalid_request", undefined, { issues: zodIssues(e) });
         return Response.json(err.toBody(), { status: err.status });

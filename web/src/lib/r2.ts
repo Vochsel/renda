@@ -1,4 +1,7 @@
-import { HeadObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { createHash } from "node:crypto";
+import {
+  CopyObjectCommand, DeleteObjectCommand, HeadObjectCommand, GetObjectCommand, PutObjectCommand, S3Client,
+} from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { env } from "./env";
 
@@ -17,6 +20,24 @@ export function s3(): S3Client {
 const bucket = () => env("R2_BUCKET");
 
 export const assetKey = (sha256: string) => `assets/${sha256}`;
+/** Where an org uploads bytes it hasn't proven yet; promoted to assetKey() after the hash checks out. */
+export const stagingKey = (orgId: string, sha256: string) => `staging/${orgId}/${sha256}`;
+
+/** sha256 (hex) of an object's bytes, streamed. */
+export async function sha256OfObject(key: string): Promise<string> {
+  const res = await s3().send(new GetObjectCommand({ Bucket: bucket(), Key: key }));
+  const hash = createHash("sha256");
+  for await (const chunk of res.Body as AsyncIterable<Uint8Array>) hash.update(chunk);
+  return hash.digest("hex");
+}
+
+export async function copyObject(from: string, to: string): Promise<void> {
+  await s3().send(new CopyObjectCommand({ Bucket: bucket(), CopySource: `${bucket()}/${from}`, Key: to }));
+}
+
+export async function deleteObject(key: string): Promise<void> {
+  await s3().send(new DeleteObjectCommand({ Bucket: bucket(), Key: key }));
+}
 export const outputPrefix = (jobId: string) => `outputs/${jobId}/`;
 
 export async function objectExists(key: string): Promise<boolean> {

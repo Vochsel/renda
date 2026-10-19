@@ -87,6 +87,8 @@ class Deps:
     run_encode: Callable[[EncodeTask], dict[str, Any]] | None = None
     run_train: Callable[["dispatch.TrainTask"], dict[str, Any]] | None = None
     download: Callable[[str, Path], None] | None = None
+    # Fetcher for user-supplied https:// URLs; None → the SSRF-safe default in assets.py.
+    download_untrusted: Callable[[str, Path], None] | None = None
     on_new_asset: Callable[[], None] | None = None
     clock: Callable[[], float] = time.monotonic
     work_root: Path = field(default_factory=lambda: Path(tempfile.gettempdir()) / "renda-work")
@@ -94,6 +96,8 @@ class Deps:
 
 def _asset_cache(deps: Deps, job_package: dict, inputs: dict, defer_commit: bool = False) -> AssetCache:
     kw = {"download": deps.download} if deps.download else {}
+    if deps.download_untrusted:
+        kw["download_untrusted"] = deps.download_untrusted
     return AssetCache(deps.asset_root, inputs, name_hints(job_package), on_new=deps.on_new_asset,
                       scratch=deps.work_root / ".downloads", defer_commit=defer_commit, clock=deps.clock, **kw)
 

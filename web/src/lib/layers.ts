@@ -1,9 +1,8 @@
-import { and, eq } from "drizzle-orm";
 import { flattenPackage, isLayered, LAYER_LIMITS, LayerError, type FlattenResult } from "@rendahq/spec";
 import { safeFetchText } from "@rendahq/spec/node";
-import { db, schema } from "./db";
 import { ApiError } from "./errors";
-import { assetKey, getObjectText } from "./r2";
+import { getObjectText } from "./r2";
+import { ensureVerifiedAssets } from "./assets";
 
 /**
  * Flatten a submitted package's `extends` / package references on the server. Layers may be
@@ -19,10 +18,14 @@ export async function flattenForOrg(orgId: string, input: unknown): Promise<Flat
       label: "<submitted>",
       fetchHttps: (url) => safeFetchText(url, { maxBytes: LAYER_LIMITS.maxBytes }),
       readAsset: async (sha) => {
-        const [owned] = await db().select({ sha: schema.assets.sha256 }).from(schema.assets)
-          .where(and(eq(schema.assets.orgId, orgId), eq(schema.assets.sha256, sha))).limit(1);
-        if (!owned) throw new Error(`asset://${sha} isn't one of this account's uploads`);
-        return getObjectText(assetKey(sha), LAYER_LIMITS.maxBytes);
+        // Same rule as job inputs: only this account's uploads, hash-verified.
+        let key: string;
+        try {
+          [{ key }] = await ensureVerifiedAssets(orgId, [sha]);
+        } catch {
+          throw new Error(`asset://${sha} isn't one of this account's verified uploads`);
+        }
+        return getObjectText(key, LAYER_LIMITS.maxBytes);
       },
     });
   } catch (e) {

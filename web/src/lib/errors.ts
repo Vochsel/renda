@@ -9,6 +9,7 @@ export const ERRORS = {
   not_found: { status: 404, message: "Not found.", hint: "Check the id. GET /api/v1/jobs lists your jobs." },
   invalid_request: { status: 400, message: "Invalid request body.", hint: "See `issues` for the failing paths. The package schema is at /api/v1/schema.json and examples at /docs." },
   invalid_package: { status: 422, message: "The Renda package is invalid.", hint: "Fix the fields listed in `issues`. Validate locally with `renda validate scene.renda.json`." },
+  asset_mismatch: { status: 422, message: "Uploaded bytes don't match their sha256.", hint: "Recompute the sha256 of the exact file bytes, POST /api/v1/uploads again and PUT the same bytes to the new `uploadUrl`." },
   asset_missing: { status: 422, message: "The package references assets that haven't been uploaded.", hint: "POST /api/v1/uploads {filename,size,sha256} for each file, PUT the bytes to `uploadUrl`, then use the returned `assetUri` (asset://<sha256>) in the package." },
   local_uri: { status: 422, message: "The package references local file paths.", hint: "Upload local files first (POST /api/v1/uploads) and replace paths with asset://<sha256>, or use the renda CLI / MCP which does this automatically." },
   layer_error: { status: 422, message: "A package layer couldn't be resolved.", hint: "See `layer` and `field` for which file and field; layers must be https:// URLs or asset:// URIs here (the CLI/MCP flatten local layers before upload). POST /api/v1/packages/flatten shows the composed package." },

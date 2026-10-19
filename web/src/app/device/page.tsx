@@ -13,6 +13,7 @@ const RESULT: Record<string, string> = {
   approved: "Approved. You can return to your terminal — it will pick up the key automatically.",
   denied: "Denied. The device did not get access.",
   invalid: "That code is invalid, expired or already used. Start the login again in your terminal.",
+  rate_limited: "Too many attempts. Wait a few minutes, then try again.",
 };
 
 export default async function DevicePage({ searchParams }: PageProps<"/device">) {

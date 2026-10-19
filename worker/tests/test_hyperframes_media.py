@@ -28,6 +28,8 @@ def test_media_variables_are_localized(make_deps, recorder):
              "https://cdn.test/logo.png": b"\x89PNG\r\n\x1a\n" + b"0" * 32}
     deps = make_deps(FakeCore())
     deps.download = lambda url, dest: dest.write_bytes(blobs[url])
+    untrusted = []
+    deps.download_untrusted = lambda url, dest: (untrusted.append(url), dest.write_bytes(blobs[url]))
     seen = {}
 
     def fake_run(cmd, cwd, timeout):
@@ -48,6 +50,8 @@ def test_media_variables_are_localized(make_deps, recorder):
                             "title": "Hello", "link": "https://renda.dev", "n": 3}
     assert seen["files"]["renda-inputs/clipUrl.mp4"] == clip
     assert seen["files"]["renda-inputs/logo.png"].startswith(b"\x89PNG")
+    # user https:// media goes through the SSRF-safe fetcher; our presigned R2 links don't
+    assert untrusted == ["https://cdn.test/logo.png"]
 
 
 def test_sniff_and_url_ext(tmp_path):

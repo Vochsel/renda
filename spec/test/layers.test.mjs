@@ -81,7 +81,7 @@ test("transformMatrix matches core's trs (T·Rz·Ry·Rx·S, column-major)", () =
 
 test("isPublicAddress blocks private, loopback, link-local and mapped ranges", () => {
   for (const ip of ["127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0",
-    "::1", "::", "fe80::1", "fc00::1", "fd12::3", "::ffff:127.0.0.1", "::ffff:10.0.0.1", "64:ff9b::a00:1", "ff02::1", "2002:a00:1::"]) {
+    "::1", "::", "fe80::1", "fc00::1", "fd12::3", "::ffff:127.0.0.1", "::ffff:10.0.0.1", "64:ff9b::a00:1", "ff02::1", "2002:a00:1::", "2001:0:4136:e378:8000:63bf:3fff:fdd2"]) {
     assert.equal(isPublicAddress(ip), false, ip);
   }
   for (const ip of ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111", "::ffff:8.8.8.8", "93.184.216.34"]) {

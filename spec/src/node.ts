@@ -68,6 +68,7 @@ export function isPublicAddress(ip: string): boolean {
   if ((g[0] & 0xff00) === 0xff00) return false; // multicast
   if (g[0] === 0x2001 && g[1] === 0x0db8) return false; // documentation
   if (g[0] === 0x2002) return v4Public(embedded(g[1], g[2])); // 6to4
+  if (g[0] === 0x2001 && g[1] === 0x0000) return false; // Teredo tunnels (2001::/32)
   return true;
 }
 
@@ -75,6 +76,8 @@ export interface SafeFetchOptions {
   timeoutMs?: number;
   maxBytes?: number;
   maxRedirects?: number;
+  /** Whole-fetch budget incl. redirects (timeoutMs only bounds socket idle time). Default 30 s. */
+  totalTimeoutMs?: number;
   /** For tests: allow these hostnames to resolve to non-public addresses. */
   allowHosts?: string[];
 }
@@ -99,6 +102,7 @@ export async function safeFetchText(url: string, opts: SafeFetchOptions = {}): P
   const timeoutMs = opts.timeoutMs ?? 10_000;
   const maxBytes = opts.maxBytes ?? LAYER_LIMITS.maxBytes;
   const allow = new Set(opts.allowHosts ?? []);
+  const deadline = Date.now() + (opts.totalTimeoutMs ?? 30_000);
   let current = url;
   for (let hop = 0; hop <= (opts.maxRedirects ?? 3); hop++) {
     const u = new URL(current);
@@ -130,6 +134,10 @@ export async function safeFetchText(url: string, opts: SafeFetchOptions = {}): P
       });
       req.on("timeout", () => req.destroy(new Error(`timed out after ${timeoutMs} ms`)));
       req.on("error", fail);
+      // A server that drips bytes never trips the idle timeout; cap the whole exchange too.
+      const left = deadline - Date.now();
+      const timer = setTimeout(() => req.destroy(new Error("fetch exceeded its total time budget")), Math.max(0, left));
+      req.on("close", () => clearTimeout(timer));
     });
     if (res.status >= 300 && res.status < 400) {
       if (!res.location) throw new Error(`HTTP ${res.status} without a Location header`);

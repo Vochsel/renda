@@ -5,11 +5,14 @@ import { api, readJson } from "@/lib/http";
 import { ApiError } from "@/lib/errors";
 import { hashApiKey } from "@/lib/apikeys";
 import { createApiKey } from "@/lib/accounts";
+import { clientIp } from "@/lib/clientip";
+import { rateLimit } from "@/lib/ratelimit";
 
 const { deviceCodes } = schema;
 const Body = z.object({ deviceCode: z.string().min(10) });
 
 export const POST = api(async (req) => {
+  await rateLimit("device_token_ip", clientIp(req));
   const { deviceCode } = Body.parse(await readJson(req));
   const hash = hashApiKey(deviceCode);
   const [row] = await db().select().from(deviceCodes).where(eq(deviceCodes.deviceCodeHash, hash));

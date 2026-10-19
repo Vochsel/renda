@@ -3,6 +3,8 @@ import { api, readJson } from "@/lib/http";
 import { ApiError } from "@/lib/errors";
 import { env } from "@/lib/env";
 import { workos } from "@/lib/workos";
+import { clientIp } from "@/lib/clientip";
+import { rateLimit } from "@/lib/ratelimit";
 import { createApiKey, ensureAccount, type WorkosUserLike } from "@/lib/accounts";
 
 const Body = z.object({
@@ -16,6 +18,10 @@ type RawUser = { id: string; email: string; first_name?: string | null; last_nam
 /** Exchange the emailed code for an API key (creating user + org on first sign-in). */
 export const POST = api(async (req) => {
   const { email, code, keyName } = Body.parse(await readJson(req));
+  // 6-digit codes: cap guesses per network and per address (WorkOS also limits attempts per code).
+  const ip = clientIp(req);
+  await rateLimit("magic_verify_ip", ip);
+  await rateLimit("magic_verify_email", email.toLowerCase());
   let user: WorkosUserLike;
   let workosOrgId: string | undefined;
   try {
@@ -23,7 +29,7 @@ export const POST = api(async (req) => {
       clientId: env("WORKOS_CLIENT_ID"),
       email: email.toLowerCase(),
       code,
-      ipAddress: req.headers.get("x-forwarded-for")?.split(",")[0]?.trim(),
+      ipAddress: ip,
       userAgent: req.headers.get("user-agent") ?? undefined,
     });
     user = res.user;

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { api, readJson } from "@/lib/http";
 import { authenticate } from "@/lib/auth";
+import { rateLimit } from "@/lib/ratelimit";
 import { listJobs, serializeJob, submitJob } from "@/lib/jobs";
 
 const Body = z.object({
@@ -11,7 +12,8 @@ const Body = z.object({
 });
 
 export const POST = api(async (req) => {
-  const { org, user } = await authenticate(req);
+  const { keyId, org, user } = await authenticate(req);
+  await rateLimit("api_write_key", keyId);
   const b = Body.parse(await readJson(req));
   const job = await submitJob({
     orgId: org.id,
