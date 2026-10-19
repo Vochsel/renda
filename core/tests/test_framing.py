@@ -95,3 +95,85 @@ json.dump(res, open({str(out)!r}, "w"))
         ref = frame_bounds(np.array(lo), np.array(hi), np.array([0.0, 0, 1]), 35, 16 / 9, 20, 35, 0.1, orbit=orbit)
         assert np.allclose(got[str(orbit)]["pos"], ref.position, atol=1e-3), orbit
         assert np.allclose(got[str(orbit)]["tgt"], ref.target, atol=1e-3), orbit
+
+
+def _stage_for_box(lo, hi):
+    """A Stage whose bounds are the box (one mesh with the box corners)."""
+    from renda.ir.stage import Mesh, Stage
+
+    pts = _corners(np.array(lo, float), np.array(hi, float)).astype(np.float32)
+    faces = np.array([[0, 1, 2], [4, 5, 6]], dtype=np.uint32)
+    return Stage(meshes=[Mesh(name="box", points=pts, indices=faces)], up_axis="Y")
+
+
+def _resolved(lo, hi, res, camera, post=None, turntable=False):
+    from renda.ir.camera import resolve_cameras
+    from renda.spec import load_package
+
+    d = {"scene": {"root": "x.glb"}, "camera": camera, "render": {"resolution": list(res)}}
+    if post:
+        d["post"] = post
+    if turntable:
+        d["animation"] = {"frames": [1, 24], "turntable": {"revolutions": 1}}
+    pkg = load_package(d)
+    frames = list(range(1, 25)) if turntable else [1]
+    return pkg, resolve_cameras(pkg, _stage_for_box(lo, hi), frames)
+
+
+@pytest.mark.parametrize("lo,hi", BOXES)
+@pytest.mark.parametrize("res", [(1920, 1080), (960, 600), (1000, 1000), (1080, 1920), (2390, 1000)])
+@pytest.mark.parametrize("focal", [24, 85, 200])
+@pytest.mark.parametrize("turntable", [False, True])
+def test_long_lens_auto_framing_keeps_subject_in_frame(lo, hi, res, focal, turntable):
+    camera = {"mode": "auto", "elevationDeg": 10, "azimuthDeg": 30, "padding": 0.1, "lens": {"focalLengthMm": focal}}
+    _, cams = _resolved(lo, hi, res, camera, turntable=turntable)
+    aspect = res[0] / res[1]
+    for cam in cams.values():
+        assert cam.focal_mm == focal
+        x, y = _ndc(cam, _corners(np.array(lo, float), np.array(hi, float)), aspect)
+        assert max(np.abs(x).max(), np.abs(y).max()) <= 1.0 - 0.04  # inside, with margin
+
+
+def _displayed(x, y, res, distortion, ca):
+    """Where post._lens_remap shows content that the camera put at NDC (x, y) — worst channel."""
+    W, H = res
+    cx, cy = (W - 1) / 2, (H - 1) / 2
+    norm = math.hypot(cx, cy)
+    dx, dy = x * cx / norm, y * cy / norm
+    s = math.hypot(dx, dy)
+    if s == 0:
+        return 0.0, 0.0
+    k = -0.25 * distortion
+    worst = 0.0
+    for shift in (1 + 0.01 * ca, 1.0, 1 - 0.01 * ca):
+        def src(r):
+            sc = 1 + k * r * r
+            if k > 0:
+                sc /= 1 + k
+            return r * sc * shift
+        # solve src(R) = s where src is increasing (pincushion turns back at R = 1/sqrt(3|k|))
+        lo_r, hi_r = 0.0, min(4.0, 1 / math.sqrt(-3 * k)) if k < 0 else 4.0
+        if src(hi_r) < s:
+            return math.inf, math.inf  # pushed out of the picture entirely
+        for _ in range(60):
+            mid = (lo_r + hi_r) / 2
+            lo_r, hi_r = (mid, hi_r) if src(mid) < s else (lo_r, mid)
+        worst = max(worst, lo_r / s)
+    return x * worst, y * worst
+
+
+@pytest.mark.parametrize("distortion,ca", [(1.0, 0.0), (-1.0, 0.0), (0.5, 1.0), (-0.3, 0.6), (0.0, 1.0)])
+@pytest.mark.parametrize("res", [(960, 600), (1080, 1920)])
+def test_auto_framing_compensates_post_lens_distortion(distortion, ca, res):
+    lo, hi = BOXES[0]
+    camera = {"mode": "auto", "elevationDeg": 10, "azimuthDeg": 30, "padding": 0.02, "lens": {"focalLengthMm": 85}}
+    _, cams = _resolved(lo, hi, res, camera, post={"lensDistortion": distortion, "chromaticAberration": ca})
+    cam = cams[1]
+    x, y = _ndc(cam, _corners(np.array(lo, float), np.array(hi, float)), res[0] / res[1])
+    shown = [_displayed(a, b, res, distortion, ca) for a, b in zip(x, y)]
+    assert max(max(abs(a), abs(b)) for a, b in shown) <= 1.0 + 1e-6
+    # the camera still renders with the lens's real field of view
+    from renda.lens import effective_fov_y
+    from renda.spec import Lens
+
+    assert cam.fov_y_deg == pytest.approx(effective_fov_y(35, Lens(focalLengthMm=85), res[0] / res[1]))

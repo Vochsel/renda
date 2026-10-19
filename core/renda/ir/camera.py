@@ -177,8 +177,15 @@ def resolve_cameras(pkg: RendaPackage, stage: Stage, frames: list[float], warnin
                 base.fov_y_deg = effective_fov_y(base.fov_y_deg, lens, aspect)
     else:
         assert isinstance(cam, AutoCamera)
-        base = frame_bounds(lo, hi, up, effective_fov_y(cam.fovDeg, lens, aspect), aspect, cam.elevationDeg,
-                            cam.azimuthDeg, cam.padding, orbit=animated)
+        from ..post import lens_magnification
+
+        fov = effective_fov_y(cam.fovDeg, lens, aspect)
+        # Post lens distortion / CA push content outwards after rendering: fit against a correspondingly
+        # narrower view, then render with the real one, so the subject stays inside the padding.
+        mag = lens_magnification(pkg.post)
+        fit_fov = math.degrees(2 * math.atan(math.tan(math.radians(fov) / 2) / mag)) if mag > 1 else fov
+        base = frame_bounds(lo, hi, up, fit_fov, aspect, cam.elevationDeg, cam.azimuthDeg, cam.padding, orbit=animated)
+        base.fov_y_deg = fov
 
     if lens is not None and base.ortho_height is None:
         base.focal_mm = lens.focalLengthMm or focal_from_fov_y(base.fov_y_deg, lens.sensorWidthMm, aspect)

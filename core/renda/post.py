@@ -220,6 +220,21 @@ def is_active(post: "Post | None", emulate_exposure: bool = False) -> bool:
     ])
 
 
+def lens_magnification(post: "Post | None") -> float:
+    """Worst-case factor by which the lens remap below pushes content away from the frame centre.
+
+    Auto framing fits the subject inside 1/this of the frame so distortion and chromatic aberration
+    can't push it out (pincushion magnifies the edges by up to 1/(1+k); barrel's corner-filling zoom
+    magnifies everything by up to 1+k; CA samples the blue channel 1% further in at ca=1)."""
+    if post is None:
+        return 1.0
+    k = -0.25 * post.lensDistortion
+    m = 1.0 / (1.0 + k) if k < 0 else 1.0 + k
+    if post.chromaticAberration:
+        m /= 1.0 - 0.01 * post.chromaticAberration
+    return m
+
+
 def _lens_remap(lin: np.ndarray, distortion: float, ca: float) -> np.ndarray:
     """Radial distortion + lateral chromatic aberration as one per-channel remap."""
     H, W = lin.shape[:2]
