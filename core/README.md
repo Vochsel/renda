@@ -49,7 +49,7 @@ Format detection checks magic bytes before the extension (`renda.formats.detect`
 | `blender-cycles` | blend usd gltf fbx obj stl ply abc | CPU / GPU (OptiX → CUDA → HIP → Metal) | adaptive sampling, OIDN/OptiX denoise, persistent data across frames |
 | `blender-eevee` | same | GPU | fast raster, good for drafts and turntables |
 | `blender-workbench` | same | GPU | clay/solid previews |
-| `mitsuba` | rir (everything else via IR) | CPU (LLVM), CUDA, Metal | depth/normal/albedo AOVs, OptiX denoise on CUDA |
+| `mitsuba` | rir (everything else via IR) | CPU (LLVM), CUDA, Metal | depth/normal/albedo AOVs, OptiX denoise on CUDA, OIDN elsewhere |
 | `threejs` | threejs, gltf, splats | headless Chromium (SwiftShader on CPU) | cheapest; AgX tonemapping like Blender; splats via Spark, mixed with meshes |
 | `gsplat` | splats | GPU (nerfstudio gsplat); `RENDA_SPLAT_BACKEND=numpy` for the CPU reference | splat-only scenes; depth/alpha passes |
 

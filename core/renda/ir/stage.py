@@ -67,7 +67,7 @@ class Mesh:
     indices: np.ndarray  # (M,3) int32 triangles
     normals: np.ndarray | None = None  # (N,3)
     uvs: np.ndarray | None = None  # (N,2)
-    colors: np.ndarray | None = None  # (N,3|4)
+    colors: np.ndarray | None = None  # (N,3|4) linear RGB(A) vertex colours
     transform: Mat4 = field(default_factory=identity)
     material: str | None = None
 

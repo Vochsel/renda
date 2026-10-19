@@ -155,9 +155,9 @@ without Hydra's weight. In `core/renda/ir/`:
   | three.js JSON | `threejs` (`.json` with `metadata.type == "Object"`, format 4.x) | pure-python `threejs.py` | BufferGeometry (incl. base64/typed arrays), MeshStandard/Physical/Basic/Lambert/Phong materials, textures (data URIs or urls), lights, cameras, Group/Mesh hierarchy |
   | OBJ (+MTL) | `obj` | trimesh | MTL → IR material |
   | STL | `stl` | trimesh | ascii + binary, default material |
-  | PLY | `ply` | trimesh | vertex colours |
+  | PLY | `ply` | trimesh | vertex colours (linear in the IR; glTF COLOR_0 on export) |
   | COLLADA | `dae` | trimesh + pycollada | |
-  | 3MF | `3mf` | trimesh | |
+  | 3MF | `3mf` | own XML reader (`threemf.py`) | basematerials + colorgroups → materials, components, build transforms |
   | FBX | `fbx` | Blender headless import → extract | no good pure-python FBX reader |
   | Alembic | `abc` | Blender headless import → extract | animated caches |
   | CAD | `step` (`.step/.stp`, ISO-10303-21 header), `iges` (`.iges/.igs`, column-73 section letters) | `ir/loaders/cad.py` via cascadio (OpenCASCADE → glTF), extra `renda[cad]` | STEP → metres with part/assembly colours; IGES → metres (OpenCASCADE always emits mm), no colours. Z-up. Tessellation: chord error 0.05% of bbox diagonal, 0.3 rad (`scene.tessellation` overrides, metres/radians), cached by content hash + tolerances. Planner treats CAD like STL product shots |
@@ -301,7 +301,7 @@ these from `jobs.outputs`; `worker/scripts/backfill_thumbs.py` fills them in for
 3. **Asset cache**: content-addressed Modal Volume; assets downloaded once per region. `.blend → .rir` extraction cached by hash.
 4. **Cold start**: slim pre-baked images, Modal memory snapshots, `scaledown_window` tuned, Cycles/OptiX kernel cache on a Volume.
 5. **Chunked fan-out**: frames split into chunks sized so scene-load overhead < 10% of chunk time; `.map()` across containers — same cost, much faster wall time.
-6. **Fewer samples, same image**: adaptive sampling + OIDN/OptiX denoise; quality presets tuned per engine; `draft` preview encouraged before `final` (skills teach agents this).
+6. **Fewer samples, same image**: adaptive sampling + OIDN/OptiX denoise (Mitsuba uses OIDN via `pyoidn` wherever OptiX isn't available, with albedo/normal guides, a box pixel filter and firefly clamping); quality presets tuned per engine; `draft` preview encouraged before `final` (skills teach agents this).
 7. **Economy priority**: longer deadline → allows cheaper class + max container reuse.
 8. **R2 storage**: zero egress fees; outputs expire after 30 days by default.
 

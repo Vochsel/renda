@@ -25,7 +25,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-mitsuba = ["mitsuba>=3.5", "drjit>=0.4.6"]
+mitsuba = ["mitsuba>=3.5", "drjit>=0.4.6", "pyoidn>=2.4"]  # pyoidn: OIDN denoising when OptiX is unavailable
 usd = ["usd-core>=24.5"]
 blender = ["bpy>=4.2"]
 threejs = ["playwright>=1.45"]

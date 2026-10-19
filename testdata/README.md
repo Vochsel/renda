@@ -31,7 +31,7 @@ uv run --project core pytest tests/test_testdata.py    # loader/validation check
 | `scene.obj` + `scene.mtl` | OBJ with MTL materials. `scene.mtl` must be **rejected** as a scene (sidecar) |
 | `scene.stl` | Binary STL, single mesh (the knot), no materials |
 | `scene_ascii.stl` | ASCII STL of the same mesh |
-| `scene.ply` | Whole scene as one mesh with height-based **vertex colours**. Read as Y-up |
+| `scene.ply` | Whole scene as one mesh with height-based **vertex colours** (shown in every engine). Read as Y-up |
 | `scene.dae` | COLLADA (Z_UP) with materials |
 | `scene.3mf` | 3MF (Z-up per spec), geometry only |
 | `scene.abc` | Alembic with 24 animated frames and a camera, no materials |
@@ -94,9 +94,8 @@ turntable. `npx hyperframes check` passes. `title-card.hyperframes.json` is the 
 
 ## Known gaps (as of the last smoke run)
 
-- PLY vertex colours only show in Mitsuba. Blender and three.js render the mesh white.
-- `scene.3mf` and `scene.abc` carry no materials: trimesh's 3MF export drops colours, and Alembic stores none.
+- `scene.abc` carries no materials (Alembic stores none), so it renders in Renda's neutral clay.
 - Blender's USD exporter scales light intensities (sun ÷4, area ×4). Renda reads USD values as written, so `scene.usda` lighting differs a little from `scene.blend`.
-- Mitsuba on macOS/CPU has no denoiser, so `draft` renders are grainy and gold shows fireflies.
+- three.js has no shadows from the environment, so it reads slightly flatter and ~5% brighter than Cycles.
 - Splats composited over Blender/Mitsuba don't receive that engine's lighting or shadows and use one expected depth per pixel, so semi-transparent splats right at a mesh surface are approximated.
 - The numpy splat rasteriser (used without CUDA) takes a few seconds per frame for ~50k splats at 720p; real captures (1–5M splats) should render on the cloud GPU path.

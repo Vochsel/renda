@@ -69,16 +69,20 @@ async function setupEnv() {
   } else if (job.env.room) {
     scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
   }
+  // Equirect maps are Y-up. Z-up scenes (STL, 3MF, Blender, STEP) keep their own axes here, so tilt the
+  // map +90° about X (its up becomes world +Z) and spin it about Z — matching Cycles and Mitsuba.
+  const rot = THREE.MathUtils.degToRad(job.env.rotationDeg);
+  const envRotation = job.env.upAxis === "Z" ? new THREE.Euler(Math.PI / 2, 0, rot, "ZXY") : new THREE.Euler(0, rot, 0);
   if (scene.environment) {
     scene.environmentIntensity = job.env.intensity;
-    scene.environmentRotation = new THREE.Euler(0, THREE.MathUtils.degToRad(job.env.rotationDeg), 0);
+    scene.environmentRotation = envRotation;
   }
   if (job.background) {
     scene.background = new THREE.Color().setRGB(...job.background, THREE.LinearSRGBColorSpace);
   } else if (job.env.visible && envTex) {
     scene.background = envTex;
     scene.backgroundIntensity = job.env.intensity;
-    scene.backgroundRotation = new THREE.Euler(0, THREE.MathUtils.degToRad(job.env.rotationDeg), 0);
+    scene.backgroundRotation = envRotation;
   } else {
     scene.background = null;
     renderer.setClearColor(0x000000, job.transparent ? 0 : 1);

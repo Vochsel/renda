@@ -240,8 +240,6 @@ class ThreeEngine(Engine):
         bg = env.background
         transparent = pkg.output.transparent
         background = None if bg in ("hdri", "transparent") or transparent else list(parse_color(bg)[:3])
-        if stage.up_axis == "Z" and hdri:
-            warnings.append("threejs: environment maps are Y-up; lighting direction may differ for Z-up scenes")
 
         lights = []
         for l in pkg.lights:
@@ -261,7 +259,8 @@ class ThreeEngine(Engine):
             "width": w * ss, "height": h * ss, "transparent": transparent or bg == "transparent",
             "background": background,
             "env": {"url": "env.hdr" if hdri else None, "room": hdri is None, "intensity": env.intensity,
-                    "rotationDeg": env.rotationDeg, "visible": bg == "hdri" and not transparent},
+                    "rotationDeg": env.rotationDeg, "visible": bg == "hdri" and not transparent,
+                    "upAxis": stage.up_axis},
             "lights": lights,
             "cameras": {str(f): c.to_json() for f, c in cams.items()},
             "textures": texture_jobs,

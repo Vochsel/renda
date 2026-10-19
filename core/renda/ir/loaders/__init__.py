@@ -7,7 +7,7 @@ from pathlib import Path
 from ...formats import detect
 from ..stage import Stage
 
-TRIMESH_FORMATS = {"obj", "stl", "ply", "dae", "3mf", "gltf"}
+TRIMESH_FORMATS = {"obj", "stl", "ply", "dae", "gltf"}
 BLENDER_FORMATS = {"blend", "fbx", "abc"}
 CAD_FORMATS = {"step", "iges"}
 
@@ -25,6 +25,10 @@ def load_stage(path: str | Path, fmt: str | None = None, cache_dir: Path | None 
         from ..rir import read_rir
 
         return read_rir(p)
+    if fmt == "3mf":
+        from . import threemf
+
+        return threemf.load(p)
     if fmt in TRIMESH_FORMATS:
         from . import mesh_formats
 

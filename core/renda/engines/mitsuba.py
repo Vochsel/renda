@@ -33,11 +33,13 @@ def _optix_denoiser_weights() -> bool:
     return any(glob.glob(p) for p in ("/usr/share/nvidia/nvoptix.bin", "/usr/lib/x86_64-linux-gnu/nvoptix.bin"))
 
 
-def _rfilter(pkg) -> dict:
-    """render.antialias → Mitsuba reconstruction filter (default: Gaussian, Mitsuba's own default)."""
+def _rfilter(pkg, for_oidn: bool = False) -> dict:
+    """render.antialias → Mitsuba reconstruction filter. Default: Gaussian (Mitsuba's own default), or a
+    box filter when OIDN will denoise — wide filters splat each sample over neighbouring pixels, and OIDN
+    (trained on per-pixel noise) leaves that correlated grain in place (measured: 6x less noise with box)."""
     aa = pkg.render.antialias
     if aa is None:
-        return {"type": "gaussian"}
+        return {"type": "box"} if for_oidn else {"type": "gaussian"}
     if aa.filter == "box":
         return {"type": "box"}
     if aa.filter == "mitchell":
@@ -166,17 +168,23 @@ class MitsubaEngine(Engine):
             elif not any(k.startswith(("light_", "pkg_light_")) for k in scene):
                 scene["environment"] = {"type": "constant", "radiance": {"type": "rgb", "value": [0.8, 0.8, 0.8]}}
 
-        if pkg.render.denoise and variant.startswith("cuda") and not _optix_denoiser_weights() and pkg.render.samples is None:
-            # No OptiX denoiser here: GPU samples are cheap, so buy the noise down with spp instead.
+        from .. import denoise as oidn
+
+        use_optix = pkg.render.denoise and variant.startswith("cuda") and hasattr(mi, "OptixDenoiser") and _optix_denoiser_weights()
+        # Without OptiX (CPU variants, or GPUs missing the driver's denoiser weights) denoise with OIDN,
+        # guided by albedo + normal AOVs.
+        use_oidn = pkg.render.denoise and not use_optix and oidn.available()
+        if pkg.render.denoise and not use_optix and not use_oidn and variant.startswith("cuda") and pkg.render.samples is None:
+            # No denoiser at all: GPU samples are cheap, so buy the noise down with spp instead.
             spp = min(spp * 4, 1024)
-            warnings.append(f"mitsuba: OptiX denoiser unavailable on this GPU; rendered at {spp} spp instead")
+            warnings.append(f"mitsuba: no denoiser available; rendered at {spp} spp instead")
         integrator: dict = {"type": "path", "max_depth": 8 if pkg.render.quality != "draft" else 5, "hide_emitters": hide_env}
         aovs = []
         if "depth" in passes or hybrid:  # hybrid: mesh depth for compositing splats
             aovs.append("depth:depth")
-        if "normal" in passes:
+        if "normal" in passes or use_oidn:
             aovs.append("normal:sh_normal")
-        if "albedo" in passes:
+        if "albedo" in passes or use_oidn:
             aovs.append("albedo:albedo")
         if aovs:
             integrator = {"type": "aov", "aovs": ",".join(aovs), "integrator": integrator}
@@ -196,7 +204,7 @@ class MitsubaEngine(Engine):
             "near_clip": float(max(first.near, 1e-4)), "far_clip": float(first.far),
             "to_world": mi.ScalarTransform4f().look_at(origin=first.position.tolist(), target=first.target.tolist(), up=first.up.tolist()),
             "film": {"type": "hdrfilm", "width": width, "height": height, "pixel_format": "rgba",
-                     "rfilter": _rfilter(pkg), "sample_border": True},
+                     "rfilter": _rfilter(pkg, for_oidn=use_oidn), "sample_border": True},
             "sampler": {"type": "independent", "sample_count": spp_sub, "seed": pkg.render.seed},
         }
         if thin_lens:
@@ -215,10 +223,10 @@ class MitsubaEngine(Engine):
         if pkg.render.denoise:
             # OptixDenoiser aborts the whole process (uncatchable) when the driver's weights file is absent,
             # as on Modal's GPUs, so check for it first.
-            if variant.startswith("cuda") and hasattr(mi, "OptixDenoiser") and _optix_denoiser_weights():
+            if use_optix:
                 denoiser = mi.OptixDenoiser(input_size=[width, height], albedo=False, normals=False, temporal=False)
-            elif spp < 128 and not variant.startswith("cuda"):
-                warnings.append(f"mitsuba: denoising needs a CUDA GPU; {variant} output is undenoised at {spp} spp")
+            elif not use_oidn and spp < 128 and not variant.startswith("cuda"):
+                warnings.append(f"mitsuba: no denoiser available (install pyoidn); {variant} output is undenoised at {spp} spp")
 
         bgc = None if bg in ("hdri", "transparent") or pkg.output.transparent else tuple(parse_color(bg)[:3])
         ext = pkg.output.format if not pkg.output.is_video else "png"
@@ -256,6 +264,12 @@ class MitsubaEngine(Engine):
             if denoiser is not None:
                 rgb = np.array(denoiser(mi.TensorXf(rgba[..., :3].copy())))
                 rgba = np.concatenate([rgb, rgba[..., 3:4]], axis=-1)
+            elif use_oidn:
+                rgb = oidn.denoise_rgb(rgba[..., :3], channels.get("albedo"), channels.get("normal"))
+                rgba = np.concatenate([rgb, rgba[..., 3:4]], axis=-1)
+                err = oidn.last_error()
+                if err:
+                    warnings.append(f"mitsuba: OIDN denoise failed ({err}); output is undenoised")
             if hybrid:  # mesh layer with alpha; composite_files adds splats + background and the final format
                 save_beauty(rgba, ctx.out_dir / frame_filename("beauty", f, "png"), "png", True, None, tm_mode, exposure)
             else:

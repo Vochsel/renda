@@ -185,13 +185,71 @@ def _mesh_objects(scene):
     return [ob for ob in scene.objects if ob.type == "MESH"]
 
 
+# Same neutral "clay" as the IR's default Material, so material-less files (STL, Alembic, PLY scans
+# without colours) look alike in every engine.
+CLAY = (0.8, 0.8, 0.8, 1.0)
+
+
+def _clay_material(name: str):
+    mat = bpy.data.materials.get(name)
+    if mat is None:
+        mat = bpy.data.materials.new(name)
+        bsdf = principled(mat)
+        bsdf.inputs["Base Color"].default_value = CLAY
+        bsdf.inputs["Roughness"].default_value = 0.5
+    return mat
+
+
+def _color_attribute_name(ob) -> str | None:
+    attrs = getattr(ob.data, "color_attributes", None)
+    if not attrs or len(attrs) == 0:
+        return None
+    active = getattr(attrs, "active_color", None)
+    return (active or attrs[0]).name
+
+
 def _ensure_materials(scene) -> None:
-    """Objects without materials get one so "*" and object-scoped overrides reach them."""
-    default = None
+    """Objects without materials get one (clay) so "*" and object-scoped overrides reach them."""
     for ob in _mesh_objects(scene):
         if len(ob.material_slots) == 0:
-            default = default or bpy.data.materials.new("renda_default")
-            ob.data.materials.append(default)
+            layer = _color_attribute_name(ob)
+            ob.data.materials.append(_clay_material(f"renda_default:{layer}" if layer else "renda_default"))
+
+
+def _socket(sockets, identifier):
+    return next(s for s in sockets if s.identifier == identifier)
+
+
+def wire_vertex_colors(scene) -> None:
+    """Show vertex colours on meshes that arrived without materials (PLY scans, Alembic Cd): multiply the
+    colour attribute into the clay Base Color. Only Renda's own default materials are touched — authored
+    materials (.blend, FBX, glTF) decide for themselves whether colour attributes mean colour."""
+    users: dict = {}
+    for ob in _mesh_objects(scene):
+        for slot in ob.material_slots:
+            if slot.material is not None:
+                users.setdefault(slot.material.name, []).append(_color_attribute_name(ob))
+    for name, attr_names in users.items():
+        if not name.startswith("renda_default:"):
+            continue
+        layer = attr_names[0]
+        if layer is None or any(a != layer for a in attr_names):
+            continue
+        mat = bpy.data.materials[name]
+        bsdf = principled(mat)
+        base = bsdf.inputs.get("Base Color") if bsdf else None
+        if base is None or base.is_linked:
+            continue
+        nt = mat.node_tree
+        vc = nt.nodes.new("ShaderNodeVertexColor")
+        vc.layer_name = layer
+        mix = nt.nodes.new("ShaderNodeMix")
+        mix.data_type = "RGBA"
+        mix.blend_type = "MULTIPLY"
+        mix.inputs["Factor"].default_value = 1.0
+        _socket(mix.inputs, "B_Color").default_value = tuple(base.default_value)
+        nt.links.new(vc.outputs["Color"], _socket(mix.inputs, "A_Color"))
+        nt.links.new(_socket(mix.outputs, "Result_Color"), base)
 
 
 def scoped_materials(scene, object_pattern, material_ok, tag: str) -> dict:
@@ -811,6 +869,8 @@ def main() -> None:
     conv = to_blender_space(fmt, job.get("source_up"))
     add_includes(job, conv)
     apply_unit_scale(scene, float(job.get("unit_scale", 1.0)))
+    _ensure_materials(scene)
+    wire_vertex_colors(scene)
     apply_material_overrides(scene, job.get("material_overrides", {}))
     wired_textures = setup_texture_overrides(scene, job.get("texture_overrides") or [], job["frames"][0])
     setup_world(scene, job["environment"])
