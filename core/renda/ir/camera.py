@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import math
 from dataclasses import dataclass
 
@@ -104,12 +106,35 @@ def frame_bounds(
     return ResolvedCamera(pos, target, up.astype(float), fov_y_deg, near=max(dist - radius * 2, dist * 0.001), far=dist + radius * 4)
 
 
+# Explicit per-frame cameras (e.g. the splat-bake rig) that replace the package's camera for every engine.
+_OVERRIDE: contextvars.ContextVar[dict[int, ResolvedCamera] | None] = contextvars.ContextVar("renda_cameras", default=None)
+
+
+@contextlib.contextmanager
+def override_cameras(cams: dict[int, ResolvedCamera]):
+    """Within the block, resolve_cameras returns these cameras (keyed by frame) for any engine."""
+    token = _OVERRIDE.set(cams)
+    try:
+        yield
+    finally:
+        _OVERRIDE.reset(token)
+
+
+def active_override(frames: list[int]) -> dict[int, ResolvedCamera] | None:
+    """The override cameras for `frames`, or None outside override_cameras()."""
+    override = _OVERRIDE.get()
+    return None if override is None else {f: override[f] for f in frames}
+
+
 def resolve_cameras(pkg: RendaPackage, stage: Stage, frames: list[int], warnings: list[str] | None = None,
                     prefer_scene: bool = False) -> dict[int, ResolvedCamera]:
     """One camera per frame, applying the package's camera mode and optional turntable.
 
     prefer_scene: use the stage's camera when it has one (see scene.native_setup).
     """
+    override = _OVERRIDE.get()
+    if override is not None:
+        return {f: override[f] for f in frames}
     warnings = warnings if warnings is not None else []
     w, h = pkg.render.resolution
     aspect = w / h

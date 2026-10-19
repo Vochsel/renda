@@ -75,7 +75,15 @@ JSON Schema at `renda://schema/v1`.
 - `transparent` = false: not allowed with jpg/mp4/gif
 - `video` `{ codec?: h264 | h265 | vp9 | prores | gif, crf = 18 }`
 - `keepFrames` = false: also return individual frames for video
+- `format: "splat"` bakes the scene into a 3D Gaussian splat instead of images:
+  - `splatFormat` = `"ply"`: `ply | spz | splat` (spz ≈ 10x smaller; .ply/.splat are written Y-down like captures, .spz Y-up)
+  - `splatBake` `{ preset = "standard", views?, resolution?, steps?, shDegree?, maxGaussians?, engine = "auto", coverage = "auto", dataset = false }`
+    - `preset`: `fast` (mesh → Gaussians directly; albedo only, seconds on CPU), `standard` (96 views at 768px + 7k
+      gsplat steps, SH2, L4), `high` (200 views at 1024px + 30k steps, SH3, L40S)
+    - `engine`: renders the training views (any mesh engine, not `gsplat`); `coverage`: `auto` (−30°…90°), `sphere`, `hemisphere`
+    - `dataset: true` also returns the views + an exact COLMAP sparse model (`sparse/0`, text + binary) as a zip
 
 ## Cross-field rules
 - Video `format` requires `animation`.
+- `format: "splat"` must not have `animation`; `splatFormat`/`splatBake` require `format: "splat"`; the scene must contain meshes.
 - `transparent: true` requires png/webp/exr/webm/mov.

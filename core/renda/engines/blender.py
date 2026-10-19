@@ -145,9 +145,10 @@ class BlenderEngine(Engine):
                       "fovDeg": first.fov_y_deg}
             tt = None
             use_scene_camera = False
-            transparent_film = True  # meshes only: the compositor adds splats and the background
-            if "depth" not in passes:
-                passes.append("depth")
+            if hybrid_stage is not None:
+                transparent_film = True  # meshes only: the compositor adds splats and the background
+                if "depth" not in passes:
+                    passes.append("depth")
         return {
             "input": str(root),
             "format": src_fmt,
@@ -183,7 +184,10 @@ class BlenderEngine(Engine):
         warnings: list[str] = []
         stage = splat_stage_for(ctx)
         if stage is None:
-            job = self.build_job(ctx, frames, warnings)
+            from ..ir.camera import active_override
+
+            # explicit rig cameras (splat bake) replace Blender's own framing
+            job = self.build_job(ctx, frames, warnings, cams=active_override(frames))
             try:
                 result = run_blender_script("render.py", job)
             finally:

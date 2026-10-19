@@ -3,6 +3,17 @@ import { parsePackage } from "@rendahq/spec";
 import { estimateHyperframes, estimateScene, frameCount } from "@/lib/estimate";
 
 describe("estimate", () => {
+  it("splat bakes: fast is a cheap CPU conversion; standard renders 96 views then trains", () => {
+    const fast = estimateScene(parsePackage({ scene: { root: "x.glb" }, output: { format: "splat", splatBake: { preset: "fast" } } }));
+    expect(fast.hardware).toBe("cpu");
+    expect(fast.estCostUsd[1]).toBeLessThan(0.01);
+    const std = estimateScene(parsePackage({ scene: { root: "x.glb" }, output: { format: "splat" } }));
+    expect(std.frames).toBe(96);
+    expect(std.hardware).toBe("gpu-l4");
+    // measured on Modal (2026-10-19): ~$0.24 for the testdata table scene
+    expect(std.estCostUsd[0]).toBeLessThan(0.24);
+    expect(std.estCostUsd[1]).toBeGreaterThan(0.24);
+  });
   it("draft still defaults to eevee on GPU and is cheap", () => {
     const e = estimateScene(parsePackage({ scene: { root: "asset://" + "a".repeat(64) }, render: { quality: "draft", resolution: [1280, 720] } }));
     expect(e.engine).toBe("blender-eevee");

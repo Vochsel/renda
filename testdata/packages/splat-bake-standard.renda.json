@@ -1,0 +1,8 @@
+{
+  "$schema": "https://renda.dev/schema/v1.json",
+  "version": 1,
+  "name": "table-splat",
+  "scene": { "root": "../scenes/scene.glb" },
+  "environment": { "hdri": "studio" },
+  "output": { "format": "splat", "splatFormat": "spz", "splatBake": { "preset": "standard", "dataset": true } }
+}

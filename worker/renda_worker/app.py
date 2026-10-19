@@ -18,7 +18,10 @@ from fastapi import Header
 
 from renda_worker import hardware as hw
 
-APP_NAME = "renda-worker"
+# RENDA_APP_NAME deploys an isolated copy (own endpoints, volumes, dicts) for development, e.g.
+# `RENDA_APP_NAME=renda-worker-dev ./deploy.sh`; production keeps the defaults.
+APP_NAME = os.environ.get("RENDA_APP_NAME", "renda-worker")
+_SUFFIX = "" if APP_NAME == "renda-worker" else "-" + APP_NAME.removeprefix("renda-worker-").removeprefix("renda-")
 WORKER_DIR = Path(__file__).resolve().parents[1]
 CORE_DIR = WORKER_DIR.parent / "core"
 
@@ -148,14 +151,20 @@ api_image = modal.Image.debian_slim(python_version="3.11").pip_install(*_WORKER_
 
 app = modal.App(APP_NAME)
 
-assets_volume = modal.Volume.from_name("renda-assets", create_if_missing=True)
-kernel_cache_volume = modal.Volume.from_name("renda-kernel-cache", create_if_missing=True)
-cancel_flags = modal.Dict.from_name("renda-cancel", create_if_missing=True)
-job_calls = modal.Dict.from_name("renda-calls", create_if_missing=True)
+assets_volume = modal.Volume.from_name(f"renda-assets{_SUFFIX}", create_if_missing=True)
+kernel_cache_volume = modal.Volume.from_name(f"renda-kernel-cache{_SUFFIX}", create_if_missing=True)
+cancel_flags = modal.Dict.from_name(f"renda-cancel{_SUFFIX}", create_if_missing=True)
+job_calls = modal.Dict.from_name(f"renda-calls{_SUFFIX}", create_if_missing=True)
 
 r2_secret = modal.Secret.from_name("renda-r2")
 worker_secret = modal.Secret.from_name("renda-worker")
-SECRETS = [r2_secret, worker_secret]
+if _SUFFIX:
+    # Containers re-import this module without the deploy-time env; carry the isolated app's name in a
+    # secret so they resolve the same volumes/dicts (production keeps its secrets unchanged).
+    WORKER_SECRETS = [worker_secret, modal.Secret.from_dict({"RENDA_APP_NAME": APP_NAME})]
+else:
+    WORKER_SECRETS = [worker_secret]
+SECRETS = [r2_secret, *WORKER_SECRETS]
 
 # Heavy imports at module scope in containers so memory snapshots capture them (core + numpy +
 # trimesh + mitsuba init is several seconds per cold start otherwise). Best effort: a module
@@ -306,6 +315,38 @@ def render_chunk_threejs(task):
     return _chunk(task, time.monotonic())
 
 
+def _train(task, started: float):
+    from renda_worker.pipeline import run_train
+
+    _reload_assets()
+    return run_train(task, _deps(task.job_id, task.callback_url, on_new_asset=assets_volume.commit), started=started)
+
+
+@app.function(image=splat_image, gpu=_L4.gpu, secrets=SECRETS,
+              volumes={ASSET_ROOT: assets_volume, CACHE_ROOT: kernel_cache_volume}, retries=_retries(),
+              **_shape_kwargs(_L4))
+def train_splat_l4(task):
+    _use_kernel_cache()
+    try:
+        return _train(task, time.monotonic())
+    finally:
+        kernel_cache_volume.commit()
+
+
+@app.function(image=splat_image, gpu=_L40S.gpu, secrets=SECRETS,
+              volumes={ASSET_ROOT: assets_volume, CACHE_ROOT: kernel_cache_volume}, retries=_retries(),
+              **_shape_kwargs(_L40S))
+def train_splat_l40s(task):
+    _use_kernel_cache()
+    try:
+        return _train(task, time.monotonic())
+    finally:
+        kernel_cache_volume.commit()
+
+
+TRAIN_FUNCTIONS = {"gpu-l4": train_splat_l4, "gpu-l40s": train_splat_l40s}
+
+
 RUNNER_FUNCTIONS = {
     "cpu": render_chunk_cpu,
     "blender-cpu": render_chunk_blender_cpu,
@@ -346,6 +387,7 @@ def orchestrate(job_body: dict):
         str(job.callbackUrl),
         run_chunks=run_chunks,
         run_encode=encode_video.remote,
+        run_train=lambda task: TRAIN_FUNCTIONS[task.hardware].remote(task),
         on_new_asset=assets_volume.commit,
     )
     try:
@@ -382,8 +424,8 @@ def _authorize(authorization: str | None) -> None:
         raise HTTPException(status_code=401, detail="invalid worker token")
 
 
-@app.function(image=api_image, secrets=[worker_secret], scaledown_window=300, cpu=0.25, memory=256)
-@modal.fastapi_endpoint(method="POST", label="renda-submit")
+@app.function(image=api_image, secrets=WORKER_SECRETS, scaledown_window=300, cpu=0.25, memory=256)
+@modal.fastapi_endpoint(method="POST", label=f"renda-submit{_SUFFIX}")
 def submit(body: dict, authorization: str | None = Header(default=None)):
     """POST {jobId, kind, package, priority, inputs, outputPrefix, callbackUrl} → {accepted, callId}."""
     from fastapi import HTTPException
@@ -402,8 +444,8 @@ def submit(body: dict, authorization: str | None = Header(default=None)):
     return {"accepted": True, "callId": call.object_id}
 
 
-@app.function(image=api_image, secrets=[worker_secret], scaledown_window=300, cpu=0.25, memory=256)
-@modal.fastapi_endpoint(method="POST", label="renda-cancel")
+@app.function(image=api_image, secrets=WORKER_SECRETS, scaledown_window=300, cpu=0.25, memory=256)
+@modal.fastapi_endpoint(method="POST", label=f"renda-cancel{_SUFFIX}")
 def cancel(body: dict, authorization: str | None = Header(default=None)):
     """POST {jobId} → {canceled}. Sets the cooperative flag, then cancels the call tree.
     Chunk functions still report usage for time already spent (their `finally` runs on cancel)."""

@@ -28,13 +28,39 @@ def render_frames(
     """Render `frames` (usually one chunk of plan.chunks) into out_dir with plan.engine."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    engine = get_engine(plan.engine)
-    if not engine.available():
+    from .splatbake import FAST_ENGINE
+
+    engine = None if plan.engine == FAST_ENGINE else get_engine(plan.engine)
+    if engine is not None and not engine.available():
         raise RuntimeError(f"engine {plan.engine} is not available: {engine.unavailable_reason()}")
     named = with_extensions({k: Path(v) for k, v in asset_paths.items()}, Path(cache_dir or out_dir) / "named")
     t0 = time.time()
-    result = engine.render(RenderContext(plan, pkg, named, out_dir, cache_dir), frames)
+    if pkg.output.is_splat:
+        result = _splat_bake_frames(plan, pkg, named, out_dir, frames, cache_dir)
+    else:
+        result = engine.render(RenderContext(plan, pkg, named, out_dir, cache_dir), frames)
     result.seconds = time.time() - t0
+    return result
+
+
+def _splat_bake_frames(plan: RenderPlan, pkg: RendaPackage, asset_paths: dict[str, Path], out_dir: Path,
+                       frames: list[int], cache_dir: Path | None) -> RenderResult:
+    """`output.format: "splat"`: the direct (fast) bake, or one chunk of training views."""
+    from . import splatbake
+    from .ir.camera import override_cameras
+    from .scene import build_stage
+
+    settings = splatbake.BakeSettings.from_json(plan.splat_bake) if plan.splat_bake else splatbake.resolve_settings(pkg)
+    stage, warnings = build_stage(pkg, asset_paths, cache_dir)
+    if plan.engine == splatbake.FAST_ENGINE:
+        files, w = splatbake.direct_bake(stage, pkg, settings, out_dir)
+        return RenderResult(files, warnings + w, 0.0)
+    rig = splatbake.bake_rig(stage, settings)
+    vpkg = splatbake.view_package(pkg, settings)
+    with override_cameras(rig):
+        result = get_engine(plan.engine).render(RenderContext(plan, vpkg, asset_paths, out_dir, cache_dir), frames)
+    beauty = {splatbake.view_image_name(f) for f in frames}
+    result.files = [Path(f) for f in result.files if Path(f).name in beauty]  # views only; no passes
     return result
 
 
@@ -105,6 +131,31 @@ class LocalRun:
     seconds: float = 0.0
 
 
+def _run_local_splat_bake(p: RenderPlan, pkg: RendaPackage, asset_paths, out_dir: Path, t0: float, progress) -> LocalRun:
+    """Local standard/high splat bake: render the views, then refine (CUDA + gsplat required)."""
+    from .splatbake.train import cuda_available, train_bake
+
+    if not cuda_available():
+        raise RuntimeError("splat bakes with preset standard/high train on a CUDA GPU (torch + gsplat): "
+                           "add --cloud, or use --preset fast for a direct mesh → splat conversion")
+    run = LocalRun(plan=p, warnings=list(p.warnings))
+    cache_dir = Path(tempfile.mkdtemp(prefix="renda-work-"))
+    views_dir = cache_dir / "views"
+    done = 0
+    for chunk in p.chunks:
+        r = render_frames(p, pkg, asset_paths, views_dir, chunk, cache_dir)
+        run.warnings += [w for w in r.warnings if w not in run.warnings]
+        done += len(chunk)
+        if progress:
+            progress(done, len(p.frames))
+    r = train_bake(p, pkg, asset_paths, views_dir, out_dir, cache_dir)
+    run.outputs = list(r.files)
+    run.warnings += r.warnings
+    shutil.rmtree(cache_dir, ignore_errors=True)
+    run.seconds = time.time() - t0
+    return run
+
+
 def run_local(pkg: RendaPackage, base_dir: Path, out_dir: Path, priority: str = "standard", progress=None) -> LocalRun:
     """Full local pipeline: resolve assets → plan (local engines only) → render chunks → encode."""
     from . import assets as assets_mod
@@ -113,6 +164,8 @@ def run_local(pkg: RendaPackage, base_dir: Path, out_dir: Path, priority: str = 
     t0 = time.time()
     asset_paths = assets_mod.resolve(pkg, base_dir)
     p = plan(pkg, asset_paths, priority, available=set(available_engines()), engine_versions=engine_versions())
+    if p.splat_bake and p.splat_bake.get("views"):
+        return _run_local_splat_bake(p, pkg, asset_paths, Path(out_dir), t0, progress)
     out_dir = Path(out_dir)
     frames_dir = out_dir / "frames" if pkg.output.is_video else out_dir
     run = LocalRun(plan=p, warnings=list(p.warnings))

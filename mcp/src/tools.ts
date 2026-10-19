@@ -343,7 +343,8 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
   }
 
   // ---------- render ----------
-  const resolvePackage = async (args: { package?: Record<string, unknown>; file?: string; packagePath?: string; packageDir?: string; options?: StarterOpts }) => {
+  const resolvePackage = async (args: { package?: Record<string, unknown>; file?: string; packagePath?: string; packageDir?: string; options?: StarterOpts },
+    edit?: (pkg: any) => void) => {
     let pkg: any;
     let baseDir = args.packageDir ? resolve(args.packageDir) : process.cwd();
     if (args.package) pkg = args.package;
@@ -353,6 +354,10 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
       baseDir = args.packageDir ? baseDir : packageDir(args.packagePath);
     } else if (args.file) pkg = starterPackage(args.file, args.options ?? {});
     else throw new Error("Provide one of: package, packagePath, or file.");
+    if (edit) {
+      pkg = structuredClone(pkg);
+      edit(pkg);
+    }
     const v = validatePackage(pkg);
     if (!v.valid) return { issues: v.issues } as const;
     let uploaded: unknown[] = [];
@@ -415,6 +420,44 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
     }
     if (args.wait !== false && !TERMINAL_STATUSES.has(job.status)) job = await waitWithProgress(job.id, extra);
     return finishJob(job, args.includeImage !== false, r.uploaded.length ? { uploaded: r.uploaded } : undefined);
+  }));
+
+  server.registerTool("renda_bake_splat", {
+    title: "Bake a 3D scene into a Gaussian splat",
+    description: "Turn any mesh scene (glTF/GLB, .blend, USD, FBX, OBJ, STL…, with its lights/HDRI/materials) into a 3D Gaussian splat "
+      + "(.ply/.spz/.splat). preset fast: mesh → Gaussians directly (albedo only, seconds, CPU). standard (default): ~96 views rendered in "
+      + "parallel (Cycles by default) + gsplat refinement, so lighting, shadows and reflections are baked in (a few minutes, ~$0.2–0.5). "
+      + "high: 200 views, 30k steps, SH degree 3 on an L40S. dataset=true also returns the views + an exact COLMAP model as a zip. "
+      + "Check the cost first with renda_estimate on the same arguments if unsure. "
+      + (local ? "Local file paths are uploaded automatically." : "Use https:// or asset:// URIs."),
+    inputSchema: {
+      ...RenderSource,
+      preset: z.enum(["fast", "standard", "high"]).optional(),
+      splatFormat: z.enum(["ply", "spz", "splat"]).optional().describe("Output file type (default ply; spz is ~10x smaller)."),
+      views: z.number().int().min(8).max(1000).optional(),
+      steps: z.number().int().min(0).max(100000).optional(),
+      shDegree: z.number().int().min(0).max(3).optional(),
+      engine: z.enum(["auto", "blender-cycles", "blender-eevee", "blender-workbench", "mitsuba", "threejs"]).optional()
+        .describe("Engine that renders the training views."),
+      dataset: z.boolean().optional(),
+      priority: z.enum(["economy", "standard", "rush"]).optional(),
+      wait: z.boolean().optional().describe("Wait for completion (default true, up to 20 min)."),
+    },
+    annotations: { openWorldHint: true },
+  }, safe(async (args: any, extra: any) => {
+    const trial = local && !client.apiKey ? await startTrial() : undefined;
+    const r = await resolvePackage(args, (pkg) => {
+      const sb: Record<string, unknown> = { ...(pkg.output?.splatBake ?? {}) };
+      for (const k of ["preset", "views", "steps", "shDegree", "engine", "dataset"] as const) if (args[k] !== undefined) sb[k] = args[k];
+      pkg.output = { format: "splat", splatFormat: args.splatFormat ?? pkg.output?.splatFormat ?? "ply", splatBake: sb };
+      delete pkg.animation;
+    });
+    if ("issues" in r) return fail(`Invalid package: ${JSON.stringify(r.issues, null, 2)}`, "Fix the issues (see `fix`) and retry.");
+    let job = await client.createJob({ package: r.pkg, kind: "scene", priority: args.priority });
+    if (args.wait !== false && !TERMINAL_STATUSES.has(job.status)) job = await waitWithProgress(job.id, extra, 20 * 60_000);
+    const res = await finishJob(job, false, trial ? { trialStarted: { claimUrl: trial.claimUrl, freeSecondsLeft: trial.freeSecondsLeft } } : undefined);
+    if (trial) res.content[0] = { type: "text", text: (res.content[0] as { text: string }).text + `\nNo account was configured, so a free trial was started.${claimNote()}` };
+    return res;
   }));
 
   server.registerTool("renda_render_video", {

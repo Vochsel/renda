@@ -13,7 +13,7 @@ describe("tool registration", () => {
     const mcp = await connect(new RendaClient({ baseUrl: "https://x.test" }));
     const names = (await mcp.listTools()).tools.map((t) => t.name).sort();
     expect(names).toEqual([
-      "renda_billing_link", "renda_cancel_job", "renda_claim", "renda_download", "renda_estimate", "renda_get_job", "renda_init_package",
+      "renda_bake_splat", "renda_billing_link", "renda_cancel_job", "renda_claim", "renda_download", "renda_estimate", "renda_get_job", "renda_init_package",
       "renda_list_jobs", "renda_pricing", "renda_render", "renda_render_video", "renda_signup", "renda_trial", "renda_upload",
       "renda_usage", "renda_validate_package", "renda_verify", "renda_whoami",
     ]);
@@ -110,6 +110,19 @@ describe("account flow", () => {
     const r: any = await mcp.callTool({ name: "renda_render", arguments: { file: "https://h/a.glb" } });
     expect(r.isError).toBe(true);
     expect(text(r)).toContain("renda_billing_link");
+  });
+});
+
+describe("renda_bake_splat", () => {
+  it("submits output.format splat with the chosen preset and file type", async () => {
+    const f = fakeFetch(({ method, url }) => {
+      if (method === "POST" && url.endsWith("/jobs")) return { json: job({ status: "queued" }) };
+    });
+    const mcp = await connect(new RendaClient({ baseUrl: "https://x.test", apiKey: "k", fetch: f.fetch }), "remote");
+    const r: any = await mcp.callTool({ name: "renda_bake_splat", arguments: { file: "https://h/chair.glb", preset: "fast", splatFormat: "spz", wait: false } });
+    expect(r.isError).toBeFalsy();
+    const body = f.calls.find((c) => c.method === "POST" && c.url.endsWith("/jobs"))!.body;
+    expect(body.package.output).toEqual({ format: "splat", splatFormat: "spz", splatBake: { preset: "fast" } });
   });
 });
 

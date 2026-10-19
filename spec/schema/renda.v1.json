@@ -1000,6 +1000,10 @@
                 "gif",
                 "mov"
               ]
+            },
+            {
+              "type": "string",
+              "const": "splat"
             }
           ]
         },
@@ -1053,6 +1057,129 @@
           "default": false,
           "description": "Also return individual frames for video outputs.",
           "type": "boolean"
+        },
+        "splatFormat": {
+          "description": "File type for format \"splat\" (default ply).",
+          "type": "string",
+          "enum": [
+            "ply",
+            "spz",
+            "splat"
+          ]
+        },
+        "splatBake": {
+          "description": "Settings for format \"splat\".",
+          "type": "object",
+          "properties": {
+            "preset": {
+              "default": "standard",
+              "description": "fast: mesh → Gaussians directly (albedo, seconds). standard/high: + rendered views and gsplat refinement (lighting baked in).",
+              "type": "string",
+              "enum": [
+                "fast",
+                "standard",
+                "high"
+              ]
+            },
+            "views": {
+              "default": null,
+              "description": "Rendered training views (preset default when null).",
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 8,
+                  "maximum": 1000
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "resolution": {
+              "default": null,
+              "description": "Square view resolution in px.",
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 128,
+                  "maximum": 2048
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "steps": {
+              "default": null,
+              "description": "Refinement iterations.",
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 100000
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "shDegree": {
+              "default": null,
+              "description": "Spherical-harmonic degree (view-dependent colour).",
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 3
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "maxGaussians": {
+              "default": null,
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1000,
+                  "maximum": 10000000
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "engine": {
+              "default": "auto",
+              "description": "Engine that renders the training views (not gsplat).",
+              "type": "string",
+              "enum": [
+                "auto",
+                "blender-cycles",
+                "blender-eevee",
+                "blender-workbench",
+                "mitsuba",
+                "threejs",
+                "gsplat"
+              ]
+            },
+            "coverage": {
+              "default": "auto",
+              "type": "string",
+              "enum": [
+                "auto",
+                "sphere",
+                "hemisphere"
+              ]
+            },
+            "dataset": {
+              "default": false,
+              "description": "Also return the views + exact COLMAP sparse model as a zip.",
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

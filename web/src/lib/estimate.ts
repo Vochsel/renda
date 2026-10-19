@@ -92,7 +92,54 @@ export function frameCount(pkg: RendaPackage): number {
   return Math.max(1, Math.floor((b - a) / pkg.animation.step) + 1);
 }
 
+/** Splat bake presets (mirror core/renda/splatbake PRESETS). views 0 = direct mesh → Gaussians on CPU. */
+const SPLAT_PRESETS = {
+  fast: { views: 0, resolution: 0, steps: 0, train: "cpu" as Hardware },
+  standard: { views: 96, resolution: 768, steps: 7000, train: "gpu-l4" as Hardware },
+  high: { views: 200, resolution: 1024, steps: 30000, train: "gpu-l40s" as Hardware },
+};
+const TRAIN_SECONDS_PER_K_STEPS: Partial<Record<Hardware, number>> = { "gpu-l4": 22, "gpu-l40s": 10 };
+
+/** output.format "splat": render N square views in parallel, then one refinement job (or a CPU conversion). */
+export function estimateSplatBake(pkg: RendaPackage): Estimate {
+  const sb: Partial<NonNullable<RendaPackage["output"]["splatBake"]>> = pkg.output.splatBake ?? {};
+  const p = SPLAT_PRESETS[sb.preset ?? "standard"];
+  const views = sb.views ?? p.views;
+  const lo = 0.6, hi = 1.8;
+  if (sb.preset === "fast" && !sb.views) {
+    const total = 12;
+    return { engine: "blender-cycles", hardware: "cpu", frames: 1, samples: 0, chunks: 1,
+      estSeconds: [round1(total * lo), round1(total * hi)], estWallSeconds: [round1(total * lo), round1(total * hi)],
+      estCostUsd: [round4(costUsd("cpu", total) * lo), round4(costUsd("cpu", total) * hi)],
+      warnings: ["splat bake (fast): direct mesh → Gaussians; colours are albedo (no lighting)"] };
+  }
+  const res = sb.resolution ?? p.resolution;
+  const steps = sb.steps ?? p.steps;
+  const viewEngine = (sb.engine && sb.engine !== "auto" ? sb.engine : "blender-cycles") as ConcreteEngine;
+  const engine: ConcreteEngine = viewEngine === "gsplat" ? "blender-cycles" : viewEngine;
+  const hw: Hardware = FRAME_COST[engine]["gpu-l4"] ? "gpu-l4" : "cpu";
+  const c = FRAME_COST[engine][hw]!;
+  const samples = pkg.render.samples ?? PRESET_SAMPLES[engine][pkg.render.quality];
+  const perView = c.fixed + c.perMpSample * (res * res / 1e6) * samples;
+  const load = LOAD_SECONDS[rootFormat(pkg) ?? "default"] ?? LOAD_SECONDS.default;
+  const chunks = Math.min(MAX_CONTAINERS, views, Math.max(1, Math.ceil(perView * views / TARGET_CHUNK_SECONDS)));
+  const renderSeconds = perView * views + chunks * load;
+  const train = p.train === "cpu" ? "gpu-l4" : p.train;
+  const trainSeconds = 25 + (steps / 1000) * (TRAIN_SECONDS_PER_K_STEPS[train] ?? 22) * Math.max((res / 768) ** 2, 0.25);
+  const total = renderSeconds + trainSeconds;
+  const cost = costUsd(hw, renderSeconds) + costUsd(train, trainSeconds);
+  const wall = perView * views / chunks + load + trainSeconds;
+  return {
+    engine, hardware: hw, frames: views, samples, chunks,
+    estSeconds: [round1(total * lo), round1(total * hi)],
+    estWallSeconds: [round1(wall * lo), round1(wall * hi)],
+    estCostUsd: [round4(cost * lo), round4(cost * hi)],
+    warnings: [`splat bake: ${views} ${engine} views at ${res}px, then ${steps} gsplat refinement steps on ${train}`],
+  };
+}
+
 export function estimateScene(pkg: RendaPackage, priority: Priority = "standard"): Estimate {
+  if (pkg.output.format === "splat") return estimateSplatBake(pkg);
   const warnings: string[] = [];
   const fmt = rootFormat(pkg);
   const engine = resolveEngine(pkg, fmt);

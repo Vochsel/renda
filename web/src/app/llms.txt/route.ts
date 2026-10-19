@@ -37,12 +37,17 @@ Credentials live in ~/.config/renda/credentials.json (or $RENDA_API_KEY).
     renda new model.glb                                  # starter .renda.json: camera, HDRI, lights, materials, frames, output
     renda render capture.spz                             # Gaussian splats → engine gsplat (GPU, cheapest)
 Gaussian splats: splat-only scenes render with engine "gsplat"; put meshes inside a capture with scene.include (threejs renders both natively; blender-*/mitsuba composite the splats by depth, without engine lighting on them). Splat .ply/.splat captures are Y-down: scene.upAxis defaults to "-Y"; set "Y" if a render is upside down.
+Bake any mesh scene into a Gaussian splat (output.format "splat"):
+    renda splat model.glb --preset fast                  # mesh → Gaussians directly, seconds, albedo only
+    renda splat scene.blend --format spz                 # standard: ~96 views (Cycles) + gsplat refinement, lighting baked, a few minutes, ~$0.2–0.5
+    renda splat model.glb --preset high --dataset        # 200 views, 30k steps, SH3 on L40S; --dataset also returns views + exact COLMAP model (zip)
+Poses come from the scene itself (no structure-from-motion), so the COLMAP model is exact. Holdout PSNR/SSIM is reported in the job warnings.
 Identical re-renders are cached and free. Local paths are uploaded automatically (deduped by sha256).
 
 ## 5. MCP (if you'd rather use tools than the CLI)
 - Local stdio: \`${installSnippets.mcp.claudeCode}\` (or \`renda mcp add --agent cursor|codex|claude-code\`).
 - Remote (streamable HTTP): ${base}/api/mcp with header \`Authorization: Bearer <apiKey>\`.
-Tools: renda_trial, renda_claim, renda_signup, renda_verify, renda_render, renda_estimate, renda_get_job, renda_list_jobs, renda_render_video, renda_usage, renda_billing_link, …
+Tools: renda_trial, renda_claim, renda_signup, renda_verify, renda_render, renda_bake_splat, renda_estimate, renda_get_job, renda_list_jobs, renda_render_video, renda_usage, renda_billing_link, …
 Skills: \`npx skills add ${GITHUB_REPO}\` · Claude Code plugin: \`/plugin marketplace add ${GITHUB_REPO}\` then \`/plugin install renda@renda\`.
 
 ## 6. Errors and money
