@@ -1,0 +1,247 @@
+{
+  "package": {
+    "version": 1,
+    "assets": {
+      "chair.mesh": {
+        "uri": "${DIR}/props/chair.glb"
+      },
+      "chair.cushion": {
+        "uri": "${DIR}/props/cushion.obj"
+      },
+      "ref1.mesh": {
+        "uri": "${DIR}/props/chair.glb"
+      },
+      "ref1.cushion": {
+        "uri": "${DIR}/props/cushion.obj"
+      },
+      "room": {
+        "uri": "${DIR}/room.glb"
+      }
+    },
+    "scene": {
+      "root": "room",
+      "include": [
+        {
+          "asset": "chair.mesh",
+          "transform": {
+            "matrix": [
+              0,
+              0,
+              -0.01,
+              0,
+              0,
+              0.01,
+              0,
+              0,
+              0.01,
+              0,
+              0,
+              0,
+              1,
+              0,
+              -0.5,
+              1
+            ]
+          },
+          "upAxis": "Z",
+          "materialOverrides": {
+            "*": {
+              "roughness": 0.5
+            },
+            "Fabric": {
+              "baseColor": "#3355aa"
+            }
+          }
+        },
+        {
+          "asset": "chair.cushion",
+          "transform": {
+            "matrix": [
+              0,
+              0,
+              -0.01,
+              0,
+              0,
+              0.01,
+              0,
+              0,
+              0.01,
+              0,
+              0,
+              0,
+              1,
+              0,
+              -0.5,
+              1
+            ]
+          },
+          "upAxis": "Z",
+          "localTransform": {
+            "matrix": [
+              1,
+              0,
+              0,
+              0,
+              0,
+              1,
+              0,
+              0,
+              0,
+              0,
+              1,
+              0,
+              0,
+              0,
+              45,
+              1
+            ]
+          },
+          "materialOverrides": {
+            "*": {
+              "roughness": 0.5
+            },
+            "Fabric": {
+              "baseColor": "#3355aa"
+            }
+          }
+        },
+        {
+          "asset": "ref1.mesh",
+          "transform": {
+            "matrix": [
+              0.01,
+              0,
+              0,
+              0,
+              0,
+              0.01,
+              0,
+              0,
+              0,
+              0,
+              0.01,
+              0,
+              -1,
+              0,
+              -0.5,
+              1
+            ]
+          },
+          "upAxis": "Z",
+          "materialOverrides": {
+            "*": {
+              "roughness": 0.5
+            }
+          }
+        },
+        {
+          "asset": "ref1.cushion",
+          "transform": {
+            "matrix": [
+              0.01,
+              0,
+              0,
+              0,
+              0,
+              0.01,
+              0,
+              0,
+              0,
+              0,
+              0.01,
+              0,
+              -1,
+              0,
+              -0.5,
+              1
+            ]
+          },
+          "upAxis": "Z",
+          "localTransform": {
+            "matrix": [
+              1,
+              0,
+              0,
+              0,
+              0,
+              1,
+              0,
+              0,
+              0,
+              0,
+              1,
+              0,
+              0,
+              0,
+              45,
+              1
+            ]
+          },
+          "materialOverrides": {
+            "*": {
+              "roughness": 0.5
+            }
+          }
+        },
+        {
+          "asset": "${DIR}/lamp.stl",
+          "transform": {
+            "translate": [
+              0,
+              0,
+              1
+            ]
+          }
+        }
+      ]
+    },
+    "lights": [
+      {
+        "type": "sun",
+        "direction": [
+          0,
+          -1,
+          0
+        ]
+      },
+      {
+        "type": "point",
+        "position": [
+          1,
+          2,
+          -0.5
+        ],
+        "intensity": 30
+      },
+      {
+        "type": "point",
+        "position": [
+          -1,
+          2,
+          -0.5
+        ],
+        "intensity": 30
+      }
+    ]
+  },
+  "provenance": {
+    "version": "<root>",
+    "assets.room.uri": "<root>",
+    "scene.root": "<root>",
+    "scene.include": "<root>",
+    "lights": "<root>",
+    "lights[1]": "${DIR}/props/chair.renda.json",
+    "lights[2]": "${DIR}/props/chair.renda.json",
+    "assets[\"chair.mesh\"]": "${DIR}/props/chair.renda.json",
+    "assets[\"chair.cushion\"]": "${DIR}/props/chair.renda.json",
+    "scene.include[0]": "${DIR}/props/chair.renda.json",
+    "scene.include[1]": "${DIR}/props/chair.renda.json",
+    "assets[\"ref1.mesh\"]": "${DIR}/props/chair.renda.json",
+    "assets[\"ref1.cushion\"]": "${DIR}/props/chair.renda.json",
+    "scene.include[2]": "${DIR}/props/chair.renda.json",
+    "scene.include[3]": "${DIR}/props/chair.renda.json"
+  },
+  "layers": [
+    "${DIR}/props/chair.renda.json"
+  ]
+}

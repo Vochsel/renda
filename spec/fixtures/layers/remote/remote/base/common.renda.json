@@ -1,0 +1,4 @@
+{
+  "render": { "quality": "final", "resolution": [1600, 1000] },
+  "output": { "format": "webp" }
+}

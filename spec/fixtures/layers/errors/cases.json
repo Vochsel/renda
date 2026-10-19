@@ -1,0 +1,9 @@
+[
+  { "entry": "cycle-a.renda.json", "local": true, "code": "layer_cycle", "field": "extends[0]" },
+  { "entry": "http.renda.json", "local": true, "code": "layer_ref", "field": "extends" },
+  { "entry": "missing-root.renda.json", "local": true, "code": "layer_cycle", "field": "extends" },
+  { "entry": "cycle-a.renda.json", "local": false, "code": "layer_ref", "field": "extends" },
+  { "entry": "../extends/input.renda.json", "local": true, "maxDepth": 1, "code": "layer_depth", "field": "extends[0]" },
+  { "entry": "../extends/input.renda.json", "local": true, "maxLayers": 1, "code": "layer_too_many", "field": "extends[1]" },
+  { "entry": "../remote/input.renda.json", "local": true, "noHttps": true, "code": "layer_not_allowed", "field": "extends" }
+]

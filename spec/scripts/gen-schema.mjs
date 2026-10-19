@@ -1,8 +1,10 @@
 import { writeFileSync } from "node:fs";
 import { z } from "zod";
-import { RendaPackage, JSON_SCHEMA_ID } from "../dist/index.js";
+import { RendaPackageSource, JSON_SCHEMA_ID } from "../dist/index.js";
 
-const schema = z.toJSONSchema(RendaPackage, { io: "input", unrepresentable: "any" });
+// The authoring schema: also accepts `extends` and package references, and lets a layer omit `scene`.
+// Runtime validation (parsePackage) still requires a flattened package with a scene.
+const schema = z.toJSONSchema(RendaPackageSource, { io: "input", unrepresentable: "any" });
 schema.$id = JSON_SCHEMA_ID;
 schema.title = "Renda package";
 writeFileSync(new URL("../schema/renda.v1.json", import.meta.url), JSON.stringify(schema, null, 2) + "\n");

@@ -53,7 +53,8 @@ const FRAME_COST: Record<ConcreteEngine, Partial<Record<Hardware, { fixed: numbe
 /** Extra seconds per frame when splats are composited over a mesh engine's render. */
 const SPLAT_LAYER_SECONDS = 0.15;
 
-const LOAD_SECONDS: Record<string, number> = { blend: 12, fbx: 15, abc: 15, usd: 8, splat: 8, default: 5 };
+// STEP/IGES add an OpenCASCADE tessellation pass (cached per file + tolerance).
+const LOAD_SECONDS: Record<string, number> = { blend: 12, fbx: 15, abc: 15, usd: 8, splat: 8, step: 10, iges: 8, default: 5 };
 const MAX_CONTAINERS = 50;
 const TARGET_CHUNK_SECONDS = 90;
 

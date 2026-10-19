@@ -121,7 +121,7 @@ def choose_engine(fmt: str, quality: str, available: set[str] | None, mixed: boo
         c = ["blender-eevee", "blender-cycles"] if quality == "draft" else ["blender-cycles", "blender-eevee"]
     elif fmt == "threejs":
         c = ["threejs", "blender-eevee", "mitsuba"] if quality != "final" else ["blender-cycles", "mitsuba", "threejs"]
-    elif fmt in ("stl", "obj", "ply", "3mf", "dae"):
+    elif fmt in ("stl", "obj", "ply", "3mf", "dae", "step", "iges"):
         c = {"draft": ["blender-workbench", "mitsuba", "threejs"],
              "standard": ["mitsuba", "blender-cycles", "threejs"],
              "final": ["blender-cycles", "mitsuba"]}[quality]
@@ -241,7 +241,8 @@ def plan(
     complexity = complexity_factor(triangles)
     hardware = choose_hardware(engine, pkg, priority, samples, complexity, len(frames), warnings, prices, splats)
 
-    load_s = LOAD_SECONDS[engine] + (6.0 if fmt in ("blend", "fbx", "abc") and not engine.startswith("blender") else 0.0)
+    load_s = LOAD_SECONDS[engine] + (6.0 if fmt in ("blend", "fbx", "abc") and not engine.startswith("blender") else 0.0) \
+        + (5.0 if fmt in ("step", "iges") else 0.0)  # OpenCASCADE tessellation (cached afterwards)
     if has_splats and engine in ("blender-cycles", "blender-eevee", "blender-workbench", "mitsuba"):
         load_s += 4.0  # splat file + rasteriser init for the composited layer
     frame_s = frame_seconds(engine, hardware, pkg, samples, complexity, splats)

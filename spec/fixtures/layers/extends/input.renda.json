@@ -1,0 +1,10 @@
+{
+  "extends": ["./layers/base.renda.json", "./layers/lighting.renda.json"],
+  "name": null,
+  "assets": { "shoe": { "uri": "./models/shoe.usdz" } },
+  "scene": { "root": "shoe", "include": [{ "asset": "backdrop" }] },
+  "camera": { "mode": "lookat", "position": [3, 2, 3] },
+  "environment": { "hdri": null },
+  "render": { "resolution": [3840, 2160] },
+  "output": { "passes": ["beauty"] }
+}

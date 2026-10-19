@@ -46,6 +46,8 @@
                   "3mf",
                   "abc",
                   "splat",
+                  "step",
+                  "iges",
                   "rir"
                 ]
               },
@@ -86,67 +88,24 @@
           "default": [],
           "type": "array",
           "items": {
-            "type": "object",
-            "properties": {
-              "asset": {
-                "type": "string",
-                "minLength": 1
-              },
-              "transform": {
+            "anyOf": [
+              {
                 "type": "object",
                 "properties": {
-                  "translate": {
-                    "default": [
-                      0,
-                      0,
-                      0
-                    ],
-                    "type": "array",
-                    "prefixItems": [
-                      {
-                        "type": "number"
-                      },
-                      {
-                        "type": "number"
-                      },
-                      {
-                        "type": "number"
-                      }
-                    ],
-                    "items": false,
-                    "minItems": 3,
-                    "maxItems": 3
+                  "asset": {
+                    "type": "string",
+                    "minLength": 1
                   },
-                  "rotateDeg": {
-                    "default": [
-                      0,
-                      0,
-                      0
-                    ],
-                    "description": "XYZ euler, degrees",
-                    "type": "array",
-                    "prefixItems": [
-                      {
-                        "type": "number"
-                      },
-                      {
-                        "type": "number"
-                      },
-                      {
-                        "type": "number"
-                      }
-                    ],
-                    "items": false,
-                    "minItems": 3,
-                    "maxItems": 3
-                  },
-                  "scale": {
-                    "default": 1,
-                    "anyOf": [
-                      {
-                        "type": "number"
-                      },
-                      {
+                  "transform": {
+                    "description": "Placement in the root scene's axes.",
+                    "type": "object",
+                    "properties": {
+                      "translate": {
+                        "default": [
+                          0,
+                          0,
+                          0
+                        ],
                         "type": "array",
                         "prefixItems": [
                           {
@@ -162,17 +121,454 @@
                         "items": false,
                         "minItems": 3,
                         "maxItems": 3
+                      },
+                      "rotateDeg": {
+                        "default": [
+                          0,
+                          0,
+                          0
+                        ],
+                        "description": "XYZ euler, degrees",
+                        "type": "array",
+                        "prefixItems": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "number"
+                          }
+                        ],
+                        "items": false,
+                        "minItems": 3,
+                        "maxItems": 3
+                      },
+                      "scale": {
+                        "default": 1,
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "array",
+                            "prefixItems": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "number"
+                              }
+                            ],
+                            "items": false,
+                            "minItems": 3,
+                            "maxItems": 3
+                          }
+                        ]
+                      },
+                      "matrix": {
+                        "description": "4×4 column-major (glTF order). When set, translate/rotateDeg/scale are ignored. Written by layer flattening when transforms compose.",
+                        "minItems": 16,
+                        "maxItems": 16,
+                        "type": "array",
+                        "items": {
+                          "type": "number"
+                        }
                       }
+                    },
+                    "additionalProperties": false
+                  },
+                  "upAxis": {
+                    "description": "Axes of this file; converted to the root scene's up axis before `transform`. Unset = no conversion.",
+                    "type": "string",
+                    "enum": [
+                      "Y",
+                      "Z",
+                      "-Y"
                     ]
+                  },
+                  "localTransform": {
+                    "description": "Applied in the file's own axes, before the up-axis conversion (written by layer flattening for nested references).",
+                    "type": "object",
+                    "properties": {
+                      "translate": {
+                        "default": [
+                          0,
+                          0,
+                          0
+                        ],
+                        "type": "array",
+                        "prefixItems": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "number"
+                          }
+                        ],
+                        "items": false,
+                        "minItems": 3,
+                        "maxItems": 3
+                      },
+                      "rotateDeg": {
+                        "default": [
+                          0,
+                          0,
+                          0
+                        ],
+                        "description": "XYZ euler, degrees",
+                        "type": "array",
+                        "prefixItems": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "number"
+                          }
+                        ],
+                        "items": false,
+                        "minItems": 3,
+                        "maxItems": 3
+                      },
+                      "scale": {
+                        "default": 1,
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "array",
+                            "prefixItems": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "number"
+                              }
+                            ],
+                            "items": false,
+                            "minItems": 3,
+                            "maxItems": 3
+                          }
+                        ]
+                      },
+                      "matrix": {
+                        "description": "4×4 column-major (glTF order). When set, translate/rotateDeg/scale are ignored. Written by layer flattening when transforms compose.",
+                        "minItems": 16,
+                        "maxItems": 16,
+                        "type": "array",
+                        "items": {
+                          "type": "number"
+                        }
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "materialOverrides": {
+                    "description": "Overrides applied to this include only. Keys are material names or \"*\".",
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {
+                      "type": "object",
+                      "properties": {
+                        "baseColor": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"
+                            },
+                            {
+                              "type": "array",
+                              "prefixItems": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "number"
+                                }
+                              ],
+                              "items": false,
+                              "minItems": 3,
+                              "maxItems": 3
+                            }
+                          ]
+                        },
+                        "metallic": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 1
+                        },
+                        "roughness": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 1
+                        },
+                        "emission": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"
+                            },
+                            {
+                              "type": "array",
+                              "prefixItems": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "number"
+                                }
+                              ],
+                              "items": false,
+                              "minItems": 3,
+                              "maxItems": 3
+                            }
+                          ]
+                        },
+                        "emissionStrength": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "opacity": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 1
+                        },
+                        "transmission": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 1
+                        },
+                        "ior": {
+                          "type": "number",
+                          "minimum": 1
+                        }
+                      },
+                      "additionalProperties": false
+                    }
                   }
                 },
+                "required": [
+                  "asset"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "package": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Path, https:// URL or asset:// URI of a .renda.json whose scene is placed here."
+                  },
+                  "as": {
+                    "description": "Namespace for the referenced package's asset ids (default ref<index>).",
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]+$"
+                  },
+                  "transform": {
+                    "type": "object",
+                    "properties": {
+                      "translate": {
+                        "default": [
+                          0,
+                          0,
+                          0
+                        ],
+                        "type": "array",
+                        "prefixItems": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "number"
+                          }
+                        ],
+                        "items": false,
+                        "minItems": 3,
+                        "maxItems": 3
+                      },
+                      "rotateDeg": {
+                        "default": [
+                          0,
+                          0,
+                          0
+                        ],
+                        "description": "XYZ euler, degrees",
+                        "type": "array",
+                        "prefixItems": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "number"
+                          }
+                        ],
+                        "items": false,
+                        "minItems": 3,
+                        "maxItems": 3
+                      },
+                      "scale": {
+                        "default": 1,
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "array",
+                            "prefixItems": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "number"
+                              }
+                            ],
+                            "items": false,
+                            "minItems": 3,
+                            "maxItems": 3
+                          }
+                        ]
+                      },
+                      "matrix": {
+                        "description": "4×4 column-major (glTF order). When set, translate/rotateDeg/scale are ignored. Written by layer flattening when transforms compose.",
+                        "minItems": 16,
+                        "maxItems": 16,
+                        "type": "array",
+                        "items": {
+                          "type": "number"
+                        }
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "materialOverrides": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {
+                      "type": "object",
+                      "properties": {
+                        "baseColor": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"
+                            },
+                            {
+                              "type": "array",
+                              "prefixItems": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "number"
+                                }
+                              ],
+                              "items": false,
+                              "minItems": 3,
+                              "maxItems": 3
+                            }
+                          ]
+                        },
+                        "metallic": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 1
+                        },
+                        "roughness": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 1
+                        },
+                        "emission": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"
+                            },
+                            {
+                              "type": "array",
+                              "prefixItems": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "number"
+                                }
+                              ],
+                              "items": false,
+                              "minItems": 3,
+                              "maxItems": 3
+                            }
+                          ]
+                        },
+                        "emissionStrength": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "opacity": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 1
+                        },
+                        "transmission": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 1
+                        },
+                        "ior": {
+                          "type": "number",
+                          "minimum": 1
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "package"
+                ],
                 "additionalProperties": false
               }
-            },
-            "required": [
-              "asset"
-            ],
-            "additionalProperties": false
+            ]
           }
         },
         "upAxis": {
@@ -186,6 +582,7 @@
         },
         "unitScale": {
           "default": 1,
+          "description": "Multiplies scene units. STEP/IGES are converted to metres from their declared units first; this applies on top.",
           "type": "number",
           "exclusiveMinimum": 0
         },
@@ -280,11 +677,26 @@
             },
             "additionalProperties": false
           }
+        },
+        "tessellation": {
+          "description": "Meshing density for CAD (STEP/IGES) inputs.",
+          "type": "object",
+          "properties": {
+            "linearDeflection": {
+              "description": "Max chord error in metres. Default: 0.05% of the part's bounding-box diagonal.",
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "angularDeflection": {
+              "description": "Max angle between facets, radians. Default 0.3.",
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 3.14
+            }
+          },
+          "additionalProperties": false
         }
       },
-      "required": [
-        "root"
-      ],
       "additionalProperties": false
     },
     "camera": {
@@ -1056,11 +1468,24 @@
         }
       },
       "additionalProperties": false
+    },
+    "extends": {
+      "description": "Packages layered underneath this one, applied in order (later wins; this file wins over all). Objects deep-merge, arrays replace, null removes a field.",
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      ]
     }
   },
-  "required": [
-    "scene"
-  ],
   "additionalProperties": false,
   "$id": "https://renda.dev/schema/v1.json",
   "title": "Renda package"

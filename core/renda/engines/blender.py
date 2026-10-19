@@ -87,20 +87,30 @@ class BlenderEngine(Engine):
         else:
             src_fmt, source_up, unit_scale = fmt, pkg.scene.upAxis, pkg.scene.unitScale
             from ..formats import detect
-            from ..ir.stage import trs
 
             for inc in pkg.scene.include:
                 p = asset_path(pkg, inc.asset, ctx.asset_paths)
-                ifmt = detect(p)
+                ifmt = pkg.assets[inc.asset].format if inc.asset in pkg.assets and pkg.assets[inc.asset].format else detect(p)
                 if ifmt == "splat":
                     continue  # composited after the Blender render
-                if ifmt not in NATIVE:
+                if ifmt not in NATIVE or inc.upAxis or inc.localTransform or inc.materialOverrides:
+                    # Through the IR: scoped overrides and the file-local transform are applied here;
+                    # Blender's glTF importer then brings it into Blender's axes like any import, which
+                    # is the up-axis conversion.
                     from ..ir import load_stage
+                    from ..scene import apply_material_overrides, normalize_up
 
+                    sub = load_stage(p, ifmt, ctx.cache_dir, tessellation=pkg.scene.tessellation)
+                    if inc.upAxis:
+                        sub.up_axis = inc.upAxis
+                    normalize_up(sub)
+                    if inc.materialOverrides:
+                        apply_material_overrides(sub, inc.materialOverrides)
+                    if inc.localTransform:
+                        sub.apply_transform(inc.localTransform.to_matrix())
                     cache = _scratch(ctx, "blender-input")
-                    p, ifmt = _gltf_for_blender(load_stage(p), cache / f"include_{len(includes)}.glb"), "gltf"
-                t = inc.transform
-                m = trs(t.translate, t.rotateDeg, t.scale) if t else np.eye(4)
+                    p, ifmt = _gltf_for_blender(sub, cache / f"include_{len(includes)}.glb"), "gltf"
+                m = inc.transform.to_matrix() if inc.transform else np.eye(4)
                 includes.append({"path": str(p), "format": ifmt, "matrix": np.asarray(m).tolist()})
 
         use_scene_camera, keep_world = native_setup(pkg, fmt)

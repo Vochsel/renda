@@ -1,0 +1,1 @@
+{ "extends": "http://example.test/base.renda.json", "scene": { "root": "./a.glb" } }

@@ -1,0 +1,5 @@
+{
+  "extends": "../base/common.renda.json",
+  "assets": { "sky": { "uri": "./hdri/studio.hdr" } },
+  "environment": { "hdri": "sky", "rotationDeg": 45 }
+}

@@ -1,0 +1,94 @@
+{
+  "package": {
+    "version": 1,
+    "assets": {
+      "backdrop": {
+        "uri": "${DIR}/assets/cyc.glb"
+      },
+      "studio": {
+        "uri": "${DIR}/hdri/studio.hdr"
+      },
+      "shoe": {
+        "uri": "${DIR}/models/shoe.usdz"
+      }
+    },
+    "camera": {
+      "mode": "lookat",
+      "position": [
+        3,
+        2,
+        3
+      ]
+    },
+    "environment": {
+      "hdri": null,
+      "intensity": 0.5,
+      "background": "#f2f2f0"
+    },
+    "lights": [
+      {
+        "type": "area",
+        "position": [
+          2,
+          3,
+          2
+        ],
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "size": [
+          2,
+          2
+        ],
+        "intensity": 80
+      }
+    ],
+    "render": {
+      "engine": "blender-cycles",
+      "resolution": [
+        3840,
+        2160
+      ],
+      "quality": "standard"
+    },
+    "output": {
+      "format": "png",
+      "passes": [
+        "beauty"
+      ]
+    },
+    "scene": {
+      "root": "shoe",
+      "include": [
+        {
+          "asset": "backdrop"
+        }
+      ]
+    }
+  },
+  "provenance": {
+    "version": "${DIR}/layers/base.renda.json",
+    "assets.backdrop.uri": "${DIR}/layers/base.renda.json",
+    "assets.studio.uri": "${DIR}/layers/base.renda.json",
+    "environment.background": "${DIR}/layers/base.renda.json",
+    "render.engine": "${DIR}/layers/base.renda.json",
+    "render.quality": "${DIR}/layers/base.renda.json",
+    "output.format": "${DIR}/layers/base.renda.json",
+    "lights": "${DIR}/layers/lighting.renda.json",
+    "environment.intensity": "${DIR}/layers/lighting.renda.json",
+    "assets.shoe.uri": "<root>",
+    "scene.root": "<root>",
+    "scene.include": "<root>",
+    "camera.mode": "<root>",
+    "camera.position": "<root>",
+    "environment.hdri": "<root>",
+    "render.resolution": "<root>",
+    "output.passes": "<root>"
+  },
+  "layers": [
+    "${DIR}/layers/base.renda.json",
+    "${DIR}/layers/lighting.renda.json"
+  ]
+}
