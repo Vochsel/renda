@@ -58,6 +58,11 @@ Bake lighting into a model and get a GLB back (works in any glTF viewer / game e
     renda bake robot.fbx --glb                           # plain conversion to GLB, no baking
 Package form: output: {"format": "glb", "bake": {"mode": "unlit", "size": 2048}}; engines blender-cycles | mitsuba | threejs. Splats can't be baked.
 
+HyperFrames video (HTML composition → mp4/webm/mov/gif, CPU-billed). Composition variables via --var; a variable bound to a <video data-var-src="clipUrl"> slot accepts a 3D file (turntable rendered first), job:<id> (a finished render's clip), a local .mp4/.png (uploaded) or an https media URL:
+    renda video ./title-card --var title="Robot v2" --var clipUrl=./robot.glb    # one command: 3D turntable inside a title card
+    renda video ./title-card --var clipUrl=job:<id> --quality delivery           # reuse a render you already made
+MCP: renda_render_video { projectDir, variables: { clipUrl: "job:<id>" } }. quality: draft | looks (default) | delivery.
+
 ## 5. MCP (if you'd rather use tools than the CLI)
 - Local stdio: \`${installSnippets.mcp.claudeCode}\` (or \`renda mcp add --agent cursor|codex|claude-code\`).
 - Remote (streamable HTTP): ${base}/api/mcp with header \`Authorization: Bearer <apiKey>\`.

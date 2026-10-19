@@ -51,4 +51,14 @@ describe("package uri validation", () => {
     expect(code(() => parseJobPackage("hyperframes", { project: "./promo" }))).toBe("local_uri");
     expect(code(() => parseJobPackage("hyperframes", {}))).toBe("invalid_package");
   });
+
+  it("hyperframes asset:// variables are inputs; other strings are plain values", () => {
+    const clip = "d".repeat(64);
+    const parsed = parseJobPackage("hyperframes", {
+      project: `asset://${SHA}`,
+      variables: { clipUrl: `asset://${clip}`, title: "Hi", link: "https://renda.dev", count: 2 },
+    });
+    expect(parsed.uris.assetShas.sort()).toEqual([SHA, clip].sort());
+    expect(code(() => parseJobPackage("hyperframes", { project: `asset://${SHA}`, variables: { clip: "asset://nope" } }))).toBe("invalid_package");
+  });
 });

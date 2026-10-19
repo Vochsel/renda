@@ -35,12 +35,17 @@ export const TERMINAL_STATUSES: ReadonlySet<JobStatus> = new Set(["succeeded", "
 /** HyperFrames video job package (kind "hyperframes"). */
 export interface HyperframesPackage {
   project: string;
+  name?: string;
   composition?: string;
   width?: number;
   height?: number;
   fps?: number;
   format?: "mp4" | "webm" | "mov" | "gif";
-  quality?: "draft" | "standard" | "final";
+  /** HyperFrames encoder presets (draft → fast iteration, delivery → final). */
+  quality?: "draft" | "looks" | "delivery";
+  durationSec?: number;
+  /** Composition variables; asset:// / https:// media values are downloaded into the project by the worker. */
+  variables?: Record<string, unknown>;
 }
 
 export interface Me {

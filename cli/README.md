@@ -17,7 +17,8 @@ npx @rendahq/cli render model.glb      # uploads, renders, downloads to ./render
 | `whoami` · `balance` · `usage` · `billing` | account, free minutes, spend, card link |
 | `render <file\|pkg> [--res WxH] [--quality …] [--engine …] [--frames a-b] [--format …] [-o dir] [--no-wait] [--max-minutes N] [--local]` | cloud render; `--local` hands off to `uvx renda` (Blender/Mitsuba on this machine) |
 | `estimate <file\|pkg>` · `jobs [id] [--cancel] [--download dir]` | cost before rendering; job status/outputs |
-| `validate <pkg>` · `new <file>` · `video <hyperframes-dir>` | package tools; HyperFrames video |
+| `validate <pkg>` · `new <file>` | package tools |
+| `video <hyperframes-dir> [--var key=value …] [--vars json] [--quality draft\|looks\|delivery]` | HyperFrames video; `--var clipUrl=./robot.glb` renders a turntable first and drops it into the composition, `--var clipUrl=job:<id>` reuses a render |
 
 When stdout isn't a TTY (or with `--json`) every command prints one JSON object:
 `{"status": "ok", …, "next": [...]}` or `{"status": "error", "reason", "message", "hint", "next"}`.

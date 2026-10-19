@@ -5,6 +5,7 @@ import { z } from "zod";
 import { RendaPackage, LayerError, flattenPackage, formatFromPath, isLayered, safeParsePackage, type FlattenResult, type RendaPackageInput } from "@rendahq/spec";
 import { type TrialResponse, RendaApiError, TERMINAL_STATUSES, type HyperframesPackage, type Job, type RendaClient } from "./client.js";
 import { PACKAGE_GUIDE } from "./docs.js";
+import { hyperframesQuality, resolveVideoVariables, type ResolvedVariables } from "./video.js";
 import { isLocalUri, packageDir, uploadBytes, uploadFile, uploadLocalPaths, zipDirectory } from "./local.js";
 
 export interface RegisterOptions {
@@ -572,18 +573,25 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
 
   server.registerTool("renda_render_video", {
     title: "Render a HyperFrames video",
-    description: "Render a HyperFrames HTML video composition in the cloud (headless Chromium). "
+    description: "Render a HyperFrames HTML video composition in the cloud (headless Chromium), billed as CPU time. "
       + (local ? "Pass projectDir (zipped and uploaded automatically) or projectUri. " : "Pass projectUri (https:// or asset:// zip of the project). ")
-      + "To include 3D, first renda_render a turntable/animation and reference its output URL in the composition.",
+      + "`variables` override the composition's data-composition-variables. To put 3D in a video slot (a <video data-var-src=\"clipUrl\">), "
+      + "set that variable to `job:<id>` of a finished turntable render, an https URL"
+      + (local ? ", a local .mp4/.png, or a local 3D file (.glb/.blend/.step/…: a turntable is rendered first automatically)." : ", or an asset:// upload."),
     inputSchema: {
       ...(local ? { projectDir: z.string().optional().describe("Local HyperFrames project directory.") } : {}),
       projectUri: z.string().optional().describe("https:// or asset:// URI of a zipped project."),
-      composition: z.string().optional().describe("Composition id/file to render (default: project's main composition)."),
-      width: z.number().int().positive().optional(),
+      composition: z.string().optional().describe("Composition file to render (default index.html)."),
+      variables: z.record(z.string(), z.unknown()).optional()
+        .describe("Composition variable values, e.g. {\"title\":\"Launch\",\"clipUrl\":\"job:job_abc\"}."),
+      name: z.string().optional().describe("Output file stem."),
+      width: z.number().int().positive().optional().describe("Only HyperFrames presets with the composition's aspect (1920x1080, 3840x2160, 1080x1920, 1080x1080…)."),
       height: z.number().int().positive().optional(),
-      fps: z.number().positive().optional(),
+      fps: z.number().int().positive().max(120).optional(),
       format: z.enum(["mp4", "webm", "mov", "gif"]).optional(),
-      quality: z.enum(["draft", "standard", "final"]).optional(),
+      quality: z.enum(["draft", "looks", "delivery", "standard", "final"]).optional()
+        .describe("draft (fast) | looks (default) | delivery (final). standard/final are accepted as looks/delivery."),
+      durationSec: z.number().positive().optional().describe("Composition length, for a better cost estimate."),
       priority: z.enum(["economy", "standard", "rush"]).optional(),
       wait: z.boolean().optional(),
     },
@@ -601,10 +609,23 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
     if (!project) return fail("No project given.", local ? "Pass projectDir or projectUri." : "Pass projectUri (https:// or asset://).");
     if (isLocalUri(project)) return fail(`projectUri must be https:// or asset://, got ${project}`, local ? "Use projectDir for local folders." : undefined);
     const pkg: HyperframesPackage = { project };
-    for (const k of ["composition", "width", "height", "fps", "format", "quality"] as const) if (args[k] !== undefined) (pkg as any)[k] = args[k];
+    for (const k of ["composition", "name", "width", "height", "fps", "format", "durationSec"] as const) if (args[k] !== undefined) (pkg as any)[k] = args[k];
+    if (args.quality) pkg.quality = hyperframesQuality(args.quality);
+    let resolved: ResolvedVariables | undefined;
+    if (args.variables) {
+      resolved = await resolveVideoVariables(client, args.variables, {
+        baseDir: process.cwd(), // relative paths are relative to where the agent runs, like everything else
+        local, waitJob: (j) => waitWithProgress(j.id, extra, 20 * 60_000),
+      });
+      pkg.variables = resolved.variables;
+    }
     let job = await client.createJob({ package: pkg, kind: "hyperframes", priority: args.priority });
     if (args.wait !== false && !TERMINAL_STATUSES.has(job.status)) job = await waitWithProgress(job.id, extra, 20 * 60_000);
-    return finishJob(job, false, uploaded ? { uploaded } : undefined);
+    const extraInfo: Record<string, unknown> = {};
+    if (uploaded) extraInfo.uploaded = uploaded;
+    if (resolved?.jobs.length) extraInfo.inputJobs = resolved.jobs;
+    if (resolved?.uploaded.length) extraInfo.uploadedVariables = resolved.uploaded;
+    return finishJob(job, false, Object.keys(extraInfo).length ? extraInfo : undefined);
   }));
 
   // ---------- jobs ----------

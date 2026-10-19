@@ -24,7 +24,7 @@ from .assets import AssetCache, name_hints
 from .core_api import Core, get
 from .dispatch import ChunkResult, ChunkTask
 from .events import EventSink
-from .hyperframes import build_render_command
+from .hyperframes import build_render_command, localize_variables
 from .models import HyperframesPackage, JobRequest
 from .storage import Storage, content_type
 
@@ -394,7 +394,9 @@ def run_hyperframes_job(job: JobRequest, deps: Deps, run: Runner = _subprocess_r
         project = find_project_root(work / "src")
         _check_cancel(deps)
         out = work / dispatch.output_name({"name": hp.name or "video"}, hp.format)
-        cmd, warnings = build_render_command(hp, project, out)
+        variables, warnings = localize_variables(hp.variables, project, cache.fetch)
+        cmd, cmd_warnings = build_render_command(hp.model_copy(update={"variables": variables}), project, out)
+        warnings += cmd_warnings
         for w in warnings:
             ev.warning(w)
         ev.status("rendering", progress=0.1, engine="hyperframes", hardware="cpu")

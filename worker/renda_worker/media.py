@@ -67,14 +67,15 @@ def image_media(path: Path) -> Media | None:
 
 def video_media(path: Path, poster_frame: Path | None = None) -> Media | None:
     """Metadata for a video. Uses `poster_frame` (an already-rendered frame) when given, else extracts
-    the first frame with ffmpeg."""
+    a frame ~40% in with ffmpeg (frame 0 of motion graphics is usually a blank pre-roll)."""
     if poster_frame is not None:
         m = image_media(poster_frame)
         if m is not None:
             return m
     try:
         out = path.with_suffix(".poster.png")
-        subprocess.run([_ffmpeg(), "-loglevel", "error", "-y", "-i", str(path), "-frames:v", "1", str(out)],
+        seek = ["-ss", f"{dur * 0.4:.3f}"] if (dur := video_duration(path)) else []
+        subprocess.run([_ffmpeg(), "-loglevel", "error", "-y", *seek, "-i", str(path), "-frames:v", "1", str(out)],
                        check=True, capture_output=True, timeout=120)
         try:
             return image_media(out)
@@ -83,6 +84,18 @@ def video_media(path: Path, poster_frame: Path | None = None) -> Media | None:
     except Exception as exc:
         log.info("no poster for %s: %s", path.name, exc)
         return None
+
+
+def video_duration(path: Path) -> float | None:
+    """Duration in seconds from ffmpeg's stream banner, or None."""
+    import re
+
+    try:
+        r = subprocess.run([_ffmpeg(), "-hide_banner", "-i", str(path)], capture_output=True, text=True, timeout=60)
+    except Exception:
+        return None
+    m = re.search(r"Duration: (\d+):(\d+):(\d+(?:\.\d+)?)", r.stderr)
+    return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3)) if m else None
 
 
 def _ffmpeg() -> str:

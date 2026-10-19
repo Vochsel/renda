@@ -259,3 +259,59 @@ describe("layers + CAD", () => {
     expect(e.layer).toBe(shot);
   });
 });
+
+describe("video (HyperFrames)", () => {
+  const sha = (n: number) => String(n).repeat(64).slice(0, 64);
+  const creds = { creds: { apiKey: "rnd_live_xxxxxxxxxxxxxxxxxxxxxxxx" } };
+  const clipOut = { name: "tt.mp4", url: "https://r2.test/outputs/job_tt/tt.mp4?sig=1", contentType: "video/mp4", bytes: 9 };
+
+  async function project(dir: string) {
+    await mkdir(join(dir, "card"), { recursive: true });
+    await writeFile(join(dir, "card", "index.html"), "<html></html>");
+  }
+
+  it("--var: text passes through, local media uploads, job:<id> becomes that job's clip; quality aliases", async () => {
+    let uploads = 0;
+    const t = await setup(({ method, url, body }) => {
+      if (url.endsWith("/uploads")) return { json: { assetUri: `asset://${sha(++uploads)}`, exists: true, filename: body.filename } };
+      if (url.endsWith("/jobs/job_tt")) return { json: job({ id: "job_tt", status: "succeeded", outputs: [clipOut] }) };
+      if (method === "POST" && url.endsWith("/jobs")) return { status: 201, json: job({ id: "job_hf", kind: "hyperframes" }) };
+      if (url.endsWith("/jobs/job_hf")) return { json: job({ id: "job_hf", kind: "hyperframes", status: "succeeded", outputs: [] }) };
+    }, creds);
+    await project(t.dir);
+    await writeFile(join(t.dir, "logo.png"), "\x89PNG");
+    const code = await run(["video", join(t.dir, "card"), "--var", "title=Hello, world", "--var", "logo=logo.png",
+      "--var", "clipUrl=job:job_tt", "--vars", '{"accent":"#f97316"}', "--quality", "final", "--fps", "24"], t.deps);
+    expect(code).toBe(0);
+    const post = t.calls.find((c) => c.method === "POST" && c.url.endsWith("/jobs"))!;
+    expect(post.body.kind).toBe("hyperframes");
+    expect(post.body.package).toMatchObject({ quality: "delivery", fps: 24 });
+    expect(post.body.package.variables).toEqual({ accent: "#f97316", title: "Hello, world", logo: `asset://${sha(2)}`, clipUrl: clipOut.url });
+  });
+
+  it("a local 3D file variable renders a turntable first and drops its mp4 into the composition", async () => {
+    const posts: any[] = [];
+    const t = await setup(({ method, url, body }) => {
+      if (url.endsWith("/uploads")) return { json: { assetUri: `asset://${sha(posts.length + 1)}`, exists: true } };
+      if (method === "POST" && url.endsWith("/jobs")) {
+        posts.push(body);
+        return { status: 201, json: job({ id: body.kind === "hyperframes" ? "job_hf" : "job_tt" }) };
+      }
+      if (url.endsWith("/jobs/job_tt")) return { json: job({ id: "job_tt", status: "succeeded", outputs: [clipOut] }) };
+      if (url.endsWith("/jobs/job_hf")) return { json: job({ id: "job_hf", status: "succeeded", outputs: [] }) };
+    }, creds);
+    await project(t.dir);
+    await writeFile(join(t.dir, "robot.glb"), "glTF....");
+    expect(await run(["video", join(t.dir, "card"), "--var", "clipUrl=robot.glb"], t.deps)).toBe(0);
+    expect(posts.map((p) => p.kind ?? "scene")).toEqual(["scene", "hyperframes"]);
+    expect(posts[0].package).toMatchObject({ output: { format: "mp4" }, animation: { turntable: { revolutions: 1 } } });
+    expect(posts[1].package.variables.clipUrl).toBe(clipOut.url);
+  });
+
+  it("rejects malformed --var and unknown quality as usage errors", async () => {
+    const t = await setup(() => undefined, creds);
+    await project(t.dir);
+    expect(await run(["video", join(t.dir, "card"), "--var", "novalue"], t.deps)).toBe(2);
+    expect(await run(["video", join(t.dir, "card"), "--quality", "ultra"], t.deps)).toBe(2);
+  });
+});
