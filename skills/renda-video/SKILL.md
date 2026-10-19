@@ -57,19 +57,41 @@ renda_render_video { projectDir: "./my-video", format: "mp4" }
 
 - `projectDir` is zipped (skipping `node_modules`, `.git`, `renders`) and uploaded. With
   remote MCP pass `projectUri` (https:// or asset:// zip) instead.
-- Optional: `composition` (if the project has several), `width`, `height`, `fps`,
-  `format` (`mp4|webm|mov|gif`), `quality` (`draft|standard|final`).
-- Validate locally first if the HyperFrames CLI is installed. Cloud renders fail on the same
-  errors, but you pay for them.
-- Media referenced by the composition must be inside the project dir or at public URLs.
+- Optional: `variables` (override the composition's `data-composition-variables`),
+  `composition` (if the project has several), `name`, `fps`, `format` (`mp4|webm|mov|gif`),
+  `quality` (`draft` while iterating | `looks` default | `delivery` final; `standard`/`final` are
+  accepted as aliases), `durationSec` (better estimate). `width`/`height` only apply HyperFrames'
+  supersampling presets with the composition's aspect (1920x1080, 3840x2160, 1080x1920, 1080x1080…).
+- Validate locally first if the HyperFrames CLI is installed (`npx hyperframes lint`). Cloud renders
+  fail on the same errors, but you pay for them.
+- Media referenced by the composition must be inside the project dir, at public URLs, or passed
+  through a variable (below). Billed as CPU time.
+
+CLI: `renda video ./my-video --var title="Launch" --quality draft` (Node: `npx @rendahq/cli video …`,
+Python: `uvx renda video …`). `--var` repeats; `--vars '{json}'` sets many at once.
 
 ## 3D inside a HyperFrames video
 
-1. Render the 3D part first as its own job: a turntable `webm` with
-   `output.transparent: true` (to composite over a background) or an `mp4`.
-2. Take the output URL from the finished job, or `renda_download` it into the HyperFrames
-   project folder (better: presigned URLs expire, while project files are zipped with the project).
-3. Reference it as a video clip in the composition, timed with the usual `data-*` attributes.
-4. `renda_render_video { projectDir }`.
+Give the composition a video slot bound to a variable, e.g.
+`<video class="clip" data-start="0.5" data-duration="5.5" data-track-index="3" src="assets/placeholder.mp4" data-var-src="clipUrl" muted playsinline>`
+with `clipUrl` declared in `data-composition-variables`. Then fill the variable — Renda fetches the
+clip into the project before rendering, so presigned URLs and uploads both work:
 
-Match fps and resolution between the 3D job and the composition to avoid resampling.
+| `clipUrl` value | What happens |
+|---|---|
+| `job:<id>` | Uses that finished job's video output (chain any scene render, any engine/settings). |
+| `./robot.glb` (any 3D file: .blend, .usdz, .step, splats…) | Local mode only: uploads it, renders a 4 s 1080² draft turntable on a dark background, waits, drops the mp4 in. One command. |
+| `./clip.mp4` / `./logo.png` | Local mode only: uploaded as `asset://…`. |
+| `https://…/clip.mp4` | Downloaded by the worker (URL path must end in a media extension). |
+| `asset://<sha256>` | An existing upload. |
+
+```
+renda video ./title-card --var clipUrl=./robot.glb --var title="Robot v2"          # one command
+renda render robot.glb --format mp4 --turntable --res 1080x1080 --cloud --json      # or control the 3D job…
+renda video ./title-card --var clipUrl=job:<id-from-above>                          # …and chain it
+renda_render_video { projectDir: "./title-card", variables: { clipUrl: "job:job_abc", title: "Robot v2" } }
+```
+
+For transparency over a background, render the 3D job as `webm` with `output.transparent: true`.
+Match fps between the 3D job and the composition to avoid resampling. A working example lives in
+`testdata/hyperframes/title-card/` (variables: `title`, `subtitle`, `clipUrl`, `accent`).

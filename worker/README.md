@@ -67,17 +67,22 @@ HTML-composition video rendered with the HyperFrames CLI. Billed as `cpu` second
   "composition": "compositions/intro.html",  // optional, default index.html
   "format": "mp4",                // mp4 | webm | mov | gif   (webm/mov keep transparency)
   "quality": "looks",             // draft | looks | delivery
-  "fps": 30,                      // 24 | 30 | 60 (gif capped at 30)
+  "fps": 30,                      // 1–240 (gif capped at 30); default: the composition's data-fps
   "width": 3840, "height": 2160,  // optional; only HyperFrames supersampling presets apply:
                                   // 1920x1080 1080x1920 3840x2160 2160x3840 1080x1080 2160x2160
                                   // anything else → warning, composition's own size is used
-  "variables": { "title": "Hi" }  // optional, passed as --variables
+  "durationSec": 6,               // optional, estimate hint only
+  "variables": {                  // optional, passed as --variables
+    "title": "Hi",
+    "clipUrl": "asset://<sha256>" // asset:// or https://…/x.mp4 media values are downloaded into
+  }                               // <project>/renda-inputs/ and replaced with that relative path
 }
 ```
 
 The zip may contain the project at its root or inside one top-level folder. Paths escaping
-the archive are rejected. To put a 3D render in a composition, render the scene job first and
-reference its output URL from the composition.
+the archive are rejected. To put a 3D render in a composition, bind a `<video data-var-src="clipUrl">`
+slot to a variable and pass the scene job's output (the CLIs/MCP accept `job:<id>` and resolve it).
+The gallery thumbnail is taken ~40% into the video (frame 0 is usually a blank pre-roll).
 
 ## Endpoints
 

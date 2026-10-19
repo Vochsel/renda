@@ -46,6 +46,15 @@ export function sceneUris(pkg: RendaPackage): string[] {
   return uris;
 }
 
+/**
+ * Uris a HyperFrames job depends on: the project zip plus any variable whose value is an uploaded asset
+ * (e.g. a turntable clip for a video slot). Other strings are ordinary variable values, not paths.
+ */
+export function hyperframesUris(pkg: HyperframesPackage): string[] {
+  const vars = Object.values(pkg.variables ?? {}).filter((v): v is string => typeof v === "string" && v.startsWith("asset://"));
+  return [pkg.project, ...vars];
+}
+
 export type ParsedJob =
   | { kind: "scene"; pkg: RendaPackage; raw: unknown; uris: UriCheck }
   | { kind: "hyperframes"; pkg: HyperframesPackage; raw: unknown; uris: UriCheck };
@@ -56,7 +65,7 @@ export function parseJobPackage(kind: "scene" | "hyperframes", input: unknown): 
   if (kind === "hyperframes") {
     const r = HyperframesPackage.safeParse(input);
     if (!r.success) throw new ApiError("invalid_package", undefined, { issues: zodIssues(r.error) });
-    parsed = { kind, pkg: r.data, raw: r.data, uris: checkUris([r.data.project]) };
+    parsed = { kind, pkg: r.data, raw: r.data, uris: checkUris(hyperframesUris(r.data)) };
   } else {
     const r = safeParsePackage(input);
     if (!r.success) throw new ApiError("invalid_package", undefined, { issues: zodIssues(r.error) });

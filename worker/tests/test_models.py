@@ -33,6 +33,7 @@ def test_hyperframes_package():
     assert p.quality == "looks"
     with pytest.raises(ValidationError):
         HyperframesPackage.model_validate({"project": URI, "composition": "../x.html"})
+    assert HyperframesPackage.model_validate({"project": URI, "fps": 25}).fps == 25  # any rate HyperFrames takes
     with pytest.raises(ValidationError):
-        HyperframesPackage.model_validate({"project": URI, "fps": 25})
+        HyperframesPackage.model_validate({"project": URI, "fps": 500})
     JobRequest.model_validate(job_body(kind="hyperframes", package={"project": f"asset://{SHA}"}))

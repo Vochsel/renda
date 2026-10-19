@@ -353,25 +353,7 @@ def _run(raw: dict, base: Path, output: Path, priority: str, cloud: bool, wait: 
         if not wait:
             emit(json_out, job, lambda: console.print(f"queued job [bold]{job['id']}[/] — `renda jobs {job['id']}`"))
             return
-        job = _wait_job(client, job, json_out)
-        files = client.download_outputs(job, output) if job.get("status") == "succeeded" else []
-        result = {**job, "files": [str(f) for f in files]}
-        if job.get("status") != "succeeded":
-            code, message = "job_" + job.get("status", "failed"), job.get("error") or job.get("status")
-            hint = f"see `renda jobs {job['id']}`"
-            emit(json_out, {"status": "error", "reason": code, "message": message, "hint": hint,
-                            "error": {"code": code, "message": message, "hint": hint}, "job": job})
-            raise typer.Exit(1)
-
-        def human():
-            for f in files:
-                out.print(str(f))
-            console.print(f"[green]done[/] in {job.get('billedSeconds', 0):.1f} billed s · ${job.get('costUsd', 0):.4f}"
-                          + (" · cached" if job.get("cached") else ""))
-            for w in job.get("warnings", []):
-                console.print(f"[yellow]warning[/]: {w}")
-
-        emit(json_out, result, human, [f"Give the user this link to keep the trial workspace: {claim_url}"] if claim_url else None)
+        _finish_cloud_job(client, _wait_job(client, job, json_out), output, json_out, claim_url)
         return
 
     from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
@@ -399,6 +381,28 @@ def _run(raw: dict, base: Path, output: Path, priority: str, cloud: bool, wait: 
             console.print(f"[yellow]warning[/]: {w}")
 
     emit(json_out, result, human)
+
+
+def _finish_cloud_job(client, job: dict, output: Path, json_out: bool, claim_url: str | None, extra: dict | None = None) -> None:
+    """Download a finished job's outputs and report it; failed jobs are errors (exit 1)."""
+    files = client.download_outputs(job, output) if job.get("status") == "succeeded" else []
+    result = {**job, **(extra or {}), "files": [str(f) for f in files]}
+    if job.get("status") != "succeeded":
+        code, message = "job_" + job.get("status", "failed"), job.get("error") or job.get("status")
+        hint = f"see `renda jobs {job['id']}`"
+        emit(json_out, {"status": "error", "reason": code, "message": message, "hint": hint,
+                        "error": {"code": code, "message": message, "hint": hint}, "job": job})
+        raise typer.Exit(1)
+
+    def human():
+        for f in files:
+            out.print(str(f))
+        console.print(f"[green]done[/] in {job.get('billedSeconds', 0):.1f} billed s · ${job.get('costUsd', 0):.4f}"
+                      + (" · cached" if job.get("cached") else ""))
+        for w in job.get("warnings", []):
+            console.print(f"[yellow]warning[/]: {w}")
+
+    emit(json_out, result, human, [f"Give the user this link to keep the trial workspace: {claim_url}"] if claim_url else None)
 
 
 def _ensure_key(client, json_out: bool) -> str | None:
@@ -465,6 +469,57 @@ def bake(
             b["samples"] = samples
         o["bake"] = b
     _run(raw, base, output, priority, cloud, wait, max_minutes, json_out)
+
+
+@command
+def video(
+    project: Annotated[Path, typer.Argument(help="HyperFrames project directory (has index.html)")],
+    var: Annotated[Optional[list[str]], typer.Option("--var", help="key=value composition variable (repeatable). Values: "
+                   "text · local .mp4/.png (uploaded) · job:<id> (a finished render's clip) · a local 3D file "
+                   "(.glb/.blend/.step…: a turntable is rendered first)")] = None,
+    vars_json: Annotated[Optional[str], typer.Option("--vars", help="Variables as a JSON object")] = None,
+    output: Annotated[Path, typer.Option("-o", "--output", help="Output directory")] = Path("renders"),
+    quality: Annotated[Optional[str], typer.Option(help="draft | looks | delivery (standard/final accepted)")] = None,
+    fmt: Annotated[Optional[str], typer.Option("--format", help="mp4 | webm | mov | gif")] = None,
+    fps: Annotated[Optional[int], typer.Option(help="Frame rate (default: the composition's)")] = None,
+    composition: Annotated[Optional[str], typer.Option(help="Composition file inside the project (default index.html)")] = None,
+    name: Annotated[Optional[str], typer.Option(help="Output file stem")] = None,
+    duration: Annotated[Optional[float], typer.Option(help="Composition length in seconds, for the estimate")] = None,
+    priority: Annotated[str, typer.Option(help="economy|standard|rush")] = "standard",
+    wait: Annotated[bool, typer.Option("--wait/--no-wait", help="Wait for the video and download it")] = True,
+    json_out: JsonOpt = False,
+):
+    """Render a HyperFrames HTML composition to video in the cloud (CPU), e.g. a title card around a 3D turntable."""
+    from .cloud import CloudError
+    from .cloud.video import hyperframes_quality, parse_vars, resolve_variables, zip_project
+
+    try:
+        variables = parse_vars(var, vars_json)
+        q = hyperframes_quality(quality)
+    except (CloudError, json.JSONDecodeError) as e:
+        raise CliError("bad_option", getattr(e, "message", str(e)), exit_code=EXIT_USAGE) from None
+    if fmt and fmt not in ("mp4", "webm", "mov", "gif"):
+        raise CliError("bad_option", f"--format must be mp4, webm, mov or gif, got {fmt!r}", exit_code=EXIT_USAGE)
+    pkg: dict[str, Any] = {}
+    if q is not None:
+        pkg["quality"] = q
+    for key, value in {"format": fmt, "fps": fps, "composition": composition, "name": name, "durationSec": duration}.items():
+        if value is not None:
+            pkg[key] = value
+    client = _client()
+    claim_url = _ensure_key(client, json_out)
+    zipped = zip_project(project)
+    pkg["project"] = client.upload(zipped)
+    input_jobs: list[dict] = []
+    if variables:
+        resolved, input_jobs = resolve_variables(client, variables, Path.cwd(), wait=lambda j: _wait_job(client, j, json_out))
+        pkg["variables"] = resolved
+    job = client.create_job(pkg, kind="hyperframes", priority=priority)
+    if not wait:
+        emit(json_out, {**job, "inputJobs": input_jobs}, lambda: console.print(f"queued job [bold]{job['id']}[/] — `renda jobs {job['id']}`"))
+        return
+    _finish_cloud_job(client, _wait_job(client, job, json_out), output, json_out, claim_url,
+                      {"inputJobs": input_jobs} if input_jobs else None)
 
 
 @command

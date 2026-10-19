@@ -5,6 +5,7 @@ import { createInterface } from "node:readline/promises";
 import {
   RendaApiError, RendaClient, TERMINAL_STATUSES, clearCredentials, credentialsPath, loadCredentials, saveCredentials,
   starterPackage, uploadBytes, uploadLocalPaths, validatePackage, zipDirectory, type Credentials, type Job,
+  hyperframesQuality, parseVarFlags, resolveVideoVariables,
 } from "@rendahq/mcp";
 import { parseTextureFlag } from "@rendahq/spec";
 import { flattenFile } from "@rendahq/spec/node";
@@ -74,7 +75,11 @@ Render
   renda validate <pkg.renda.json>            check a package against the spec
   renda flatten <pkg.renda.json> [--provenance] [-o out.json]   resolve extends / package references
   renda new <file>                           write a starter .renda.json
-  renda video <hyperframes-dir>              render a HyperFrames composition
+  renda video <hyperframes-dir>              render a HyperFrames composition (CPU, cloud)
+               [--var key=value ...] [--vars '{json}'] [--quality draft|looks|delivery] [--format mp4|webm|mov|gif]
+               [--fps N] [--composition file.html] [--name stem] [--duration secs] [--no-wait]
+               --var values: text · local .mp4/.png (uploaded) · job:<id> (a finished render's clip)
+               · a local 3D file (.glb/.blend/.step…: a turntable is rendered first, then dropped in)
 
 Flags: --json (default when not a TTY) · exit codes 0 ok, 1 error, 2 usage, 3 auth needed, 4 payment required
 Local rendering (Blender/Mitsuba on your machine): uvx renda render <file>
@@ -423,13 +428,31 @@ const COMMANDS: Record<string, Handler> = {
   },
 
   async video(ctx, [dir]) {
-    if (!dir) throw new UsageError("usage: renda video <hyperframes project dir>");
+    if (!dir) throw new UsageError("usage: renda video <hyperframes project dir> [--var key=value ...]");
+    let vars: Record<string, unknown>;
+    let quality: string | undefined;
+    try {
+      vars = parseVarFlags(ctx.lists.var, str(ctx.flags, "vars"));
+      quality = hyperframesQuality(str(ctx.flags, "quality"));
+    } catch (e) {
+      throw new UsageError((e as Error).message);
+    }
     const { client, trial } = await ctx.authed(true);
     const zip = await zipDirectory(resolve(dir));
     const up = await uploadBytes(client, `${basename(resolve(dir))}.zip`, zip, "application/zip");
     const pkg: Record<string, unknown> = { project: up.assetUri };
-    for (const k of ["composition", "format", "quality"]) if (str(ctx.flags, k)) pkg[k] = str(ctx.flags, k);
+    for (const k of ["composition", "format", "name"]) if (str(ctx.flags, k)) pkg[k] = str(ctx.flags, k);
+    if (quality) pkg.quality = quality;
     for (const k of ["width", "height", "fps"]) if (num(ctx.flags, k) !== undefined) pkg[k] = num(ctx.flags, k);
+    if (num(ctx.flags, "duration") !== undefined) pkg.durationSec = num(ctx.flags, "duration");
+    if (Object.keys(vars).length) {
+      // job:<id> → that render's clip; local 3D file → turntable rendered first; local media → uploaded
+      const resolved = await resolveVideoVariables(client, vars, {
+        baseDir: ctx.deps.sys.cwd(), local: true, waitJob: (j) => waitJob(ctx, client, j),
+      });
+      for (const j of resolved.jobs) ctx.out.info(`${j.variable} ← ${j.jobId}`);
+      pkg.variables = resolved.variables;
+    }
     let job = await client.createJob({ package: pkg as any, kind: "hyperframes" });
     if (ctx.flags.wait !== false) job = await waitJob(ctx, client, job);
     await finish(ctx, job, trial?.claimUrl);

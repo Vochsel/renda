@@ -194,6 +194,41 @@ describe("renda_render_video", () => {
     expect(body.kind).toBe("hyperframes");
     expect(body.package).toEqual({ project: "https://h/proj.zip", fps: 60, format: "webm" });
   });
+
+  it("maps quality aliases and resolves job:<id> variables to the job's clip (remote mode)", async () => {
+    const clip = { name: "tt.mp4", url: "https://r2.test/tt.mp4?sig=1", contentType: "video/mp4", bytes: 9 };
+    const f = fakeFetch(({ method, url }) => {
+      if (url.endsWith("/jobs/job_tt")) return { json: job({ id: "job_tt", status: "succeeded", outputs: [clip] }) };
+      if (method === "POST" && url.endsWith("/jobs")) return { json: job({ kind: "hyperframes", status: "queued" }) };
+    });
+    const mcp = await connect(new RendaClient({ baseUrl: "https://x.test", apiKey: "k", fetch: f.fetch }), "remote");
+    const r: any = await mcp.callTool({ name: "renda_render_video", arguments: {
+      projectUri: "https://h/proj.zip", quality: "final", wait: false,
+      variables: { title: "Launch", clipUrl: "job:job_tt", localish: "./clip.mp4" },
+    } });
+    expect(r.isError).toBeFalsy();
+    const post = f.calls.find((c) => c.method === "POST" && c.url.endsWith("/jobs"))!;
+    expect(post.body.package.quality).toBe("delivery");
+    // remote mode can't read files: non-uri strings pass through for the project to resolve
+    expect(post.body.package.variables).toEqual({ title: "Launch", clipUrl: clip.url, localish: "./clip.mp4" });
+    expect(text(r)).toContain("job_tt");
+  });
+
+  it("local mode uploads a media file variable as asset://", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "renda-hf-"));
+    await writeFile(join(dir, "logo.png"), "\x89PNG");
+    const f = fakeFetch(({ method, url }) => {
+      if (url.endsWith("/uploads")) return { json: { assetUri: `asset://${"e".repeat(64)}`, exists: true } };
+      if (method === "POST" && url.endsWith("/jobs")) return { json: job({ kind: "hyperframes", status: "queued" }) };
+    });
+    const mcp = await connect(new RendaClient({ baseUrl: "https://x.test", apiKey: "k", fetch: f.fetch }));
+    const r: any = await mcp.callTool({ name: "renda_render_video", arguments: {
+      projectUri: "https://h/proj.zip", wait: false, variables: { logo: join(dir, "logo.png") },
+    } });
+    expect(r.isError).toBeFalsy();
+    const post = f.calls.find((c) => c.method === "POST" && c.url.endsWith("/jobs"))!;
+    expect(post.body.package.variables.logo).toBe(`asset://${"e".repeat(64)}`);
+  });
 });
 
 

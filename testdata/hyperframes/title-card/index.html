@@ -17,8 +17,11 @@
       body { margin: 0; background: #0b0f14; color: #f8fafc; font-family: system-ui, sans-serif; }
       #root { position: relative; width: 100%; height: 100%; overflow: hidden; }
       .clip { position: absolute; display: block; }
-      #title { left: 140px; top: 400px; width: 900px; margin: 0; font-size: 80px; white-space: nowrap; font-weight: 800; letter-spacing: -2px; }
-      #subtitle { left: 140px; top: 540px; width: 900px; margin: 0; font-size: 40px; color: #94a3b8; }
+      /* Text column stops before the video slot (x ≥ 1100); long values ellipsize instead of wrapping into the rule. */
+      #title { left: 140px; top: 400px; width: 920px; margin: 0; font-size: 80px; white-space: nowrap; font-weight: 800;
+               letter-spacing: -2px; overflow: hidden; text-overflow: ellipsis; }
+      #subtitle { left: 140px; top: 540px; width: 920px; margin: 0; font-size: 34px; color: #94a3b8;
+                  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       #rule { left: 140px; top: 630px; width: 160px; height: 10px; background: var(--accent); }
       /* The video slot: a turntable from a Renda scene job goes here (variable clipUrl). */
       #slot-video { right: 120px; top: 190px; width: 700px; height: 700px; border-radius: 28px;

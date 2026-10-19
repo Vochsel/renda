@@ -64,10 +64,13 @@ class HyperframesPackage(BaseModel):
     composition: str | None = Field(None, description="Composition file inside the project, default index.html")
     width: int | None = Field(None, ge=16, le=7680)
     height: int | None = Field(None, ge=16, le=7680)
-    fps: Literal[24, 30, 60] | None = None
+    fps: int | None = Field(None, ge=1, le=240)
     format: Literal["mp4", "webm", "mov", "gif"] = "mp4"
     quality: Literal["draft", "looks", "delivery"] = "looks"
-    variables: dict[str, Any] | None = None
+    durationSec: float | None = Field(None, gt=0, description="Estimate hint from the API; not used by the render")
+    variables: dict[str, Any] | None = Field(
+        None, description="Composition variables. String values that are asset://<sha> or https:// media URLs are "
+                          "downloaded into the project and replaced with a local path before rendering.")
 
     @field_validator("project")
     @classmethod

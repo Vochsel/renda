@@ -65,7 +65,7 @@ account the agent calls `renda_signup` with your email, asks you for the 6-digit
 | `renda_upload` | local only; content-addressed upload → `asset://<sha256>` |
 | `renda_estimate` | hardware, time and cost range |
 | `renda_render` | render a file / package / `.renda.json`; local paths auto-uploaded; starts a trial if there's no key; waits with progress; returns URLs and an inline preview |
-| `renda_render_video` | HyperFrames composition → mp4/webm/mov/gif |
+| `renda_render_video` | HyperFrames composition → mp4/webm/mov/gif; `variables` (e.g. `clipUrl: "job:<id>"` or a local 3D file → turntable dropped into a video slot) |
 | `renda_get_job`, `renda_list_jobs`, `renda_cancel_job` | jobs |
 | `renda_download` | local only; save outputs to disk |
 
