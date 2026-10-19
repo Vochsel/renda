@@ -86,3 +86,13 @@ def test_build_tasks_routes_splat_plans():
     plan = SimpleNamespace(engine="gsplat", hardware="gpu-l4", frames=[1], chunks=[[1]], splats=True)
     tasks = dispatch.build_tasks(job, plan, ["ply"], "png")
     assert {t.runner for t in tasks} == {"splat-l4"}
+
+
+def test_glb_outputs_and_export_runner():
+    from renda_worker.storage import content_type
+
+    assert content_type("outputs/job_1/baked.glb") == "model/gltf-binary"
+    # plain GLB conversion ("export") runs on the slim CPU image, or Blender's for .blend/.fbx/.abc
+    assert dispatch.runner_for("export", Hardware.CPU, ["gltf"]) == "cpu"
+    assert dispatch.runner_for("export", Hardware.CPU, ["blend"]) == "blender-cpu"
+    assert dispatch.runner_for("blender-cycles", Hardware.GPU_L4, ["gltf"]) == "l4"

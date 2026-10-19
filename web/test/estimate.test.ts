@@ -55,3 +55,21 @@ describe("gaussian splats", () => {
     expect(e.engine).toBe("blender-cycles");
   });
 });
+
+describe("glb output", () => {
+  it("plain conversion is a cheap CPU export", () => {
+    const e = estimateScene(parsePackage({ scene: { root: "https://h/a.fbx" }, output: { format: "glb" } }));
+    expect(e.engine).toBe("export");
+    expect(e.hardware).toBe("cpu");
+  });
+
+  it("bakes default to Cycles on an L4; three.js bakes on CPU; AO is cheaper", () => {
+    const full = estimateScene(parsePackage({ scene: { root: "https://h/a.glb" }, output: { format: "glb", bake: {} } }));
+    expect(full.engine).toBe("blender-cycles");
+    expect(full.hardware).toBe("gpu-l4");
+    const ao = estimateScene(parsePackage({ scene: { root: "https://h/a.glb" }, output: { format: "glb", bake: { mode: "ao" } } }));
+    expect(ao.estSeconds[1]).toBeLessThan(full.estSeconds[1]);
+    const three = estimateScene(parsePackage({ scene: { root: "https://h/a.glb" }, render: { engine: "threejs" }, output: { format: "glb", bake: { size: 1024 } } }));
+    expect(three.hardware).toBe("cpu");
+  });
+});

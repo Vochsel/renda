@@ -104,6 +104,27 @@ silent drop. Read them.
   `.splat` stores no view-dependent colour; `.ply`/`.spz` keep spherical harmonics. Package lights
   don't affect splats.
 
+## GLB output and light baking
+
+`"output": {"format": "glb"}` converts the scene to GLB (meshes in world space, Y-up, PBR materials).
+Add `bake` to bake the package's environment + lights into textures:
+
+```json
+"output": { "format": "glb", "bake": { "mode": "unlit", "size": 2048, "uvs": "auto", "samples": null, "margin": 4, "textureFormat": "jpg" } }
+```
+
+- `mode`: `unlit` (lighting × albedo in one atlas + KHR_materials_unlit; looks identical everywhere),
+  `ao` (`occlusionTexture` on TEXCOORD_1, PBR kept), `lightmap` (E/π lighting on TEXCOORD_1, linked
+  from `material.extras.renda.lightmap = {index, texCoord: 1, intensity}`; in three.js set
+  `lightMapIntensity = intensity * Math.PI`).
+- `uvs: "auto"` unwraps new non-overlapping lightmap UVs (xatlas) — use it unless the model already
+  has a clean, non-overlapping UV0 (`"existing"`).
+- `render.engine`: `auto`/`blender-cycles` (GPU, GI + glossy), `mitsuba` (GPU path tracing),
+  `threejs` (CPU, shadow-mapped environment + lights, no interreflections). Eevee, Workbench and
+  gsplat can't bake; splats are dropped from GLB output. `render.quality` picks samples per texel
+  (64 / 256 / 1024); camera, resolution and animation don't apply (animation is rejected).
+- Sizes: 1024 for previews/mobile, 2048 default, 4096 for hero assets (4× the cost).
+
 ## Multiple files
 
 Add props with `scene.include`:

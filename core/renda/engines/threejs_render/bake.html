@@ -1,0 +1,189 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<script type="importmap">
+{ "imports": {
+  "three": "./three/build/three.module.js",
+  "three/addons/": "./three/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<script type="module">
+// Renda three.js light baker (renda/engines/threejs.py → bake_atlas). Job in window.RENDA_BAKE:
+// { size, samples, mode, glb, env: {url|null, constant: [r,g,b]|null, intensity, rotationDeg},
+//   lights: [{type, direction|position|target, color, intensity, angleDeg}], center: [x,y,z], radius }
+// Every mesh is drawn into its TEXCOORD_1 (uv1) atlas with a white Lambert material, once per light:
+// `samples` directional lights over the whole sphere carry the environment (radiance looked up in the HDR
+// for that direction, shadow-mapped, so they also occlude each other), plus the job's own lights. The
+// float target sums E/π per texel (lighting only); renda core multiplies in albedo/emission for "unlit".
+import * as THREE from "three";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { RGBELoader } from "three/addons/loaders/RGBELoader.js";
+
+const job = window.RENDA_BAKE;
+const S = job.size;
+const renderer = new THREE.WebGLRenderer({ antialias: false });
+renderer.setSize(16, 16, false);
+renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+renderer.toneMapping = THREE.NoToneMapping;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.autoClear = false;
+const gl = renderer.getContext();
+const floatBlend = renderer.extensions.has("EXT_float_blend");
+const rt = new THREE.WebGLRenderTarget(S, S, {
+  type: floatBlend ? THREE.FloatType : THREE.HalfFloatType, format: THREE.RGBAFormat,
+  depthBuffer: false, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
+});
+
+function uvSpace(material) {
+  // Rasterise into the lightmap atlas instead of the camera: shadows/lighting still use world positions.
+  material.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace("#include <common>", "#include <common>\nattribute vec2 uv1;")
+      .replace("#include <fog_vertex>", "#include <fog_vertex>\n  gl_Position = vec4(uv1 * 2.0 - 1.0, 0.0, 1.0);");
+    // In UV space, front/back facing follows each chart's UV winding, not the surface: never flip normals.
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <normal_fragment_begin>",
+      THREE.ShaderChunk.normal_fragment_begin.replace(/gl_FrontFacing\s*\?\s*1\.0\s*:\s*-\s*1\.0/, "1.0"));
+  };
+  material.side = THREE.DoubleSide;
+  // Transparent double-sided materials are otherwise drawn as a back-face pass (compiled FLIP_SIDED, which
+  // negates normals) + a front-face pass; in UV space "back" just means a mirrored chart.
+  material.forceSinglePass = true;
+  material.blending = THREE.AdditiveBlending;
+  material.transparent = true;
+  material.depthTest = false;
+  material.depthWrite = false;
+  return material;
+}
+
+async function loadEnvSampler() {
+  const rot = THREE.MathUtils.degToRad(job.env.rotationDeg || 0);
+  const k = job.env.intensity ?? 1;
+  if (job.env.url) {
+    const loader = new RGBELoader().setDataType(THREE.FloatType);
+    const hdr = await loader.loadAsync(job.env.url);
+    const { data, width: W, height: H } = hdr.image;
+    return (d) => {
+      // undo scene.environmentRotation (about +Y), then three's equirect mapping
+      const c = Math.cos(-rot), s = Math.sin(-rot);
+      const x = c * d.x + s * d.z, z = -s * d.x + c * d.z, y = d.y;
+      const u = Math.atan2(z, x) / (2 * Math.PI) + 0.5;
+      const v = Math.asin(Math.max(-1, Math.min(1, y))) / Math.PI + 0.5;
+      const px = Math.min(W - 1, Math.floor(u * W)), py = Math.min(H - 1, Math.floor((1 - v) * H));
+      const i = (py * W + px) * 4;
+      return [data[i] * k, data[i + 1] * k, data[i + 2] * k];
+    };
+  }
+  const c = job.env.constant;
+  return c ? () => [c[0] * k, c[1] * k, c[2] * k] : null;
+}
+
+function fitShadow(light, dir) {
+  const R = job.radius, C = new THREE.Vector3(...job.center);
+  light.position.copy(C).addScaledVector(dir, R * 3);
+  light.target.position.copy(C);
+  light.castShadow = true;
+  const cam = light.shadow.camera;
+  cam.left = -R; cam.right = R; cam.top = R; cam.bottom = -R; cam.near = R * 0.5; cam.far = R * 5.5;
+  cam.updateProjectionMatrix();
+  light.shadow.mapSize.set(2048, 2048);
+  light.shadow.bias = -0.0005;
+  light.shadow.normalBias = R * 0.004;
+  light.shadow.radius = 2;
+}
+
+// Fibonacci sphere: evenly spread, deterministic directions (jittered by the job's seed)
+function sphereDirs(n, seed) {
+  const dirs = [];
+  const ga = Math.PI * (3 - Math.sqrt(5));
+  const off = (seed * 0.618034) % 1;
+  for (let i = 0; i < n; i++) {
+    const y = 1 - 2 * ((i + 0.5 + off) % n) / n;
+    const r = Math.sqrt(Math.max(0, 1 - y * y));
+    const t = ga * i + seed;
+    dirs.push(new THREE.Vector3(Math.cos(t) * r, y, Math.sin(t) * r));
+  }
+  return dirs;
+}
+
+async function main() {
+  const gltf = await new GLTFLoader().loadAsync(job.glb);
+  const scene = new THREE.Scene();
+  const mat = uvSpace(new THREE.MeshLambertMaterial({ color: 0xffffff }));
+  let meshes = 0;
+  gltf.scene.traverse((o) => {
+    if (o.isMesh) {
+      if (!o.geometry.getAttribute("uv1")) throw new Error(`mesh ${o.name} has no TEXCOORD_1`);
+      o.material = mat; o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; meshes++;
+    }
+  });
+  scene.add(gltf.scene);
+  scene.updateMatrixWorld(true);
+  const dummyCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  renderer.setRenderTarget(rt);
+  renderer.setClearColor(0x000000, 0);
+  renderer.clear();
+
+  const pass = (light) => {
+    scene.add(light); scene.add(light.target);
+    renderer.setRenderTarget(rt);
+    renderer.render(scene, dummyCam);
+    scene.remove(light); scene.remove(light.target);
+    light.dispose?.();
+  };
+
+  const env = job.mode === "ao" ? () => [1, 1, 1] : await loadEnvSampler();
+  const n = job.samples;
+  if (env) {
+    // E/π ≈ (4/N) Σ L(d) cos⁺ vis over uniform sphere directions; a Lambert pass gives I·cos·vis/π → I = 4π L / N
+    for (const d of sphereDirs(n, job.seed || 0)) {
+      const L = job.mode === "ao" ? [1, 1, 1] : env(d);
+      const lum = Math.max(L[0], L[1], L[2]);
+      if (lum <= 0) continue;
+      const light = new THREE.DirectionalLight(new THREE.Color().setRGB(L[0] / lum, L[1] / lum, L[2] / lum, THREE.LinearSRGBColorSpace),
+                                              4 * Math.PI * lum / n);
+      fitShadow(light, d);
+      pass(light);
+    }
+  }
+  if (job.mode !== "ao") {
+    for (const l of job.lights) {
+      const color = new THREE.Color().setRGB(...(l.color || [1, 1, 1]), THREE.LinearSRGBColorSpace);
+      let light;
+      if (l.type === "sun") {
+        light = new THREE.DirectionalLight(color, l.intensity);
+        fitShadow(light, new THREE.Vector3(...l.direction).normalize().negate());
+      } else if (l.type === "spot") {
+        light = new THREE.SpotLight(color, l.candela, 0, THREE.MathUtils.degToRad((l.angleDeg || 45) / 2), 0.2, 2);
+        light.position.set(...l.position); light.target.position.set(...l.target);
+        light.castShadow = true; light.shadow.mapSize.set(2048, 2048); light.shadow.bias = -0.0005;
+      } else {  // point and area (approximated as a point at its centre)
+        light = new THREE.PointLight(color, l.candela, 0, 2);
+        light.position.set(...l.position);
+        light.castShadow = true; light.shadow.mapSize.set(1024, 1024); light.shadow.bias = -0.0005;
+        light.target = new THREE.Object3D();
+      }
+      pass(light);
+    }
+  }
+  const out = new Float32Array(S * S * 4);
+  if (rt.texture.type === THREE.FloatType) {
+    renderer.readRenderTargetPixels(rt, 0, 0, S, S, out);
+  } else {
+    const half = new Uint16Array(S * S * 4);
+    renderer.readRenderTargetPixels(rt, 0, 0, S, S, half);
+    for (let i = 0; i < half.length; i++) out[i] = THREE.DataUtils.fromHalfFloat(half[i]);
+  }
+  const res = await fetch("result.f32", { method: "POST", body: out.buffer });
+  if (!res.ok) throw new Error(`upload failed: ${res.status}`);
+  window.RENDA_BAKE_DONE = { ok: true, meshes, floatBlend, env: !!env };
+}
+
+main().catch((e) => { window.RENDA_BAKE_DONE = { ok: false, error: String(e && e.stack || e) }; });
+</script>
+</body>
+</html>

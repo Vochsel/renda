@@ -355,6 +355,69 @@ def setup_passes(scene, passes: list, out_dir: Path) -> None:
 # -- main ------------------------------------------------------------------------
 
 
+def bake(scene, job: dict) -> dict:
+    """Bake lighting onto the "RendaLightmap" UVs (TEXCOORD_1 of the core-written GLB) of every mesh and
+    dump the float atlas as .npy; renda core dilates, encodes and writes the final GLB."""
+    import numpy as np
+
+    b = job["bake"]
+    size = int(b["size"])
+    objs = [o for o in scene.objects if o.type == "MESH" and not o.hide_render]
+    if not objs:
+        raise RuntimeError("bake: no mesh objects in the scene")
+    img = bpy.data.images.new("renda_bake", size, size, alpha=True, float_buffer=True)
+    img.generated_color = (0.0, 0.0, 0.0, 0.0)
+    # float images are scene-linear by default, so the pixels read back are linear radiance
+    for o in objs:
+        uvl = o.data.uv_layers
+        if len(uvl) == 0:
+            raise RuntimeError(f"bake: mesh {o.name} has no UVs")
+        layer = uvl[1] if len(uvl) > 1 else uvl[0]
+        layer.name = "RendaLightmap"
+        if not o.data.materials:
+            m = bpy.data.materials.new("renda_default")
+            m.use_nodes = True
+            o.data.materials.append(m)
+        for slot in o.material_slots:
+            m = slot.material
+            if m is None:
+                continue
+            m.use_nodes = True
+            nt = m.node_tree
+            node = nt.nodes.get("RendaBakeTarget") or nt.nodes.new("ShaderNodeTexImage")
+            node.name = "RendaBakeTarget"
+            node.image = img
+            for n in nt.nodes:
+                n.select = False
+            node.select = True
+            nt.nodes.active = node
+    bpy.ops.object.select_all(action="DESELECT")
+    for o in objs:
+        o.select_set(True)
+    bpy.context.view_layer.objects.active = objs[0]
+    mode = b["mode"]
+    if mode == "ao" and scene.world is not None:
+        scene.world.light_settings.distance = float(b.get("ao_distance", 1.0))
+    kw = dict(margin=int(b.get("margin", 4)), use_clear=True, uv_layer="RendaLightmap", target="IMAGE_TEXTURES")
+    if mode == "unlit":
+        kw.update(type="COMBINED", pass_filter={"EMIT", "DIRECT", "INDIRECT", "DIFFUSE", "GLOSSY", "TRANSMISSION"})
+    elif mode == "ao":
+        kw.update(type="AO")
+    else:  # lightmap: incoming light only, no albedo
+        kw.update(type="DIFFUSE", pass_filter={"DIRECT", "INDIRECT"})
+    try:
+        scene.render.bake.margin_type = "EXTEND"
+    except Exception:
+        pass
+    bpy.ops.object.bake(**kw)
+    px = np.empty(size * size * 4, dtype=np.float32)
+    img.pixels.foreach_get(px)
+    out = Path(job["out_dir"]) / "bake.npy"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    np.save(out, px.reshape(size, size, 4))
+    return {"files": [str(out)], "warnings": WARN, "gpu": scene.cycles.device}
+
+
 def main() -> None:
     job = read_job()
     fmt = job["format"]
@@ -367,6 +430,9 @@ def main() -> None:
     setup_world(scene, job["environment"])
     add_lights(scene, job.get("lights", []), conv)
     configure_engine(scene, job)
+    if job.get("bake"):
+        write_result(job, bake(scene, job))
+        return
     cam, base_pos, target = make_camera(scene, job, conv)
 
     out_dir = Path(job["out_dir"])

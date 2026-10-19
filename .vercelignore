@@ -1,0 +1,8 @@
+.claude/
+**/.venv/
+**/__pycache__/
+**/.pytest_cache/
+testdata/out/
+testdata/showcase-public/assets/
+core/
+worker/

@@ -1,0 +1,10 @@
+{
+  "$schema": "https://renda.dev/schema/v1.json",
+  "version": 1,
+  "name": "chair-baked",
+  "assets": { "chair": { "uri": "./chair.blend" } },
+  "scene": { "root": "chair" },
+  "environment": { "hdri": "sunset", "intensity": 1.2 },
+  "render": { "engine": "blender-cycles", "quality": "standard" },
+  "output": { "format": "glb", "bake": { "mode": "unlit", "size": 2048 } }
+}

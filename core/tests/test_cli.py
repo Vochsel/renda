@@ -144,3 +144,31 @@ def test_cloud_render_failed_job_is_an_error(monkeypatch, tmp_path):
     code, data = run("render", files["glb"], "--cloud")
     assert code == 1
     assert data["status"] == "error" and data["reason"] == "job_failed" and "UnknownFormat" in data["message"]
+
+
+def test_bake_glb_converts_locally(tmp_path):
+    import json as _json
+
+    from typer.testing import CliRunner
+
+    from renda.cli import app
+
+    from pathlib import Path
+
+    scene = Path(__file__).parents[2] / "testdata" / "scenes" / "scene.obj"
+    r = CliRunner().invoke(app, ["bake", str(scene), "--glb", "-o", str(tmp_path), "--json"])
+    assert r.exit_code == 0, r.output
+    out = _json.loads(r.output.strip().splitlines()[-1])
+    assert out["engine"] == "export" and out["outputs"][0].endswith(".glb")
+
+
+def test_bake_rejects_unknown_mode(tmp_path):
+    from typer.testing import CliRunner
+
+    from renda.cli import app
+
+    from pathlib import Path
+
+    scene = Path(__file__).parents[2] / "testdata" / "scenes" / "scene.obj"
+    r = CliRunner().invoke(app, ["bake", str(scene), "--mode", "shiny", "--json"])
+    assert r.exit_code != 0 and "unlit" in r.output

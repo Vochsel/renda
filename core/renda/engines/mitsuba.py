@@ -224,3 +224,105 @@ class MitsubaEngine(Engine):
             files = list(composite_files(ctx, stage, frames, depths.get, warnings, self.name, cams).values()) + files
         return RenderResult(files, warnings, time.time() - t0)
 
+
+
+def bake_atlas(ctx: RenderContext, stage, layout, texels, warnings: list[str]) -> np.ndarray:
+    """Texel-space bake with Dr.Jit through the same Mitsuba scene the renderer uses (path integrator,
+    env + lights + GI). Returns (linear RGB atlas, valid mask), v-up rows.
+
+    unlit: radiance leaving each texel along its normal, from a view ray just above the surface — full
+    BSDF (glossy, metal, textures), like Cycles' combined bake. lightmap: E/π from cosine-weighted rays.
+    ao: cosine-weighted sky visibility within a quarter of the scene diagonal."""
+    import shutil
+    import tempfile
+
+    import drjit as dr
+    import mitsuba as mi
+
+    from ..ir.exporters.mitsuba import TextureCache, light_dict, stage_to_dict
+    from ..scene import env_map_path, package_lights
+
+    pkg, plan = ctx.pkg, ctx.plan
+    bake = pkg.output.bake
+    variant = pick_variant(_gpu_wanted(plan.hardware))
+    if plan.hardware.startswith("gpu") and not variant.startswith(("cuda", "metal")):
+        warnings.append(f"mitsuba: no GPU backend available, baked with {variant}")
+    scratch = Path(tempfile.mkdtemp(prefix="mi-bake-", dir=ctx.cache_dir or ctx.out_dir))
+    try:
+        scene = stage_to_dict(stage, mi, TextureCache(stage.base_dir), scratch / "mi-meshes")
+        for i, lt in enumerate(package_lights(pkg, stage)):
+            d = light_dict(lt, stage.up_vector(), mi)
+            if d:
+                scene[f"pkg_light_{i}"] = d
+        env = pkg.environment
+        dome = next((l for l in stage.lights if l.type == "dome" and l.texture), None)
+        env_path = env_map_path(pkg, ctx.asset_paths) or (Path(dome.texture) if dome is not None else None)
+        if env_path is not None:
+            rot = mi.ScalarTransform4f().rotate(stage.up_vector().tolist(), env.rotationDeg)
+            if stage.up_axis == "Z":  # Mitsuba envmaps are Y-up
+                rot = rot @ mi.ScalarTransform4f().rotate([1, 0, 0], 90)
+            scene["environment"] = {"type": "envmap", "filename": str(env_path), "scale": float(env.intensity), "to_world": rot}
+        elif not any(k.startswith(("light_", "pkg_light_")) for k in scene):
+            scene["environment"] = {"type": "constant", "radiance": {"type": "rgb", "value": [0.8, 0.8, 0.8]}}
+        scene["integrator"] = {"type": "path", "max_depth": 6}
+        mi_scene = mi.load_dict(scene)
+        integrator = mi_scene.integrator()
+
+        lo, hi = stage.bounds()
+        diag = float(np.linalg.norm(hi - lo)) or 1.0
+        eps = 1e-4 * diag
+        ao_dist = 0.25 * diag
+        pos = texels.interpolate(layout, "points").astype(np.float32)
+        nrm = texels.interpolate(layout, "normals").astype(np.float32)
+        K = len(texels)
+        spp = int(plan.samples)
+        acc = np.zeros((K, 3), dtype=np.float32)
+        valid = np.ones(K, dtype=bool)
+        batch = (1 << 21) if variant.startswith("cuda") else (1 << 17)
+        for start in range(0, K, batch):
+            end = min(K, start + batch)
+            n = end - start
+            o = pos[start:end] + nrm[start:end] * eps
+            N = mi.Vector3f(nrm[start:end, 0], nrm[start:end, 1], nrm[start:end, 2])
+            O = mi.Point3f(o[:, 0], o[:, 1], o[:, 2])
+            frame = mi.Frame3f(N)
+            sampler = mi.load_dict({"type": "independent", "sample_count": 1})
+            sampler.seed(int(pkg.render.seed) * 7919 + start, n)
+            total = dr.zeros(mi.Color3f, n)
+            if bake.mode == "unlit":
+                off = 1e-3 * diag
+                Ov = mi.Point3f(*(pos[start:end] + nrm[start:end] * off).T)
+                view = mi.Ray3f(Ov, -N)
+                si = mi_scene.ray_intersect(view)
+                ok = si.is_valid() & (si.t < 2.5 * off)
+                valid[start:end] = np.array(ok, dtype=bool)
+            for _ in range(spp):
+                if bake.mode == "unlit":
+                    L, _, _ = integrator.sample(mi_scene, sampler, mi.Ray3f(Ov, -N))
+                    total += mi.Color3f(L)
+                    sampler.schedule_state()
+                    dr.eval(total)
+                    continue
+                d = frame.to_world(mi.warp.square_to_cosine_hemisphere(sampler.next_2d()))
+                ray = mi.Ray3f(O, d)
+                if bake.mode == "ao":
+                    ray.maxt = ao_dist
+                    vis = dr.select(mi_scene.ray_test(ray), 0.0, 1.0)
+                    total += mi.Color3f(vis, vis, vis)
+                else:
+                    L, _, _ = integrator.sample(mi_scene, sampler, ray)
+                    total += mi.Color3f(L)
+                sampler.schedule_state()
+                dr.eval(total)
+            arr = np.array(total, dtype=np.float32)
+            acc[start:end] = arr.T if arr.shape == (3, n) else arr.reshape(n, 3)
+        acc /= max(spp, 1)
+        out = np.zeros((layout.size, layout.size, 3), dtype=np.float32)
+        out[texels.rows, texels.cols] = acc
+        mask = np.zeros((layout.size, layout.size), dtype=bool)
+        mask[texels.rows, texels.cols] = valid  # texels whose view ray hit something else get dilated over
+        if bake.mode == "unlit" and valid.mean() < 0.9:
+            warnings.append(f"mitsuba: {100 * (1 - valid.mean()):.0f}% of texels were occluded at the surface and filled from neighbours")
+        return out, mask
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)

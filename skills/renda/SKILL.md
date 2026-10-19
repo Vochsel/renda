@@ -1,6 +1,6 @@
 ---
 name: renda
-description: Render 3D files and scenes in the cloud with Renda: .blend, USD/USDZ, glTF/GLB, three.js JSON, FBX, OBJ, STL, PLY, DAE, 3MF, Alembic, and Gaussian splats (.ply/.splat/.spz captures, alone or mixed with meshes). Produces images (png/jpg/webp/exr) or video (mp4/webm/gif/mov) with Blender Cycles/Eevee, Mitsuba, three.js, or gsplat. Use this skill whenever the user wants to render, preview, visualise, thumbnail, screenshot or "see" a 3D model or scene, make product shots or turntables, batch-render assets, or mentions Renda, even if they don't say "render" (e.g. "what does this .glb look like?", "make a hero image of my STL").
+description: Render 3D files and scenes in the cloud with Renda: .blend, USD/USDZ, glTF/GLB, three.js JSON, FBX, OBJ, STL, PLY, DAE, 3MF, Alembic, and Gaussian splats (.ply/.splat/.spz captures, alone or mixed with meshes). Produces images (png/jpg/webp/exr), video (mp4/webm/gif/mov) or a GLB with lighting baked into its textures, with Blender Cycles/Eevee, Mitsuba, three.js, or gsplat. Use this skill whenever the user wants to render, preview, visualise, thumbnail, screenshot or "see" a 3D model or scene, make product shots or turntables, bake lighting / lightmaps / ambient occlusion into a model, convert a scene to GLB, batch-render assets, or mentions Renda, even if they don't say "render" (e.g. "what does this .glb look like?", "make a hero image of my STL").
 ---
 
 # Renda: cloud rendering for agents
@@ -66,6 +66,24 @@ picks a cheap engine for drafts. Override it when:
   capture use `scene.include` and `threejs` (draft) or `blender-cycles` (final; splats composited by depth)
 
 The full matrix is in `renda-package`.
+
+## Baking lighting into a GLB
+
+When the user wants a model that *looks lit* in a web viewer, game engine or AR without real-time
+lights (or wants lightmaps / AO), bake instead of render:
+
+```bash
+renda bake model.blend                      # unlit: full lighting baked into the colour (default)
+renda bake model.glb --mode ao --size 1024  # AO texture, PBR materials kept
+renda bake model.glb --mode lightmap        # lighting-only texture on TEXCOORD_1 (extras.renda.lightmap)
+renda bake scene.json --engine threejs      # cheapest (CPU, no bounce light)
+renda bake robot.fbx --glb                  # plain conversion to GLB
+```
+
+MCP: `renda_bake` (same inputs as `renda_render`, plus `mode`, `size`, `engine`, `plain`). The
+lighting comes from the package's `environment` + `lights`, so set those like a render. Default
+engine is `blender-cycles` (GPU, global illumination + glossy); `mitsuba` is similar; `threejs` is
+cheapest but direct light only. Splats can't be baked. Output is one `.glb` in `outputs`.
 
 ## Errors you'll see
 

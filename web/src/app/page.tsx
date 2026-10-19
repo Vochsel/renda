@@ -5,6 +5,7 @@ import { InstallTabs } from "@/components/install-tabs";
 import { installSnippets } from "@/lib/install-snippets";
 import { FREE_MINUTES, HARDWARE_LABEL, PRICE_PER_MINUTE } from "@/lib/pricing";
 import { SHOWCASE, type ShowcaseItem } from "@/lib/showcase";
+import { BakeDemo } from "@/components/bake-demo";
 
 const FORMATS = [".blend", ".usd(z)", ".glb", ".fbx", ".obj", ".stl", ".ply", ".dae", ".3mf", ".abc", "three.js", "splats (.ply .splat .spz)"];
 const ENGINES = ["Cycles", "Eevee", "Workbench", "Mitsuba 3", "three.js", "gsplat", "HyperFrames"];
@@ -119,6 +120,15 @@ export default function Home() {
             </a>
             .
           </p>
+        </section>
+
+        <section aria-label="Light baking" className="border-border mt-16 border-t pt-14 pb-6">
+          <h2 className="text-2xl font-semibold tracking-tight">Bake lighting into any model → GLB</h2>
+          <p className="text-muted-foreground mt-3 mb-10 max-w-xl text-pretty">
+            <span className="text-foreground font-mono text-sm">renda bake model.blend</span> — Cycles, Mitsuba or three.js bake the
+            HDRI and lights into the textures, so the GLB looks lit in any viewer or engine, with no lights. Drag to orbit.
+          </p>
+          <BakeDemo />
         </section>
 
         <section className="border-border mt-16 grid gap-10 border-t py-14 text-sm sm:grid-cols-3">

@@ -107,6 +107,26 @@ describe("render", () => {
     expect(submitted.body.package.assets.scene.uri).toBe(`asset://${"a".repeat(64)}`);
   });
 
+  it("bake submits a glb package with the bake block (and --glb converts without baking)", async () => {
+    const route: Route = ({ method, url }) => {
+      if (method === "POST" && url.endsWith("/jobs")) return { status: 201, json: job() };
+      if (url.endsWith("/jobs/job_1")) return { json: job({ status: "succeeded", progress: 1 }) };
+    };
+    const creds = { creds: { apiKey: "rnd_live_xxxxxxxxxxxxxxxxxxxxxxxx" } };
+    let t = await setup(route, creds);
+    expect(await run(["bake", "https://example.com/a.glb", "--mode", "ao", "--size", "1024", "--engine", "mitsuba"], t.deps)).toBe(0);
+    let pkg = t.calls.find((c) => c.method === "POST" && c.url.endsWith("/jobs"))!.body.package;
+    expect(pkg.output).toMatchObject({ format: "glb", bake: { mode: "ao", size: 1024 } });
+    expect(pkg.render.engine).toBe("mitsuba");
+    t = await setup(route, creds);
+    expect(await run(["bake", "https://example.com/a.glb", "--glb"], t.deps)).toBe(0);
+    pkg = t.calls.find((c) => c.method === "POST" && c.url.endsWith("/jobs"))!.body.package;
+    expect(pkg.output.format).toBe("glb");
+    expect(pkg.output.bake).toBeUndefined();
+    t = await setup(route, creds);
+    expect(await run(["bake", "https://example.com/a.glb", "--mode", "shiny"], t.deps)).toBe(2);
+  });
+
   it("--max-minutes refuses over-budget jobs before submitting", async () => {
     const t = await setup(({ method, url }) => {
       if (url.endsWith("/estimate")) return { json: { engine: "blender-cycles", hardware: "gpu-l4", estSeconds: [300, 900], estCostUsd: [0.2, 0.5] } };

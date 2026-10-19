@@ -343,7 +343,8 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
   }
 
   // ---------- render ----------
-  const resolvePackage = async (args: { package?: Record<string, unknown>; file?: string; packagePath?: string; packageDir?: string; options?: StarterOpts }) => {
+  const resolvePackage = async (args: { package?: Record<string, unknown>; file?: string; packagePath?: string; packageDir?: string; options?: StarterOpts },
+    mutate?: (pkg: any) => void) => {
     let pkg: any;
     let baseDir = args.packageDir ? resolve(args.packageDir) : process.cwd();
     if (args.package) pkg = args.package;
@@ -353,6 +354,10 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
       baseDir = args.packageDir ? baseDir : packageDir(args.packagePath);
     } else if (args.file) pkg = starterPackage(args.file, args.options ?? {});
     else throw new Error("Provide one of: package, packagePath, or file.");
+    if (mutate) {
+      pkg = structuredClone(pkg);
+      mutate(pkg);
+    }
     const v = validatePackage(pkg);
     if (!v.valid) return { issues: v.issues } as const;
     let uploaded: unknown[] = [];
@@ -415,6 +420,50 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
     }
     if (args.wait !== false && !TERMINAL_STATUSES.has(job.status)) job = await waitWithProgress(job.id, extra);
     return finishJob(job, args.includeImage !== false, r.uploaded.length ? { uploaded: r.uploaded } : undefined);
+  }));
+
+  server.registerTool("renda_bake", {
+    title: "Bake lighting into a model → GLB",
+    description: "Bake a scene's lighting (HDRI + lights, shadows, ambient occlusion, bounce light) into textures and return a .glb that looks lit in any viewer, game engine or three.js scene with no lights. "
+      + "Takes the same inputs as renda_render. Engines: blender-cycles (default, GPU, full GI + glossy), mitsuba (GPU path tracer), threejs (cheap CPU, direct light + environment shadows, no bounces). "
+      + "Modes: unlit (default; baked colour + KHR_materials_unlit), ao (ambient-occlusion texture, PBR kept), lightmap (lighting-only texture on TEXCOORD_1, see extras.renda.lightmap). "
+      + "plain=true just converts the scene to GLB (no baking, cheap). Gaussian splats can't be baked.",
+    inputSchema: {
+      ...RenderSource,
+      mode: z.enum(["unlit", "ao", "lightmap"]).optional().describe("Default unlit."),
+      size: z.number().int().min(64).max(8192).optional().describe("Texture size in px (default 2048)."),
+      engine: z.enum(["auto", "blender-cycles", "mitsuba", "threejs"]).optional(),
+      quality: z.enum(["draft", "standard", "final"]).optional().describe("Samples per texel preset (default standard)."),
+      samples: z.number().int().positive().optional(),
+      uvs: z.enum(["auto", "existing"]).optional().describe("auto = generate lightmap UVs (default); existing = reuse the model's UVs (must not overlap)."),
+      textureFormat: z.enum(["jpg", "png", "webp"]).optional(),
+      plain: z.boolean().optional().describe("Convert to GLB without baking."),
+      priority: z.enum(["economy", "standard", "rush"]).optional(),
+      wait: z.boolean().optional().describe("Wait for completion (default true, up to 10 min)."),
+    },
+    annotations: { openWorldHint: true },
+  }, safe(async (args: any, extra: any) => {
+    const trial = local && !client.apiKey ? await startTrial() : undefined;
+    const r = await resolvePackage(args, (pkg) => {
+      delete pkg.animation;
+      const output: any = { ...(pkg.output ?? {}), format: "glb" };
+      delete output.passes;
+      delete output.video;
+      delete output.keepFrames;
+      if (args.plain) delete output.bake;
+      else {
+        output.bake = { ...(output.bake ?? {}) };
+        for (const k of ["mode", "size", "samples", "uvs", "textureFormat"]) if (args[k] !== undefined) output.bake[k] = args[k];
+      }
+      pkg.output = output;
+      if (args.engine || args.quality) pkg.render = { ...(pkg.render ?? {}), ...(args.engine ? { engine: args.engine } : {}), ...(args.quality ? { quality: args.quality } : {}) };
+    });
+    if ("issues" in r) return fail(`Invalid package: ${JSON.stringify(r.issues, null, 2)}`, "Fix the issues (see `fix`) and retry.");
+    let job = await client.createJob({ package: r.pkg, kind: "scene", priority: args.priority });
+    if (args.wait !== false && !TERMINAL_STATUSES.has(job.status)) job = await waitWithProgress(job.id, extra);
+    const res = await finishJob(job, false, trial ? { trialStarted: { claimUrl: trial.claimUrl, freeSecondsLeft: trial.freeSecondsLeft } } : undefined);
+    if (trial) res.content[0] = { type: "text", text: (res.content[0] as { text: string }).text + `\nNo account was configured, so a free trial was started.${claimNote()}` };
+    return res;
   }));
 
   server.registerTool("renda_render_video", {

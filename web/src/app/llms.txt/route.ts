@@ -10,7 +10,7 @@ export function GET() {
   const base = appUrl();
   const body = `# Renda — setup instructions for agents
 
-> Renda renders 3D files in the cloud: .blend, .usd/.usda/.usdc/.usdz, .gltf/.glb, three.js JSON, .fbx, .obj, .stl, .ply, .dae, .3mf, .abc, Gaussian splats (3DGS .ply, .splat, .spz), or a .renda.json package → png/jpg/webp/exr stills or mp4/webm/gif/mov video. It also renders HyperFrames HTML videos. Billed per render-second. You are reading this because the user asked you to set up Renda. Follow the steps in order, run the commands yourself, and report back.
+> Renda renders 3D files in the cloud: .blend, .usd/.usda/.usdc/.usdz, .gltf/.glb, three.js JSON, .fbx, .obj, .stl, .ply, .dae, .3mf, .abc, Gaussian splats (3DGS .ply, .splat, .spz), or a .renda.json package → png/jpg/webp/exr stills, mp4/webm/gif/mov video, or a .glb with the lighting baked into its textures. It also renders HyperFrames HTML videos. Billed per render-second. You are reading this because the user asked you to set up Renda. Follow the steps in order, run the commands yourself, and report back.
 
 ## 1. Pick a path (both use the same account and credentials file)
 - Node available (\`node --version\` ≥ 20): use \`npx ${CLI_PACKAGE} …\` (alias after install: \`renda\`).
@@ -39,10 +39,18 @@ Credentials live in ~/.config/renda/credentials.json (or $RENDA_API_KEY).
 Gaussian splats: splat-only scenes render with engine "gsplat"; put meshes inside a capture with scene.include (threejs renders both natively; blender-*/mitsuba composite the splats by depth, without engine lighting on them). Splat .ply/.splat captures are Y-down: scene.upAxis defaults to "-Y"; set "Y" if a render is upside down.
 Identical re-renders are cached and free. Local paths are uploaded automatically (deduped by sha256).
 
+Bake lighting into a model and get a GLB back (works in any glTF viewer / game engine with no lights):
+    renda bake chair.blend                               # mode unlit (default), 2048² texture, Cycles on a GPU
+    renda bake chair.blend --mode ao --size 1024         # ambient occlusion only, PBR materials kept
+    renda bake chair.blend --mode lightmap               # lighting-only texture on TEXCOORD_1 (extras.renda.lightmap)
+    renda bake scene.json --engine threejs               # cheapest (CPU): direct light + environment shadows, no bounces
+    renda bake robot.fbx --glb                           # plain conversion to GLB, no baking
+Package form: output: {"format": "glb", "bake": {"mode": "unlit", "size": 2048}}; engines blender-cycles | mitsuba | threejs. Splats can't be baked.
+
 ## 5. MCP (if you'd rather use tools than the CLI)
 - Local stdio: \`${installSnippets.mcp.claudeCode}\` (or \`renda mcp add --agent cursor|codex|claude-code\`).
 - Remote (streamable HTTP): ${base}/api/mcp with header \`Authorization: Bearer <apiKey>\`.
-Tools: renda_trial, renda_claim, renda_signup, renda_verify, renda_render, renda_estimate, renda_get_job, renda_list_jobs, renda_render_video, renda_usage, renda_billing_link, …
+Tools: renda_trial, renda_claim, renda_signup, renda_verify, renda_render, renda_bake, renda_estimate, renda_get_job, renda_list_jobs, renda_render_video, renda_usage, renda_billing_link, …
 Skills: \`npx skills add ${GITHUB_REPO}\` · Claude Code plugin: \`/plugin marketplace add ${GITHUB_REPO}\` then \`/plugin install renda@renda\`.
 
 ## 6. Errors and money

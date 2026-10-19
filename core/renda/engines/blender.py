@@ -378,3 +378,45 @@ def _gltf_for_blender(stage, out: Path) -> Path:
         stage.up_axis = "Y"
     return to_gltf(stage, out)
 
+
+
+def bake_atlas(ctx: RenderContext, stage, layout, warnings: list[str]) -> np.ndarray:
+    """Cycles bake onto the layout's atlas UVs. Returns the linear RGB atlas (v-up rows)."""
+    import shutil
+
+    from ..bake import write_glb
+    from ..scene import env_map_path
+    from ..spec import parse_color
+
+    pkg, plan = ctx.pkg, ctx.plan
+    bake = pkg.output.bake
+    scratch = _scratch(ctx, "blender-input")
+    glb = write_glb(layout, stage, scratch / "bake-input.glb", "source")
+    lo, hi = stage.bounds()
+    lights = ir_lights_as_package(stage)
+    for l in pkg.lights:
+        d = l.model_dump()
+        d["color"] = list(parse_color(l.color, (1.0, 1.0, 1.0))[:3])
+        lights.append(d)
+    env = pkg.environment
+    hdri = env_map_path(pkg, ctx.asset_paths)
+    work = scratch / "out"
+    job = {
+        "input": str(glb), "format": "gltf", "source_up": stage.up_axis, "unit_scale": 1.0, "includes": [],
+        "engine": "cycles", "frames": [1], "resolution": [64, 64], "samples": int(plan.samples),
+        "adaptive_threshold": 0.01, "denoise": False, "seed": pkg.render.seed, "gpu": plan.hardware.startswith("gpu"),
+        "camera": {"mode": "auto"}, "frame_cameras": None, "use_scene_camera_default": False, "turntable": None,
+        "environment": {"hdri": str(hdri) if hdri else None, "intensity": env.intensity,
+                        "rotationDeg": env.rotationDeg, "keep_scene_world": False},
+        "transparent_film": False, "lights": lights, "material_overrides": {}, "passes": [],
+        "out_dir": str(work), "image_format": "PNG",
+        "bake": {"mode": bake.mode, "size": layout.size, "margin": bake.margin,
+                 "ao_distance": float(np.linalg.norm(hi - lo)) * 0.25},
+    }
+    try:
+        result = run_blender_script("render.py", job)
+        warnings += [w for w in result.get("warnings", []) if w not in warnings]
+        arr = np.load(work / "bake.npy")
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    return arr[..., :3]

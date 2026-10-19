@@ -13,7 +13,7 @@ describe("tool registration", () => {
     const mcp = await connect(new RendaClient({ baseUrl: "https://x.test" }));
     const names = (await mcp.listTools()).tools.map((t) => t.name).sort();
     expect(names).toEqual([
-      "renda_billing_link", "renda_cancel_job", "renda_claim", "renda_download", "renda_estimate", "renda_get_job", "renda_init_package",
+      "renda_bake", "renda_billing_link", "renda_cancel_job", "renda_claim", "renda_download", "renda_estimate", "renda_get_job", "renda_init_package",
       "renda_list_jobs", "renda_pricing", "renda_render", "renda_render_video", "renda_signup", "renda_trial", "renda_upload",
       "renda_usage", "renda_validate_package", "renda_verify", "renda_whoami",
     ]);
@@ -110,6 +110,24 @@ describe("account flow", () => {
     const r: any = await mcp.callTool({ name: "renda_render", arguments: { file: "https://h/a.glb" } });
     expect(r.isError).toBe(true);
     expect(text(r)).toContain("renda_billing_link");
+  });
+});
+
+describe("renda_bake", () => {
+  it("submits a glb package with the bake block, or a plain conversion", async () => {
+    const f = fakeFetch(({ method, url }) => {
+      if (method === "POST" && url.endsWith("/jobs")) return { json: job({ status: "succeeded", progress: 1, outputs: [{ name: "baked.glb", url: "https://r2.test/b.glb", contentType: "model/gltf-binary", bytes: 900 }] }) };
+    });
+    const mcp = await connect(new RendaClient({ baseUrl: "https://x.test", apiKey: "k", fetch: f.fetch }));
+    const r: any = await mcp.callTool({ name: "renda_bake", arguments: { file: "https://h/a.glb", mode: "ao", size: 1024, engine: "mitsuba" } });
+    expect(r.isError).toBeFalsy();
+    const pkg = f.calls.find((c) => c.method === "POST" && c.url.endsWith("/jobs"))!.body.package;
+    expect(pkg.output).toMatchObject({ format: "glb", bake: { mode: "ao", size: 1024 } });
+    expect(pkg.render.engine).toBe("mitsuba");
+    await mcp.callTool({ name: "renda_bake", arguments: { file: "https://h/a.glb", plain: true } });
+    const plain = f.calls.filter((c) => c.method === "POST" && c.url.endsWith("/jobs"))[1].body.package;
+    expect(plain.output.format).toBe("glb");
+    expect(plain.output.bake).toBeUndefined();
   });
 });
 

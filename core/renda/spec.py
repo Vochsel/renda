@@ -203,6 +203,19 @@ class Animation(_M):
 
 IMAGE_FORMATS = ("png", "jpg", "webp", "exr")
 VIDEO_FORMATS = ("mp4", "webm", "gif", "mov")
+MODEL_FORMATS = ("glb",)
+BAKE_ENGINES = ("blender-cycles", "mitsuba", "threejs")
+
+
+class Bake(_M):
+    """Bake lighting into textures and return a GLB. See spec/src/index.ts for the modes."""
+
+    mode: Literal["unlit", "ao", "lightmap"] = "unlit"
+    size: int = Field(default=2048, ge=64, le=8192)
+    uvs: Literal["auto", "existing"] = "auto"
+    samples: Annotated[int, Field(gt=0)] | None = None
+    margin: int = Field(default=4, ge=0, le=64)
+    textureFormat: Literal["png", "jpg", "webp"] = "jpg"
 
 
 class VideoSettings(_M):
@@ -211,15 +224,20 @@ class VideoSettings(_M):
 
 
 class Output(_M):
-    format: Literal["png", "jpg", "webp", "exr", "mp4", "webm", "gif", "mov"] = "png"
+    format: Literal["png", "jpg", "webp", "exr", "mp4", "webm", "gif", "mov", "glb"] = "png"
     passes: list[Literal["beauty", "alpha", "depth", "normal", "albedo", "mask"]] = Field(default_factory=lambda: ["beauty"])
     transparent: bool = False
     video: VideoSettings = Field(default_factory=VideoSettings)
     keepFrames: bool = False
+    bake: Bake | None = None
 
     @property
     def is_video(self) -> bool:
         return self.format in VIDEO_FORMATS
+
+    @property
+    def is_model(self) -> bool:
+        return self.format in MODEL_FORMATS
 
 
 class RendaPackage(_M):
@@ -249,6 +267,12 @@ class RendaPackage(_M):
             raise ValueError(f'output.format "{self.output.format}" needs an animation range')
         if self.output.transparent and self.output.format in ("jpg", "mp4", "gif"):
             raise ValueError(f"{self.output.format} has no alpha channel; use png/webp/exr/webm/mov")
+        if self.output.bake is not None and self.output.format != "glb":
+            raise ValueError('bake returns a model: set output.format to "glb"')
+        if self.output.format == "glb" and self.animation is not None:
+            raise ValueError('output.format "glb" exports/bakes a single pose; remove animation')
+        if self.output.bake is not None and self.render.engine in ("gsplat", "blender-eevee", "blender-workbench"):
+            raise ValueError(f"{self.render.engine} can't bake; use auto, blender-cycles, mitsuba or threejs")
         return self
 
     # -- helpers -------------------------------------------------------------

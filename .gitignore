@@ -28,3 +28,4 @@ testdata/out/
 .DS_Store
 testdata/showcase-public/assets/
 testdata/showcase-public/probe/
+.claude/worktrees/

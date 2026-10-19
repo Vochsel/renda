@@ -31,11 +31,12 @@ resolution, engine, output format, animation. Only \`scene.root\` is required.
   resolution [w,h]; quality draft | standard | final; samples (overrides quality); denoise; seed;
   hardware auto | cpu | gpu.
 - animation: frames [start,end] inclusive, fps, step, turntable {revolutions, axis}.
-- output: format png | jpg | webp | exr | mp4 | webm | gif | mov; passes [beauty, alpha, depth,
+- output: format png | jpg | webp | exr | mp4 | webm | gif | mov | glb; passes [beauty, alpha, depth,
   normal, albedo, mask]; transparent; video {codec h264|h265|vp9|prores|gif, crf}; keepFrames.
 
 ## Rules
 - Video formats need \`animation\`. jpg/mp4/gif can't be transparent.
+- glb: plain conversion; add \`bake: {mode: unlit|ao|lightmap, size: 2048, uvs: auto|existing}\` to bake the environment + lights into textures (engines blender-cycles | mitsuba | threejs; use the renda_bake tool).
 - Formats: blend, usd/usda/usdc/usdz, gltf/glb, three.js JSON (.json, ObjectLoader format 4),
   fbx, obj(+mtl), stl, ply, dae, 3mf, abc, and Gaussian splats: 3DGS .ply, .splat, .spz (.ksplat: threejs only).
 - Gaussian splats: splat-only scenes → engine "gsplat" (CUDA, cheapest; auto picks it). Mix splats with

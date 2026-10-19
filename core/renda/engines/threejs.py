@@ -267,3 +267,106 @@ class ThreeEngine(Engine):
         if unsupported:
             warnings.append(f"threejs: passes {unsupported} unsupported, skipped")
         return RenderResult(files, warnings, time.time() - t0)
+
+
+class _BakeHandler(_Quiet):
+    """Static files + POST /result.f32 (the baked atlas, raw float32 RGBA) written into the site dir."""
+
+    def do_POST(self):  # noqa: N802
+        n = int(self.headers.get("Content-Length", "0"))
+        data = self.rfile.read(n)
+        Path(self.directory, "result.f32").write_bytes(data)
+        self.send_response(200)
+        self.end_headers()
+
+
+def bake_atlas(ctx: RenderContext, stage, layout, warnings: list[str]):
+    """three.js baker (headless Chromium): environment directions + lights, shadow-mapped, accumulated in
+    the lightmap atlas. Lighting only (E/π per texel) — no interreflections. Returns (rgb, covered mask),
+    both v-up."""
+    import tempfile
+
+    import numpy as np
+    from playwright.sync_api import sync_playwright
+
+    from ..bake import Z_TO_Y, write_glb
+    from ..engines.blender import ir_lights_as_package
+    from ..scene import env_map_path
+    from ..spec import parse_color
+
+    pkg, plan = ctx.pkg, ctx.plan
+    bake = pkg.output.bake
+    base = Path(ctx.cache_dir or ctx.out_dir) / "threejs-site"
+    base.mkdir(parents=True, exist_ok=True)
+    work = Path(tempfile.mkdtemp(dir=base))
+    try:
+        shutil.copyfile(HERE / "bake.html", work / "index.html")
+        try:
+            (work / "three").symlink_to(three_dir(), target_is_directory=True)
+        except OSError:
+            shutil.copytree(three_dir(), work / "three")
+        write_glb(layout, stage, work / "bake-input.glb", "source")
+        to_y = Z_TO_Y if stage.up_axis == "Z" else np.eye(4)
+        rot = to_y[:3, :3]
+
+        def P(v):
+            return (rot @ np.asarray(v, dtype=np.float64)).tolist()
+
+        lights = []
+        pkg_lights = []
+        for l in pkg.lights:
+            d = l.model_dump()
+            d["color"] = list(parse_color(l.color, (1.0, 1.0, 1.0))[:3])
+            pkg_lights.append(d)
+        for d in ir_lights_as_package(stage) + pkg_lights:
+            d = dict(d)
+            for k in ("direction", "position", "target"):
+                if k in d and d[k] is not None:
+                    d[k] = P(d[k])
+            if d["type"] in ("point", "spot", "area"):
+                d["candela"] = float(d.get("intensity", 100)) * 683.0 / (4 * 3.141592653589793)
+            lights.append(d)
+        lo, hi = stage.bounds()
+        center = P((lo + hi) / 2)
+        radius = float(np.linalg.norm(hi - lo)) / 2 or 1.0
+        env = pkg.environment
+        hdri = env_map_path(pkg, ctx.asset_paths)
+        if hdri:
+            shutil.copyfile(hdri, work / "env.hdr")
+        if stage.up_axis == "Z" and hdri:
+            warnings.append("threejs: environment maps are Y-up; lighting direction may differ for Z-up scenes")
+        job = {
+            "size": layout.size, "samples": int(plan.samples), "mode": bake.mode, "glb": "bake-input.glb",
+            "seed": int(pkg.render.seed),
+            "env": {"url": "env.hdr" if hdri else None, "constant": None if (hdri or lights) else [0.8, 0.8, 0.8],
+                    "intensity": env.intensity, "rotationDeg": env.rotationDeg},
+            "lights": lights, "center": center, "radius": radius,
+        }
+        handler = functools.partial(_BakeHandler, directory=str(work))
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            with sync_playwright() as p:
+                args = ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"]
+                browser = p.chromium.launch(args=args)
+                page = browser.new_page(viewport={"width": 64, "height": 64})
+                page.add_init_script(f"window.RENDA_BAKE = {json.dumps(job)};")
+                logs: list[str] = []
+                page.on("console", lambda m: logs.append(m.text) if m.type in ("error", "warning") else None)
+                page.goto(f"http://127.0.0.1:{server.server_address[1]}/index.html")
+                page.wait_for_function("window.RENDA_BAKE_DONE !== undefined", timeout=1_800_000)
+                done = page.evaluate("window.RENDA_BAKE_DONE")
+                browser.close()
+            if not done.get("ok"):
+                raise RuntimeError(f"three.js bake failed: {done.get('error')}\n" + "\n".join(logs[-10:]))
+            if not done.get("floatBlend"):
+                warnings.append("threejs: no float blending here; the bake accumulated in half precision")
+        finally:
+            server.shutdown()
+        S = layout.size
+        arr = np.frombuffer((work / "result.f32").read_bytes(), dtype=np.float32).reshape(S, S, 4)
+        # GL rows start at the bottom of the target = three's uv1.y = 0 = IR v = 1, so flip to v-up
+        arr = arr[::-1]
+        return np.ascontiguousarray(arr[..., :3]), arr[..., 3] > 0
+    finally:
+        shutil.rmtree(work, ignore_errors=True)

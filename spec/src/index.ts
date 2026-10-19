@@ -154,9 +154,28 @@ export const Animation = z.strictObject({
 
 export const ImageFormat = z.enum(["png", "jpg", "webp", "exr"]);
 export const VideoFormat = z.enum(["mp4", "webm", "gif", "mov"]);
+export const ModelFormat = z.enum(["glb"]);
+
+/**
+ * Bake lighting into textures and return the model as a GLB.
+ * - `unlit`: full lighting (direct + indirect + shadows) baked into baseColor, material set to KHR_materials_unlit.
+ *   Looks identical in any glTF viewer, no lights needed. The default.
+ * - `ao`: ambient occlusion baked into occlusionTexture; PBR materials kept, so the model still reacts to viewer lighting.
+ * - `lightmap`: lighting only (no albedo) in a separate texture on TEXCOORD_1, referenced from
+ *   `extras.renda.lightmap` on each material — for engines with lightmap slots (three.js, Babylon, Unity, Godot).
+ */
+export const Bake = z.strictObject({
+  mode: z.enum(["unlit", "ao", "lightmap"]).default("unlit"),
+  size: z.number().int().min(64).max(8192).default(2048).describe("Texture size in pixels (square atlas)."),
+  uvs: z.enum(["auto", "existing"]).default("auto")
+    .describe("auto = generate non-overlapping lightmap UVs (xatlas); existing = reuse TEXCOORD_0 (must not overlap)."),
+  samples: z.number().int().positive().nullable().default(null).describe("Samples per texel; overrides render.quality."),
+  margin: z.number().int().min(0).max(64).default(4).describe("Padding/dilation in pixels around UV islands."),
+  textureFormat: z.enum(["png", "jpg", "webp"]).default("jpg"),
+});
 
 export const Output = z.strictObject({
-  format: z.union([ImageFormat, VideoFormat]).default("png"),
+  format: z.union([ImageFormat, VideoFormat, ModelFormat]).default("png"),
   passes: z.array(z.enum(["beauty", "alpha", "depth", "normal", "albedo", "mask"])).default(["beauty"]),
   transparent: z.boolean().default(false),
   video: z.strictObject({
@@ -164,6 +183,8 @@ export const Output = z.strictObject({
     crf: z.number().int().min(0).max(51).default(18),
   }).default({ crf: 18 }),
   keepFrames: z.boolean().default(false).describe("Also return individual frames for video outputs."),
+  bake: Bake.nullable().optional()
+    .describe('Bake lighting into textures (needs format "glb"). Omit/null with format "glb" = plain conversion to GLB.'),
 });
 
 export const RendaPackage = z.strictObject({
@@ -187,6 +208,15 @@ export const RendaPackage = z.strictObject({
   }
   if (pkg.output.transparent && ["jpg", "mp4", "gif"].includes(pkg.output.format)) {
     ctx.addIssue({ code: "custom", path: ["output", "transparent"], message: `${pkg.output.format} has no alpha channel; use png/webp/exr/webm/mov` });
+  }
+  if (pkg.output.bake && pkg.output.format !== "glb") {
+    ctx.addIssue({ code: "custom", path: ["output", "bake"], message: 'bake returns a model: set output.format to "glb"' });
+  }
+  if (pkg.output.format === "glb" && pkg.animation) {
+    ctx.addIssue({ code: "custom", path: ["animation"], message: 'output.format "glb" exports/bakes a single pose; remove animation' });
+  }
+  if (pkg.output.bake && ["gsplat", "blender-eevee", "blender-workbench"].includes(pkg.render.engine)) {
+    ctx.addIssue({ code: "custom", path: ["render", "engine"], message: `${pkg.render.engine} can't bake; use auto, blender-cycles, mitsuba or threejs` });
   }
 });
 

@@ -28,6 +28,14 @@ def render_frames(
     """Render `frames` (usually one chunk of plan.chunks) into out_dir with plan.engine."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    if pkg.output.is_model:  # GLB export / light bake: one output file, no frames
+        from .bakers import run_model_job
+
+        named = with_extensions({k: Path(v) for k, v in asset_paths.items()}, Path(cache_dir or out_dir) / "named")
+        t0 = time.time()
+        result = run_model_job(RenderContext(plan, pkg, named, out_dir, cache_dir))
+        result.seconds = time.time() - t0
+        return result
     engine = get_engine(plan.engine)
     if not engine.available():
         raise RuntimeError(f"engine {plan.engine} is not available: {engine.unavailable_reason()}")

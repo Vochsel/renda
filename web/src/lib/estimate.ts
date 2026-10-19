@@ -58,7 +58,7 @@ const MAX_CONTAINERS = 50;
 const TARGET_CHUNK_SECONDS = 90;
 
 export type Estimate = {
-  engine: ConcreteEngine;
+  engine: ConcreteEngine | "export";
   hardware: Hardware;
   frames: number;
   samples: number;
@@ -92,7 +92,46 @@ export function frameCount(pkg: RendaPackage): number {
   return Math.max(1, Math.floor((b - a) / pkg.animation.step) + 1);
 }
 
+/** Samples per texel for light bakes (mirrors core/renda/planner.py BAKE_SAMPLES). */
+const BAKE_SAMPLES: Record<"blender-cycles" | "mitsuba" | "threejs", Record<"draft" | "standard" | "final", number>> = {
+  "blender-cycles": { draft: 64, standard: 256, final: 1024 },
+  mitsuba: { draft: 64, standard: 256, final: 1024 },
+  threejs: { draft: 64, standard: 192, final: 384 },
+};
+
+/**
+ * GLB output: a plain conversion (CPU) or a light bake. Calibrated on Modal (2026-10-19, 7.5k–60k triangle
+ * models): Cycles 2048² @256 spp ≈ 40 s on an L4, Mitsuba ≈ 26 s, three.js 1024² @192 directions ≈ 15 s on CPU.
+ */
+export function estimateModel(pkg: RendaPackage, priority: Priority = "standard"): Estimate {
+  const warnings: string[] = [];
+  const bake = pkg.output.bake;
+  const lo = 0.6, hi = 1.8;
+  const done = (engine: Estimate["engine"], hardware: Hardware, samples: number, total: number): Estimate => ({
+    engine, hardware, frames: 1, samples, chunks: 1,
+    estSeconds: [round1(total * lo), round1(total * hi)],
+    estWallSeconds: [round1(total * lo), round1(total * hi)],
+    estCostUsd: [round4(costUsd(hardware, total) * lo), round4(costUsd(hardware, total) * hi)],
+    warnings,
+  });
+  if (!bake) return done("export", "cpu", 0, 6);
+  const engine = pkg.render.engine === "auto" ? "blender-cycles" : pkg.render.engine;
+  if (engine !== "blender-cycles" && engine !== "mitsuba" && engine !== "threejs") {
+    warnings.push(`${engine} can't bake; use blender-cycles, mitsuba or threejs`);
+    return done(engine, "cpu", 0, 0);
+  }
+  const samples = bake.samples ?? BAKE_SAMPLES[engine][pkg.render.quality];
+  const mtex = (bake.size * bake.size) / 1e6;
+  if (engine === "threejs") return done(engine, "cpu", samples, 6 + samples * (0.02 + mtex / 20));
+  const units = (mtex / 4.2) * (samples / 256) * (bake.mode === "ao" ? 0.3 : 1);
+  const gpu = (engine === "blender-cycles" ? 14 + 24 * units : 8 + 18 * units);
+  if (pkg.render.hardware === "cpu") return done(engine, "cpu", samples, gpu * 8);
+  const hardware: Hardware = priority === "rush" && bake.size >= 4096 ? "gpu-l40s" : "gpu-l4";
+  return done(engine, hardware, samples, hardware === "gpu-l40s" ? gpu * 0.5 : gpu);
+}
+
 export function estimateScene(pkg: RendaPackage, priority: Priority = "standard"): Estimate {
+  if (pkg.output.format === "glb") return estimateModel(pkg, priority);
   const warnings: string[] = [];
   const fmt = rootFormat(pkg);
   const engine = resolveEngine(pkg, fmt);

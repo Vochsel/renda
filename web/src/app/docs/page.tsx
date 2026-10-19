@@ -6,6 +6,7 @@ import turntable from "../../../../spec/examples/turntable.renda.json";
 import threejs from "../../../../spec/examples/threejs-scene.renda.json";
 import splatRoom from "../../../../spec/examples/splat-room-mixed.renda.json";
 import stl from "../../../../spec/examples/stl-print-preview.renda.json";
+import bake from "../../../../spec/examples/bake-glb.renda.json";
 import { SiteHeader } from "@/components/site-header";
 import { installSnippets } from "@/lib/install-snippets";
 import { Code } from "@/components/code";
@@ -14,7 +15,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 
 export const metadata: Metadata = { title: "Docs" };
 
-const EXAMPLES = { minimal, "hero still": hero, turntable, "three.js": threejs, "stl preview": stl, "splats + mesh": splatRoom };
+const EXAMPLES = { minimal, "hero still": hero, turntable, "three.js": threejs, "stl preview": stl, "splats + mesh": splatRoom, "bake → glb": bake };
 
 type JsonSchema = { type?: string | string[]; description?: string; properties?: Record<string, JsonSchema>; enum?: unknown[]; anyOf?: JsonSchema[]; oneOf?: JsonSchema[]; default?: unknown; $ref?: string; items?: JsonSchema; required?: string[] };
 
@@ -91,6 +92,45 @@ curl -X POST $RENDA/api/v1/jobs -H "authorization: Bearer $KEY" \\
 # 3. poll until status is succeeded, then download outputs[].url
 curl $RENDA/api/v1/jobs/<id> -H "authorization: Bearer $KEY"`}</Code>
         <p className="text-muted-foreground mt-2 text-sm">The <span className="font-mono">renda</span> CLI and MCP server do the upload step for you. Full API: <a className="underline" href="/api/v1/openapi.json">OpenAPI</a>.</p>
+
+        <h2 className="mt-10 text-lg font-semibold">Baking lighting into a GLB</h2>
+        <p className="text-muted-foreground mt-3 max-w-3xl text-sm">
+          Set <span className="font-mono">output.format</span> to <span className="font-mono">&quot;glb&quot;</span> and add a{" "}
+          <span className="font-mono">bake</span> block. Renda unwraps non-overlapping lightmap UVs (xatlas) once, so every engine bakes
+          the same layout, then bakes the package&apos;s HDRI + lights into a texture and returns the model as GLB. Without{" "}
+          <span className="font-mono">bake</span>, <span className="font-mono">format: &quot;glb&quot;</span> just converts the scene.
+        </p>
+        <Code className="mt-3">{`renda bake chair.blend                          # unlit, 2048², Cycles on a GPU
+renda bake chair.blend --engine mitsuba --mode ao --size 1024
+renda bake scene.json --engine threejs          # cheapest: CPU, direct light + environment shadows
+renda bake robot.fbx --glb                      # plain conversion to GLB, no bake`}</Code>
+        <Table className="mt-3">
+          <TableHeader><TableRow><TableHead>mode</TableHead><TableHead>What you get</TableHead></TableRow></TableHeader>
+          <TableBody>
+            <TableRow><TableCell className="font-mono text-xs">unlit</TableCell><TableCell className="text-muted-foreground text-xs">Full lighting (shadows, AO, bounce light; glossy from the normal direction with Cycles/Mitsuba) baked into one atlas, materials set to KHR_materials_unlit. Looks the same in every viewer, no lights needed.</TableCell></TableRow>
+            <TableRow><TableCell className="font-mono text-xs">ao</TableCell><TableCell className="text-muted-foreground text-xs">Ambient occlusion in <span className="font-mono">occlusionTexture</span> (TEXCOORD_1); PBR materials and textures kept, so the model still reacts to the viewer&apos;s lighting.</TableCell></TableRow>
+            <TableRow><TableCell className="font-mono text-xs">lightmap</TableCell><TableCell className="text-muted-foreground text-xs">Lighting only (E/π, no albedo) in a texture on TEXCOORD_1, linked from each material&apos;s <span className="font-mono">extras.renda.lightmap = {"{index, texCoord: 1, intensity}"}</span>. Lightmaps only add diffuse light: metals still need an environment map.</TableCell></TableRow>
+          </TableBody>
+        </Table>
+        <Code className="mt-3">{`// three.js: apply extras.renda.lightmap after GLTFLoader
+gltf.scene.traverse(async (o) => {
+  const lm = o.material?.userData?.renda?.lightmap;
+  if (!lm) return;
+  const tex = await gltf.parser.getDependency("texture", lm.index);
+  tex.channel = lm.texCoord;               // uv1
+  tex.colorSpace = THREE.SRGBColorSpace;
+  o.material.lightMap = tex;
+  o.material.lightMapIntensity = lm.intensity * Math.PI;  // stored as E/π
+});
+
+// Babylon.js: same texture, second UV set
+mat.lightmapTexture = texture; mat.lightmapTexture.coordinatesIndex = 1; mat.lightmapTexture.level = lm.intensity;`}</Code>
+        <p className="text-muted-foreground mt-2 text-sm">
+          Engines: <span className="font-mono">blender-cycles</span> (default; native Cycles bake, GPU),{" "}
+          <span className="font-mono">mitsuba</span> (texel-space path tracing, GPU) and <span className="font-mono">threejs</span> (CPU;
+          shadow-mapped environment + lights, no interreflections). Gaussian splats can&apos;t be baked. A bake is one job; it&apos;s billed like
+          a render and estimated by <span className="font-mono">renda estimate</span>.
+        </p>
 
         <h2 className="mt-10 text-lg font-semibold">Fields</h2>
         <Table className="mt-3">

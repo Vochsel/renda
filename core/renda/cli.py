@@ -234,6 +234,14 @@ def render(
     raw, base = load_input(input)
     raw = apply_overrides(raw, engine=engine, res=res, quality=quality, samples=samples, frames=frames, fmt=fmt,
                           transparent=transparent, turntable=turntable)
+    _run(raw, base, output, priority, cloud, wait, max_minutes, json_out)
+
+
+def _run(raw: dict, base: Path, output: Path, priority: str, cloud: bool, wait: bool, max_minutes: float | None,
+         json_out: bool) -> None:
+    """Render/bake a raw package locally or in the cloud (shared by `render` and `bake`)."""
+    from .spec import load_package
+
     pkg = load_package(raw)
 
     if cloud:
@@ -324,6 +332,44 @@ def _wait_job(client, job: dict, json_out: bool) -> dict:
                   TimeElapsedColumn(), console=console) as prog:
         task = prog.add_task("job", total=1.0, status=job.get("status", "queued"))
         return client.wait(job["id"], on_update=lambda j: prog.update(task, completed=j.get("progress", 0), status=j.get("status")))
+
+
+@command
+def bake(
+    input: Annotated[Path, typer.Argument(help="Scene file or .renda.json package")],
+    output: Annotated[Path, typer.Option("-o", "--output", help="Output directory")] = Path("renders"),
+    mode: Annotated[str, typer.Option(help="unlit (lighting baked into the colour, KHR_materials_unlit) | ao | lightmap")] = "unlit",
+    size: Annotated[int, typer.Option(help="Texture size in pixels")] = 2048,
+    engine: Annotated[Optional[str], typer.Option(help="auto|blender-cycles|mitsuba|threejs")] = None,
+    quality: Annotated[Optional[str], typer.Option(help="draft|standard|final")] = None,
+    samples: Annotated[Optional[int], typer.Option(help="Samples per texel")] = None,
+    uvs: Annotated[str, typer.Option(help="auto (new lightmap UVs) | existing (reuse TEXCOORD_0)")] = "auto",
+    texture_format: Annotated[str, typer.Option("--texture-format", help="jpg|png|webp")] = "jpg",
+    glb: Annotated[bool, typer.Option("--glb", help="Plain conversion to GLB, no baking")] = False,
+    priority: Annotated[str, typer.Option(help="economy|standard|rush (cloud)")] = "standard",
+    cloud: Annotated[bool, typer.Option("--cloud", help="Bake in the Renda cloud")] = False,
+    wait: Annotated[bool, typer.Option("--wait/--no-wait", help="Cloud: wait for the job and download the GLB")] = True,
+    max_minutes: Annotated[Optional[float], typer.Option("--max-minutes", help="Cloud: refuse if the estimate exceeds this many render-minutes")] = None,
+    json_out: JsonOpt = False,
+):
+    """Bake lighting into a model's textures and get a GLB back (or --glb: just convert to GLB)."""
+    raw, base = load_input(input)
+    raw = apply_overrides(raw, engine=engine, quality=quality)
+    o = raw.setdefault("output", {})
+    o.pop("video", None)
+    o.pop("passes", None)
+    raw.pop("animation", None)
+    o["format"] = "glb"
+    if glb:
+        o.pop("bake", None)
+    else:
+        if mode not in ("unlit", "ao", "lightmap"):
+            raise CliError("bad_option", f"--mode must be unlit, ao or lightmap, got {mode!r}")
+        b = {"mode": mode, "size": size, "uvs": uvs, "textureFormat": texture_format}
+        if samples:
+            b["samples"] = samples
+        o["bake"] = b
+    _run(raw, base, output, priority, cloud, wait, max_minutes, json_out)
 
 
 @command

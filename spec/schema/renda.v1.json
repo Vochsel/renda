@@ -1000,6 +1000,12 @@
                 "gif",
                 "mov"
               ]
+            },
+            {
+              "type": "string",
+              "enum": [
+                "glb"
+              ]
             }
           ]
         },
@@ -1053,6 +1059,75 @@
           "default": false,
           "description": "Also return individual frames for video outputs.",
           "type": "boolean"
+        },
+        "bake": {
+          "description": "Bake lighting into textures (needs format \"glb\"). Omit/null with format \"glb\" = plain conversion to GLB.",
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "mode": {
+                  "default": "unlit",
+                  "type": "string",
+                  "enum": [
+                    "unlit",
+                    "ao",
+                    "lightmap"
+                  ]
+                },
+                "size": {
+                  "default": 2048,
+                  "description": "Texture size in pixels (square atlas).",
+                  "type": "integer",
+                  "minimum": 64,
+                  "maximum": 8192
+                },
+                "uvs": {
+                  "default": "auto",
+                  "description": "auto = generate non-overlapping lightmap UVs (xatlas); existing = reuse TEXCOORD_0 (must not overlap).",
+                  "type": "string",
+                  "enum": [
+                    "auto",
+                    "existing"
+                  ]
+                },
+                "samples": {
+                  "default": null,
+                  "description": "Samples per texel; overrides render.quality.",
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "margin": {
+                  "default": 4,
+                  "description": "Padding/dilation in pixels around UV islands.",
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 64
+                },
+                "textureFormat": {
+                  "default": "jpg",
+                  "type": "string",
+                  "enum": [
+                    "png",
+                    "jpg",
+                    "webp"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false

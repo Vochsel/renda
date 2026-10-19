@@ -50,6 +50,14 @@ MIN_FRAME_SECONDS = {"threejs": 0.15, "blender-workbench": 0.2, "blender-eevee":
 OVERHEAD_TARGET = {"economy": 0.05, "standard": 0.10, "rush": 0.25}
 MAX_CONTAINERS = {"economy": 10, "standard": 50, "rush": 50}
 
+# Light baking (output.format "glb" + output.bake): samples per texel by quality, per baker.
+BAKE_SAMPLES: dict[str, dict[str, int]] = {
+    "blender-cycles": {"draft": 64, "standard": 256, "final": 1024},
+    "mitsuba": {"draft": 64, "standard": 256, "final": 1024},
+    "threejs": {"draft": 64, "standard": 192, "final": 384},  # shadow-mapped light directions accumulated
+}
+BAKE_ENGINES = ("blender-cycles", "mitsuba", "threejs")
+
 NATIVE_BLENDER = {"blend", "usd", "gltf", "fbx", "obj", "stl", "ply", "abc", "rir", "dae", "3mf"}
 
 
@@ -220,6 +228,9 @@ def plan(
     mixed = has_splats and (fmt != "splat" or any(f != "splat" for f in include_fmts))
     splats = (splat_count or DEFAULT_SPLATS) if has_splats else None
 
+    if pkg.output.is_model:
+        return _plan_model(pkg, asset_paths, fmt, priority, available, triangles, asset_hashes, engine_versions, warnings)
+
     if pkg.render.engine == "auto":
         cands = choose_engine(fmt, quality, available, mixed)
         if not cands:
@@ -263,6 +274,61 @@ def plan(
         est_seconds=(round(total * 0.6, 1), round(total * 1.8, 1)), warnings=warnings, cache_key=key,
         scene_format=fmt, samples=samples, priority=priority,
         est_load_seconds=round(load_s, 2), est_frame_seconds=round(frame_s, 3), splats=has_splats,
+    )
+
+
+def _plan_model(pkg, asset_paths, fmt, priority, available, triangles, asset_hashes, engine_versions, warnings) -> RenderPlan:
+    """GLB output: a plain conversion (engine "export", CPU) or a light bake (one chunk, usually on a GPU)."""
+    bake = pkg.output.bake
+    tris = triangles or 200_000
+    extract_s = 6.0 if fmt in ("blend", "fbx", "abc") else 0.0
+    if fmt == "splat" and not include_formats(pkg, asset_paths):
+        raise RuntimeError("Gaussian splats can't be exported or baked to GLB (they have no surfaces); "
+                           "use a mesh scene, or render the splats to an image instead")
+    if bake is None:
+        engine, hardware, samples = "export", "cpu", 0
+        load_s, frame_s = 3.0 + extract_s, 1.0 + tris / 150_000
+    else:
+        if pkg.render.engine == "auto":
+            cands = [e for e in BAKE_ENGINES if available is None or e in available]
+            if not cands:
+                raise RuntimeError("no baker available here (needs Blender, Mitsuba or three.js); run with --cloud")
+            engine = cands[0]
+        else:
+            engine = pkg.render.engine
+            if engine not in BAKE_ENGINES:
+                raise RuntimeError(f"{engine} can't bake; use auto, blender-cycles, mitsuba or threejs")
+            if available is not None and engine not in available:
+                raise RuntimeError(f"engine {engine} isn't available here; run `renda engines` or bake with --cloud")
+        samples = bake.samples or BAKE_SAMPLES[engine][pkg.render.quality]
+        if engine == "threejs" or pkg.render.hardware == "cpu":
+            hardware = "cpu"
+        else:
+            hardware = "gpu-l40s" if priority == "rush" and bake.size >= 4096 else "gpu-l4"
+        texels = bake.size * bake.size * 0.6  # typical atlas coverage
+        unwrap = 2.0 + tris / 60_000
+        if engine == "threejs":
+            frame_s = unwrap + samples * (0.04 + bake.size * bake.size / 4e7)
+        else:
+            kind = "gpu" if hardware.startswith("gpu") else "cpu"
+            ao = 0.25 if bake.mode == "ao" else 1.0
+            work = texels * samples * ENGINE_COST[engine][kind] * ao * complexity_factor(triangles)
+            frame_s = unwrap + work / THROUGHPUT[hardware]
+        load_s = LOAD_SECONDS[engine] + extract_s
+    total = load_s + frame_s
+    key = ""
+    if asset_hashes is not None or asset_paths:
+        from .cache import cache_key, sha256_file
+
+        hashes = dict(asset_hashes or {})
+        if not hashes and asset_paths:
+            hashes = {k: sha256_file(p) for k, p in asset_paths.items() if Path(p).is_file()}
+        key = cache_key(pkg, hashes, engine_versions or {engine: "cloud"})
+    return RenderPlan(
+        engine=engine, hardware=hardware, frames=[1], chunks=[[1]],
+        est_seconds=(round(total * 0.6, 1), round(total * 1.8, 1)), warnings=warnings, cache_key=key,
+        scene_format=fmt, samples=samples, priority=priority,
+        est_load_seconds=round(load_s, 2), est_frame_seconds=round(frame_s, 3), splats=False,
     )
 
 
