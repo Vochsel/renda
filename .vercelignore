@@ -1,8 +1,10 @@
-.claude/
+# Anchored with a leading slash: an unanchored "worker/" also matched
+# web/src/app/api/v1/internal/worker/ and dropped the worker events route.
+/.claude/
+/core/
+/worker/
+/testdata/out/
+/testdata/showcase-public/assets/
 **/.venv/
 **/__pycache__/
 **/.pytest_cache/
-testdata/out/
-testdata/showcase-public/assets/
-core/
-worker/
