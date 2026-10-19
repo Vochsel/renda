@@ -103,6 +103,43 @@ export function openapi(baseUrl: string) {
       },
       "/jobs/{id}": { get: { ...authed, summary: "Get a job (outputs carry presigned download URLs)", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { 200: ok(ref("Job")), 404: err } } },
       "/jobs/{id}/cancel": { post: { ...authed, summary: "Cancel a job", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { 200: ok(ref("Job")), 409: err } } },
+      "/outputs": {
+        get: {
+          ...authed,
+          summary: "All render outputs of your org, newest first (what the dashboard gallery shows). Cursor-paginated: pass nextCursor back until it is null. Depth/normal passes and kept video frames are hidden unless all=1.",
+          parameters: [
+            { name: "cursor", in: "query", schema: { type: "string" } },
+            { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100, default: 30 } },
+            { name: "kind", in: "query", schema: { enum: ["image", "video", "model"] } },
+            { name: "all", in: "query", schema: { enum: ["0", "1"] } },
+          ],
+          responses: {
+            200: ok({
+              type: "object",
+              properties: {
+                items: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      id: { type: "string" }, jobId: { type: "string" }, jobName: { type: ["string", "null"] }, name: { type: "string" },
+                      kind: { enum: ["image", "video", "model"] }, url: { type: "string", description: "Presigned download URL" },
+                      thumbUrl: { type: ["string", "null"], description: "≤480px webp (video: poster)" }, contentType: { type: "string" },
+                      width: { type: ["integer", "null"] }, height: { type: ["integer", "null"] }, bytes: { type: "integer" },
+                      placeholder: { type: ["string", "null"], description: "Tiny blurred data: URI for progressive loading" },
+                      pass: { type: ["string", "null"] }, engine: { type: ["string", "null"] }, hardware: { type: ["string", "null"] },
+                      billedSeconds: { type: "number" }, costUsd: { type: "number" }, createdAt: { type: "string", format: "date-time" },
+                    },
+                  },
+                },
+                nextCursor: { type: ["string", "null"] },
+              },
+            }),
+            400: err,
+            401: err,
+          },
+        },
+      },
       "/usage": { get: { ...authed, summary: "Usage and cost for a period (default: this month)", parameters: [{ name: "from", in: "query", schema: { type: "string", format: "date-time" } }, { name: "to", in: "query", schema: { type: "string", format: "date-time" } }], responses: { 200: ok({ type: "object" }) } } },
       "/billing/checkout": { post: { ...authed, summary: "Stripe Checkout link (setup mode) for the user to add a card", responses: { 200: ok({ type: "object", properties: { url: { type: "string" } } }) } } },
       "/billing/portal": { get: { ...authed, summary: "Stripe customer portal link", responses: { 200: ok({ type: "object", properties: { url: { type: "string" } } }) } } },
