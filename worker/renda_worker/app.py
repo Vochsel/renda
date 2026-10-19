@@ -18,7 +18,9 @@ from fastapi import Header
 
 from renda_worker import hardware as hw
 
-APP_NAME = "renda-worker"
+# Override to deploy a separate copy for testing (e.g. RENDA_APP_NAME=renda-worker-dev ./deploy.sh), so
+# experiments never replace the production app's functions or URLs.
+APP_NAME = os.environ.get("RENDA_APP_NAME", "renda-worker")
 WORKER_DIR = Path(__file__).resolve().parents[1]
 CORE_DIR = WORKER_DIR.parent / "core"
 

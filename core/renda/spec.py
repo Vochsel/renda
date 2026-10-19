@@ -99,17 +99,36 @@ class Scene(_M):
     materialOverrides: dict[str, MaterialOverride] = Field(default_factory=dict)
 
 
+class Lens(_M):
+    """Physical lens: focal length (overrides fovDeg) and depth of field (on when fStop is set)."""
+
+    focalLengthMm: float | None = Field(default=None, gt=0, le=5000)
+    sensorWidthMm: float = Field(default=36, gt=0)
+    fStop: float | None = Field(default=None, gt=0, le=256)
+    focusDistance: float | None = Field(default=None, gt=0)
+    focusTarget: Union[Literal["auto"], Vec3, Annotated[str, Field(min_length=1)]] = "auto"
+    apertureBlades: int = Field(default=0, ge=0, le=16)
+    apertureRotationDeg: float = 0
+    anamorphicRatio: float = Field(default=1, gt=0, le=4)
+
+    @property
+    def dof(self) -> bool:
+        return self.fStop is not None
+
+
 class AutoCamera(_M):
     mode: Literal["auto"]
     fovDeg: float = Field(default=35, gt=0, lt=180)
     elevationDeg: float = 20
     azimuthDeg: float = 35
     padding: float = Field(default=0.1, ge=0)
+    lens: Lens | None = None
 
 
 class SceneCamera(_M):
     mode: Literal["scene"]
     name: str | None = None
+    lens: Lens | None = None
 
 
 class LookAtCamera(_M):
@@ -118,6 +137,7 @@ class LookAtCamera(_M):
     target: Vec3 = (0, 0, 0)
     up: Vec3 | None = None
     fovDeg: float = Field(default=40, gt=0, lt=180)
+    lens: Lens | None = None
 
 
 Camera = Annotated[Union[AutoCamera, SceneCamera, LookAtCamera], Field(discriminator="mode")]
@@ -175,6 +195,17 @@ Light = Annotated[Union[SunLight, PointLight, SpotLight, AreaLight], Field(discr
 Quality = Literal["draft", "standard", "final"]
 
 
+class Antialias(_M):
+    filter: Literal["gaussian", "box", "blackman-harris", "mitchell"] = "gaussian"
+    filterWidth: float = Field(default=1.5, ge=0.01, le=10)  # pixels
+
+
+class MotionBlur(_M):
+    shutter: float = Field(default=0.5, gt=0, le=1)  # fraction of a frame (0.5 = 180°)
+    position: Literal["center", "start", "end"] = "center"
+    subframes: int = Field(default=8, ge=2, le=64)  # samples in time where motion blur is emulated
+
+
 class Render(_M):
     engine: EngineName = "auto"
     resolution: tuple[Annotated[int, Field(ge=16, le=16384)], Annotated[int, Field(ge=16, le=16384)]] = (1920, 1080)
@@ -183,6 +214,8 @@ class Render(_M):
     denoise: bool = True
     seed: int = 0
     hardware: Literal["auto", "cpu", "gpu"] = "auto"
+    antialias: Antialias | None = None
+    motionBlur: MotionBlur | None = None
 
 
 class Turntable(_M):
@@ -222,6 +255,30 @@ class Output(_M):
         return self.format in VIDEO_FORMATS
 
 
+class Bloom(_M):
+    intensity: float = Field(default=0.3, ge=0, le=4)
+    threshold: float = Field(default=0.8, ge=0, le=1)  # display luminance where the glow starts
+    radius: float = Field(default=0.4, ge=0, le=1)
+
+
+class Post(_M):
+    """Look and lens post effects. Exposure/tonemap run inside the engine where it can; the rest is a shared
+    stage (renda.post) applied identically to every engine's output."""
+
+    exposure: float = Field(default=0, ge=-10, le=10)  # stops
+    tonemap: Literal["agx", "filmic", "aces", "neutral", "standard"] = "agx"
+    contrast: float = Field(default=0, ge=-1, le=1)
+    saturation: float = Field(default=1, ge=0, le=2)
+    temperature: float = Field(default=0, ge=-1, le=1)
+    tint: float = Field(default=0, ge=-1, le=1)
+    vignette: float = Field(default=0, ge=0, le=1)
+    chromaticAberration: float = Field(default=0, ge=0, le=1)
+    lensDistortion: float = Field(default=0, ge=-1, le=1)
+    bloom: Bloom | None = None
+    filmGrain: float = Field(default=0, ge=0, le=1)
+    sharpen: float = Field(default=0, ge=0, le=1)
+
+
 class RendaPackage(_M):
     schema_: str | None = Field(default=None, alias="$schema")
     version: Literal[1] = 1
@@ -234,6 +291,7 @@ class RendaPackage(_M):
     render: Render = Field(default_factory=Render)
     animation: Animation | None = None
     output: Output = Field(default_factory=Output)
+    post: Post | None = None
 
     @field_validator("assets")
     @classmethod
@@ -245,6 +303,8 @@ class RendaPackage(_M):
 
     @model_validator(mode="after")
     def _cross(self) -> "RendaPackage":
+        if self.render.motionBlur and not (self.animation and self.animation.frames[1] > self.animation.frames[0]):
+            raise ValueError("render.motionBlur: motion blur needs movement: add an animation range (e.g. a turntable)")
         if self.output.is_video and self.animation is None:
             raise ValueError(f'output.format "{self.output.format}" needs an animation range')
         if self.output.transparent and self.output.format in ("jpg", "mp4", "gif"):

@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "name": "lens-effects",
+  "scene": { "root": "./model.glb" },
+  "camera": {
+    "mode": "auto",
+    "elevationDeg": 12,
+    "lens": { "focalLengthMm": 85, "fStop": 1.8, "focusTarget": "auto", "apertureBlades": 7, "apertureRotationDeg": 15 }
+  },
+  "render": {
+    "engine": "blender-cycles",
+    "resolution": [1280, 720],
+    "antialias": { "filter": "blackman-harris", "filterWidth": 1.5 },
+    "motionBlur": { "shutter": 0.5, "position": "center" }
+  },
+  "animation": { "frames": [1, 48], "fps": 24, "turntable": { "revolutions": 1 } },
+  "post": {
+    "exposure": 0.3,
+    "tonemap": "agx",
+    "contrast": 0.1,
+    "saturation": 1.05,
+    "temperature": 0.1,
+    "vignette": 0.35,
+    "chromaticAberration": 0.25,
+    "lensDistortion": -0.1,
+    "bloom": { "intensity": 0.3, "threshold": 0.8, "radius": 0.4 },
+    "filmGrain": 0.15,
+    "sharpen": 0.2
+  },
+  "output": { "format": "mp4" }
+}

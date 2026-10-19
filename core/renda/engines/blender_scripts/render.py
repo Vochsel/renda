@@ -94,14 +94,45 @@ def configure_engine(scene, job: dict) -> None:
         scene.display.shading.show_cavity = True
     else:
         raise ValueError(eng)
-    # Filmic/AgX view transform gives nicer highlights than Standard
+    if eng == "workbench" and (job.get("lens") or {}).get("fstop"):
+        scene.display.shading.use_dof = True
+
+    aa = job.get("antialias")
+    if aa:
+        if eng == "cycles":
+            c.pixel_filter_type = {"gaussian": "GAUSSIAN", "box": "BOX", "blackman-harris": "BLACKMAN_HARRIS",
+                                   "mitchell": "GAUSSIAN"}[aa["filter"]]
+            c.filter_width = float(aa["width"])
+        else:
+            r.filter_size = float(aa["width"])
+
+    mb = job.get("motion_blur")
+    if mb and not mb.get("emulate"):
+        pos = mb["position"].upper()
+        for owner in (r, scene.eevee, getattr(scene, "cycles", None)):
+            if owner is None:
+                continue
+            for attr, val in (("use_motion_blur", True), ("motion_blur_shutter", float(mb["shutter"])),
+                              ("motion_blur_position", pos)):
+                if hasattr(owner, attr):
+                    try:
+                        setattr(owner, attr, val)
+                    except (TypeError, ValueError):
+                        pass
+        if eng == "eevee" and hasattr(scene.eevee, "motion_blur_steps"):
+            scene.eevee.motion_blur_steps = 2  # smoother arcs for camera turntables
+
+    # Tone mapping: AgX by default (nicer highlights than Standard). ACES isn't a built-in view transform.
     vs = scene.view_settings
-    for name in ("AgX", "Filmic"):
+    wanted = {"agx": ("AgX", "Filmic"), "filmic": ("Filmic", "AgX"), "standard": ("Standard",),
+              "neutral": ("Khronos PBR Neutral", "Standard"), "aces": ("Filmic", "AgX")}[job.get("tonemap", "agx")]
+    for name in wanted:
         try:
             vs.view_transform = name
             break
         except TypeError:
             continue
+    vs.exposure = float(job.get("exposure", 0.0))
 
 
 # -- scene edits -----------------------------------------------------------------
@@ -304,6 +335,114 @@ def turntable_camera(cam, base_pos, target, tt: dict, frame: int) -> None:
     cam.matrix_world = look_at_matrix(target + rel, target)
 
 
+def _fcurves(ob):
+    act = ob.animation_data.action if ob.animation_data else None
+    if act is None:
+        return []
+    try:
+        if act.fcurves is not None:
+            return list(act.fcurves)
+    except AttributeError:
+        pass
+    out = []  # Blender 5 slotted actions
+    for layer in getattr(act, "layers", []):
+        for strip in layer.strips:
+            for bag in getattr(strip, "channelbags", []):
+                out += list(bag.fcurves)
+    return out
+
+
+def rig_turntable(scene, cam, base_pos, target, tt: dict) -> bool:
+    """Parent the camera to a pivot at the target with a linear rotation keyframed over the animation, so
+    native motion blur sees the true arc between frames. Returns True when rigged."""
+    if base_pos is None:
+        lo, hi = world_bounds(scene)
+        target = (lo + hi) / 2
+    pivot = bpy.data.objects.new("renda_tt_pivot", None)
+    scene.collection.objects.link(pivot)
+    pivot.location = target
+    pivot.rotation_mode = "XYZ"
+    bpy.context.view_layer.update()
+    mw = cam.matrix_world.copy()
+    cam.parent = pivot
+    cam.matrix_parent_inverse = pivot.matrix_world.inverted()
+    cam.matrix_world = mw
+    ax = {"X": 0, "Y": 1, "Z": 2}.get(tt.get("axis", "up"), 2)
+    span = max(tt["frame_end"] - tt["frame_start"] + 1, 1)
+    total = 2 * math.pi * tt.get("revolutions", 1)
+    pivot.rotation_euler[ax] = 0.0
+    pivot.keyframe_insert("rotation_euler", index=ax, frame=tt["frame_start"])
+    pivot.rotation_euler[ax] = total
+    pivot.keyframe_insert("rotation_euler", index=ax, frame=tt["frame_start"] + span)
+    curves = _fcurves(pivot)
+    if not curves:
+        WARN.append("blender: couldn't make the turntable keyframes linear; motion blur arcs may ease")
+    for fc in curves:
+        fc.extrapolation = "LINEAR"
+        for kp in fc.keyframe_points:
+            kp.interpolation = "LINEAR"
+    return True
+
+
+def apply_lens(scene, cam, job: dict, conv, pos, tgt) -> None:
+    """Physical lens on the render camera: focal length + sensor, and depth of field."""
+    lens = job.get("lens")
+    if not lens or cam is None or cam.type != "CAMERA":
+        return
+    d = cam.data
+    w, h = job["resolution"]
+    aspect = w / h
+    if lens.get("focal_mm"):
+        d.sensor_fit = "AUTO"
+        d.sensor_width = float(lens["sensor_mm"])
+        d.lens = float(lens["focal_mm"])
+    elif cam.name == "renda_camera":
+        # keep the framing FOV but give it a physical focal length/sensor so DoF matches the other engines
+        half_y = math.tan(d.angle_y / 2)
+        half_wide = half_y * aspect if aspect >= 1 else half_y
+        d.sensor_fit = "AUTO"
+        d.sensor_width = float(lens["sensor_mm"])
+        d.lens = float(lens["sensor_mm"]) / (2 * half_wide)
+    if not lens.get("fstop"):
+        return
+    dof = d.dof
+    dof.use_dof = True
+    dof.aperture_fstop = float(lens["fstop"])
+    dof.aperture_blades = int(lens.get("blades", 0))
+    dof.aperture_rotation = math.radians(float(lens.get("rotation_deg", 0)))
+    if hasattr(dof, "aperture_ratio"):
+        dof.aperture_ratio = float(lens.get("ratio", 1.0))
+    obj_name = lens.get("focus_object")
+    if obj_name:
+        ob = bpy.data.objects.get(obj_name)
+        if ob is not None:
+            dof.focus_object = ob
+            return
+        WARN.append(f"lens: no object named {obj_name!r} to focus on; focusing on the camera target")
+    if lens.get("focus_distance"):
+        dof.focus_distance = float(lens["focus_distance"])
+    elif pos is not None and tgt is not None and not lens.get("focus_point"):
+        dof.focus_distance = max((pos - tgt).length, 1e-3)
+    update_focus(scene, cam, lens, conv)
+
+
+def update_focus(scene, cam, lens: dict | None, conv) -> None:
+    """Re-aim the plane of focus each frame for a fixed focus point / auto focus on a scene camera."""
+    if not lens or not lens.get("fstop") or lens.get("focus_distance") or cam.data.dof.focus_object:
+        return
+    bpy.context.view_layer.update()
+    mw = cam.matrix_world
+    fwd = (mw.to_3x3() @ Vector((0, 0, -1))).normalized()
+    if lens.get("focus_point"):
+        p = conv(lens["focus_point"])
+    elif cam.name != "renda_camera":  # scene camera with auto focus: the scene centre
+        lo, hi = world_bounds(scene)
+        p = (lo + hi) / 2
+    else:
+        return
+    cam.data.dof.focus_distance = max((p - mw.translation).dot(fwd), 1e-3)
+
+
 # -- passes ----------------------------------------------------------------------
 
 
@@ -382,24 +521,54 @@ def main() -> None:
 
     tt = job.get("turntable")
     frame_cams = job.get("frame_cameras")  # explicit per-frame cameras (hybrid splat renders must match exactly)
+    lens = job.get("lens")
+    if not frame_cams:
+        apply_lens(scene, cam, job, conv, base_pos, target)
+    mb = job.get("motion_blur")
+    offsets = mb["offsets"] if mb and mb.get("emulate") else [0.0]
+    rigged = bool(tt and mb and not mb.get("emulate") and rig_turntable(scene, cam, base_pos, target, tt))
+    if frame_cams and mb and not mb.get("emulate"):
+        # hybrid: keyframe the explicit cameras so native motion blur has motion to sample
+        for f in job["frames"]:
+            fc = frame_cams[str(f)]
+            cam.matrix_world = look_at_matrix(conv(fc["position"]), conv(fc["target"]), conv(fc["up"]))
+            cam.keyframe_insert("location", frame=f)
+            cam.keyframe_insert("rotation_euler", frame=f)
+        for fc_ in _fcurves(cam):
+            fc_.extrapolation = "LINEAR"
+    ext = "png" if img.file_format == "PNG" else "exr"
     written = []
     for f in job["frames"]:
-        scene.frame_set(f)
-        if frame_cams:
-            fc = frame_cams[str(f)]
-            pos, tgt, up = conv(fc["position"]), conv(fc["target"]), conv(fc["up"])
-            cam.data.sensor_fit = "VERTICAL"
-            cam.data.angle_y = math.radians(fc["fovYDeg"])
-            cam.data.clip_start = max(float(fc["near"]), 1e-4)
-            cam.data.clip_end = float(fc["far"])
-            cam.matrix_world = look_at_matrix(pos, tgt, up)
-        elif tt:
-            turntable_camera(cam, base_pos, target, tt, f)
-        ext = "png" if img.file_format == "PNG" else "exr"
-        path = out_dir / f"frame_{f:04d}.{ext}"
-        scene.render.filepath = str(path)
-        bpy.ops.render.render(write_still=True)
-        written.append(str(path))
+        for i, off in enumerate(offsets):
+            t = f + off
+            fi = math.floor(t)
+            scene.frame_set(fi, subframe=t - fi)
+            if frame_cams:
+                fc = frame_cams[str(f)]
+                pos, tgt, up = conv(fc["position"]), conv(fc["target"]), conv(fc["up"])
+                cam.data.sensor_fit = "VERTICAL"
+                cam.data.angle_y = math.radians(fc["fovYDeg"])
+                cam.data.clip_start = max(float(fc["near"]), 1e-4)
+                cam.data.clip_end = float(fc["far"])
+                if not (mb and not mb.get("emulate")):
+                    cam.matrix_world = look_at_matrix(pos, tgt, up)
+                if lens and lens.get("fstop") and fc.get("focusDistance"):
+                    cam.data.dof.use_dof = True
+                    cam.data.dof.aperture_fstop = float(lens["fstop"])
+                    cam.data.dof.aperture_blades = int(lens.get("blades", 0))
+                    cam.data.dof.focus_distance = float(fc["focusDistance"])
+                    if fc.get("focalMm"):
+                        cam.data.sensor_fit = "AUTO"
+                        cam.data.sensor_width = float(lens["sensor_mm"])
+                        cam.data.lens = float(fc["focalMm"])
+            elif tt and not rigged:
+                turntable_camera(cam, base_pos, target, tt, t)
+            update_focus(scene, cam, lens, conv)
+            name = f"frame_{f:04d}.{ext}" if len(offsets) == 1 else f"frame_{f:04d}.sub{i:02d}.{ext}"
+            path = out_dir / name
+            scene.render.filepath = str(path)
+            bpy.ops.render.render(write_still=True)
+        written.append(str(out_dir / f"frame_{f:04d}.{ext}"))
     write_result(job, {"files": written, "warnings": WARN, "gpu": scene.cycles.device if scene.render.engine == "CYCLES" else None})
 
 

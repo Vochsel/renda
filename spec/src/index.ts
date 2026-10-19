@@ -98,6 +98,19 @@ export const Scene = z.strictObject({
     .describe('Keys are material names or "*" for all.'),
 });
 
+/** Physical lens: focal length (overrides fovDeg) and depth of field (on when fStop is set). */
+export const Lens = z.strictObject({
+  focalLengthMm: z.number().positive().max(5000).optional().describe("Overrides fovDeg; measured across sensorWidthMm (the larger image side)."),
+  sensorWidthMm: z.number().positive().default(36),
+  fStop: z.number().positive().max(256).optional().describe("Aperture f-number. Setting it turns depth of field on."),
+  focusDistance: z.number().positive().optional().describe("Scene units from the camera. Overrides focusTarget."),
+  focusTarget: z.union([z.literal("auto"), Vec3, z.string().min(1)]).default("auto")
+    .describe('"auto" = the camera target; [x,y,z] = a point; any other string = an object name.'),
+  apertureBlades: z.number().int().min(0).max(16).default(0).describe("0 = round bokeh, 3+ = polygonal."),
+  apertureRotationDeg: z.number().default(0),
+  anamorphicRatio: z.number().positive().max(4).default(1).describe(">1 stretches bokeh vertically (anamorphic look)."),
+});
+
 export const Camera = z.discriminatedUnion("mode", [
   z.strictObject({
     mode: z.literal("auto"),
@@ -105,14 +118,16 @@ export const Camera = z.discriminatedUnion("mode", [
     elevationDeg: z.number().default(20),
     azimuthDeg: z.number().default(35),
     padding: z.number().min(0).default(0.1),
+    lens: Lens.optional(),
   }),
-  z.strictObject({ mode: z.literal("scene"), name: z.string().optional().describe("Defaults to the active camera.") }),
+  z.strictObject({ mode: z.literal("scene"), name: z.string().optional().describe("Defaults to the active camera."), lens: Lens.optional() }),
   z.strictObject({
     mode: z.literal("lookat"),
     position: Vec3,
     target: Vec3.default([0, 0, 0]),
     up: Vec3.optional(),
     fovDeg: z.number().gt(0).lt(180).default(40),
+    lens: Lens.optional(),
   }),
 ]);
 
@@ -140,6 +155,15 @@ export const Render = z.strictObject({
   denoise: z.boolean().default(true),
   seed: z.number().int().default(0),
   hardware: z.enum(["auto", "cpu", "gpu"]).default("auto"),
+  antialias: z.strictObject({
+    filter: z.enum(["gaussian", "box", "blackman-harris", "mitchell"]).default("gaussian"),
+    filterWidth: z.number().min(0.01).max(10).default(1.5).describe("Pixels."),
+  }).optional(),
+  motionBlur: z.strictObject({
+    shutter: z.number().gt(0).max(1).default(0.5).describe("Fraction of a frame the shutter is open (0.5 = 180°)."),
+    position: z.enum(["center", "start", "end"]).default("center"),
+    subframes: z.number().int().min(2).max(64).default(8).describe("Samples in time where motion blur is emulated."),
+  }).optional().describe("Needs an animation (a camera turntable or scene animation)."),
 });
 
 export const Animation = z.strictObject({
@@ -166,6 +190,27 @@ export const Output = z.strictObject({
   keepFrames: z.boolean().default(false).describe("Also return individual frames for video outputs."),
 });
 
+/** Look and lens post effects. Exposure and tonemap run inside the engine where it can; the rest is a shared
+ *  stage applied identically to every engine's output. */
+export const Post = z.strictObject({
+  exposure: z.number().min(-10).max(10).default(0).describe("Stops (EV)."),
+  tonemap: z.enum(["agx", "filmic", "aces", "neutral", "standard"]).default("agx"),
+  contrast: z.number().min(-1).max(1).default(0),
+  saturation: z.number().min(0).max(2).default(1),
+  temperature: z.number().min(-1).max(1).default(0).describe("-1 cool … +1 warm."),
+  tint: z.number().min(-1).max(1).default(0).describe("-1 green … +1 magenta."),
+  vignette: z.number().min(0).max(1).default(0),
+  chromaticAberration: z.number().min(0).max(1).default(0),
+  lensDistortion: z.number().min(-1).max(1).default(0).describe("<0 barrel, >0 pincushion."),
+  bloom: z.strictObject({
+    intensity: z.number().min(0).max(4).default(0.3),
+    threshold: z.number().min(0).max(1).default(0.8).describe("Display luminance where the glow starts."),
+    radius: z.number().min(0).max(1).default(0.4).describe("Relative glow size."),
+  }).optional(),
+  filmGrain: z.number().min(0).max(1).default(0),
+  sharpen: z.number().min(0).max(1).default(0),
+});
+
 export const RendaPackage = z.strictObject({
   $schema: z.string().optional(),
   version: z.literal(1).default(1),
@@ -180,7 +225,11 @@ export const RendaPackage = z.strictObject({
   }),
   animation: Animation.optional(),
   output: Output.default({ format: "png", passes: ["beauty"], transparent: false, video: { crf: 18 }, keepFrames: false }),
+  post: Post.optional(),
 }).superRefine((pkg, ctx) => {
+  if (pkg.render.motionBlur && !(pkg.animation && pkg.animation.frames[1] > pkg.animation.frames[0])) {
+    ctx.addIssue({ code: "custom", path: ["render", "motionBlur"], message: "motion blur needs movement: add an animation range (e.g. a turntable)" });
+  }
   const isVideo = VideoFormat.safeParse(pkg.output.format).success;
   if (isVideo && !pkg.animation) {
     ctx.addIssue({ code: "custom", path: ["animation"], message: `output.format "${pkg.output.format}" needs an animation range` });

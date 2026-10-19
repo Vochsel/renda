@@ -98,22 +98,36 @@ def write_frame_outputs(ctx: RenderContext, frame: int, rgb: np.ndarray, alpha: 
 
 def render_splat_frames(ctx: RenderContext, stage, frames: list[int], warnings: list[str],
                         passes_supported: set[str] = frozenset({"beauty", "alpha", "mask", "depth"})) -> list[Path]:
-    """Splats (no meshes) over the package background, one file set per frame."""
-    from ..ir.camera import resolve_cameras
+    """Splats (no meshes) over the package background, one file set per frame.
+
+    Depth of field and motion blur are emulated here (gsplat has no lens or shutter): subframes are
+    rasterised and averaged in linear light, then blurred by the thin-lens circle of confusion."""
+    from ..ir.camera import resolve_subframes
+    from ..post import accumulate, dof_display
 
     pkg = ctx.pkg
     w, h = pkg.render.resolution
-    cams = resolve_cameras(pkg, stage, frames, warnings)
+    subs = resolve_subframes(pkg, stage, frames, warnings, emulate_motion_blur=pkg.render.motionBlur is not None)
     splats = splats_of(stage)
     if backend_name() == "numpy" and len(splats) * w * h > 2e11:
         warnings.append(f"splats: {len(splats):,} splats on the CPU rasteriser is slow; render on a GPU (cloud) for speed")
+    lens = getattr(pkg.camera, "lens", None)
     files: list[Path] = []
+    none = np.zeros((h, w))
     for f in frames:
-        layer = rasterize(splats, cams[f], w, h)
-        bg_rgb, bg_a = background_for(ctx, stage, cams[f], w, h)
-        none = np.zeros((h, w))
-        rgb, alpha = composite_over(layer, np.zeros((h, w, 3)), none, None, bg_rgb, bg_a)
-        write_frame_outputs(ctx, f, rgb, alpha, layer.depth, files, set(passes_supported))
+        shots, depth = [], None
+        for i, cam in enumerate(subs[f]):
+            layer = rasterize(splats, cam, w, h)
+            bg_rgb, bg_a = background_for(ctx, stage, cam, w, h)
+            rgb, alpha = composite_over(layer, np.zeros((h, w, 3)), none, None, bg_rgb, bg_a)
+            if lens is not None and lens.fStop is not None and cam.focus_distance:
+                d = np.where(layer.alpha > 0.05, layer.depth, np.inf) if layer.depth is not None else np.full((h, w), np.inf)
+                rgb, alpha = dof_display(rgb, alpha, d, lens, cam.focal_mm, cam.focus_distance)
+            shots.append((rgb, alpha))
+            if i == len(subs[f]) // 2:
+                depth = layer.depth
+        rgb, alpha = accumulate(shots) if len(shots) > 1 else shots[0]
+        write_frame_outputs(ctx, f, rgb, alpha, depth, files, set(passes_supported))
     return files
 
 

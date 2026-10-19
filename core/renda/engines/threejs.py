@@ -178,7 +178,14 @@ class ThreeEngine(Engine):
         if pkg.scene.upAxis and pkg.scene.upAxis != "-Y":
             stage.up_axis = pkg.scene.upAxis
 
-        cams = resolve_cameras(pkg, stage, frames, warnings)
+        from ..ir.camera import resolve_subframes
+
+        subs = resolve_subframes(pkg, stage, frames, warnings, emulate_motion_blur=pkg.render.motionBlur is not None)
+        cams = {f: s[len(s) // 2] for f, s in subs.items()}
+        lens = getattr(pkg.camera, "lens", None)
+        want_dof = lens is not None and lens.fStop is not None
+        if want_dof and splat_jobs:
+            warnings.append("threejs: depth of field uses mesh depth; splats are treated as background")
         env = pkg.environment
         hdri = env_map_path(pkg, ctx.asset_paths)
         if hdri:
@@ -212,7 +219,12 @@ class ThreeEngine(Engine):
             "cameras": {str(f): c.to_json() for f, c in cams.items()},
             "fps": pkg.animation.fps if pkg.animation else None,
             "frameStart": pkg.animation.frames[0] if pkg.animation else 1,
+            "tonemap": pkg.post.tonemap if pkg.post is not None else "agx",
+            "exposure": pkg.post.exposure if pkg.post is not None else 0.0,
         }
+        aa = pkg.render.antialias
+        resample = {"box": Image.BOX, "gaussian": Image.BICUBIC, "mitchell": Image.BICUBIC,
+                    "blackman-harris": Image.LANCZOS}[aa.filter] if aa is not None else Image.LANCZOS
 
         handler = functools.partial(_Quiet, directory=str(work))
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -235,11 +247,31 @@ class ThreeEngine(Engine):
                 if not ready.get("ok"):
                     raise RuntimeError(f"three.js failed to load the scene: {ready.get('error')}\n" + "\n".join(logs[-10:]))
                 warnings += ready.get("warnings", [])
+                import numpy as np
+
+                from ..post import accumulate, dof_display
+
+                def grab(js: str, arg) -> Image.Image:
+                    url = page.evaluate(js, arg)
+                    return Image.open(io.BytesIO(base64.b64decode(url.split(",", 1)[1])))
+
                 for f in frames:
-                    url = page.evaluate("(f) => window.renderFrame(f)", f)
-                    img = Image.open(io.BytesIO(base64.b64decode(url.split(",", 1)[1]))).convert("RGBA")
-                    if ss > 1:
-                        img = img.resize((w, h), Image.LANCZOS)
+                    shots = []
+                    for cam in subs[f]:
+                        im = grab("([c, t]) => window.renderView(c, t)", [cam.to_json(), f]).convert("RGBA")
+                        if ss > 1:
+                            im = im.resize((w, h), resample)
+                        arr = np.asarray(im, dtype=np.float64) / 255.0
+                        shots.append((arr[..., :3], arr[..., 3]))
+                    rgb, a = accumulate(shots) if len(shots) > 1 else shots[0]
+                    if want_dof and cams[f].focus_distance:
+                        enc = np.asarray(grab("(c) => window.renderDepth(c)", cams[f].to_json()).convert("RGB"),
+                                         dtype=np.float64)[::ss, ::ss] / 255.0
+                        v = enc[..., 0] + enc[..., 1] / 255.0 + enc[..., 2] / 65025.0
+                        depth = np.where(v < 0.9999, v * cams[f].far, np.inf)[:h, :w]
+                        rgb, a = dof_display(rgb, a, depth, lens, cams[f].focal_mm, cams[f].focus_distance)
+                    img = Image.fromarray(np.dstack([(np.clip(rgb, 0, 1) * 255 + 0.5).astype(np.uint8),
+                                                     (np.clip(a, 0, 1) * 255 + 0.5).astype(np.uint8)]), "RGBA")
                     alpha = img.getchannel("A")
                     if not job["transparent"]:
                         img = img.convert("RGB")

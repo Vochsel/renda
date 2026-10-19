@@ -6,6 +6,7 @@ import turntable from "../../../../spec/examples/turntable.renda.json";
 import threejs from "../../../../spec/examples/threejs-scene.renda.json";
 import splatRoom from "../../../../spec/examples/splat-room-mixed.renda.json";
 import stl from "../../../../spec/examples/stl-print-preview.renda.json";
+import lensEffects from "../../../../spec/examples/lens-effects.renda.json";
 import { SiteHeader } from "@/components/site-header";
 import { installSnippets } from "@/lib/install-snippets";
 import { Code } from "@/components/code";
@@ -14,7 +15,18 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 
 export const metadata: Metadata = { title: "Docs" };
 
-const EXAMPLES = { minimal, "hero still": hero, turntable, "three.js": threejs, "stl preview": stl, "splats + mesh": splatRoom };
+const EXAMPLES = { minimal, "hero still": hero, turntable, "three.js": threejs, "stl preview": stl, "splats + mesh": splatRoom, "lens + post": lensEffects };
+
+/** Mirrors core/renda/effects.py MATRIX. */
+const EFFECTS: [string, ...string[]][] = [
+  ["Depth of field", "native", "native", "native", "native (thin lens)", "emulated (depth)", "emulated (depth)"],
+  ["Bokeh blades / anamorphic", "native", "native", "native", "round only", "emulated", "emulated"],
+  ["Antialias filter", "native", "native", "native", "native", "approx.", "built-in"],
+  ["Motion blur", "native", "native", "emulated", "emulated (same cost)", "emulated", "emulated"],
+  ["Exposure", "native", "native", "native", "native", "native", "display colours"],
+  ["Tonemap", "aces → filmic", "aces → filmic", "aces → filmic", "filmic approx.", "filmic approx.", "n/a"],
+  ["Post (grade, vignette, CA, distortion, bloom, grain, sharpen)", "shared", "shared", "shared", "shared", "shared", "shared"],
+];
 
 type JsonSchema = { type?: string | string[]; description?: string; properties?: Record<string, JsonSchema>; enum?: unknown[]; anyOf?: JsonSchema[]; oneOf?: JsonSchema[]; default?: unknown; $ref?: string; items?: JsonSchema; required?: string[] };
 
@@ -91,6 +103,31 @@ curl -X POST $RENDA/api/v1/jobs -H "authorization: Bearer $KEY" \\
 # 3. poll until status is succeeded, then download outputs[].url
 curl $RENDA/api/v1/jobs/<id> -H "authorization: Bearer $KEY"`}</Code>
         <p className="text-muted-foreground mt-2 text-sm">The <span className="font-mono">renda</span> CLI and MCP server do the upload step for you. Full API: <a className="underline" href="/api/v1/openapi.json">OpenAPI</a>.</p>
+
+        <h2 className="mt-10 text-lg font-semibold">Lens and camera effects</h2>
+        <p className="text-muted-foreground mt-3 max-w-3xl text-sm">
+          <span className="font-mono">camera.lens</span> (focal length, f-stop for depth of field, focus, bokeh),{" "}
+          <span className="font-mono">render.antialias</span>, <span className="font-mono">render.motionBlur</span> (needs an animation) and{" "}
+          <span className="font-mono">post</span> work on every engine: natively where the engine can, emulated where it can&apos;t (job warnings
+          say which). Post effects are one shared stage, so they look identical across engines. Emulated motion blur costs{" "}
+          <span className="font-mono">subframes</span> × the frame time.
+        </p>
+        <Table className="mt-3">
+          <TableHeader>
+            <TableRow>
+              <TableHead />
+              {["cycles", "eevee", "workbench", "mitsuba", "threejs", "gsplat"].map((e) => <TableHead key={e} className="font-mono text-xs">{e}</TableHead>)}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {EFFECTS.map(([name, ...cells]) => (
+              <TableRow key={name}>
+                <TableCell className="text-xs">{name}</TableCell>
+                {cells.map((c, i) => <TableCell key={i} className="text-muted-foreground text-xs">{c}</TableCell>)}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
 
         <h2 className="mt-10 text-lg font-semibold">Fields</h2>
         <Table className="mt-3">

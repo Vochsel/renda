@@ -41,6 +41,11 @@ JSON Schema at `renda://schema/v1`.
 - `auto`: `fovDeg` = 35, `elevationDeg` = 20, `azimuthDeg` = 35, `padding` = 0.1 (fraction of the bounds)
 - `scene`: `name`, optional (default: the active or first camera in the file)
 - `lookat`: `position` [x,y,z] **required**, `target` = [0,0,0], `up`, optional, `fovDeg` = 40
+- every mode takes an optional `lens` (physical camera):
+  - `focalLengthMm`, optional: overrides `fovDeg`, measured across `sensorWidthMm` = 36 (the larger image side)
+  - `fStop`, optional: setting it turns **depth of field** on
+  - `focusDistance` (scene units) or `focusTarget` = `"auto"` (the camera target) | `[x,y,z]` | object name
+  - `apertureBlades` = 0 (round; 3+ = polygonal bokeh), `apertureRotationDeg` = 0, `anamorphicRatio` = 1
 
 ## environment
 - `hdri`: asset id/uri of an equirectangular `.hdr`/`.exr`, or the built-ins `"studio"`, `"sunset"`, `"night"`
@@ -62,6 +67,9 @@ JSON Schema at `renda://schema/v1`.
 - `denoise` bool = true
 - `seed` int = 0
 - `hardware` = `"auto"`: `auto | cpu | gpu` (auto picks the cheapest class that fits)
+- `antialias`, optional: `{ filter = "gaussian" | "box" | "blackman-harris" | "mitchell", filterWidth = 1.5 }` (pixels)
+- `motionBlur`, optional: `{ shutter = 0.5 (fraction of a frame; 0.5 = 180°), position = "center" | "start" | "end",
+  subframes = 8 }`. Needs an animation; `subframes` is used where the engine emulates it.
 
 ## animation
 - `frames` [start, end] inclusive, **required**
@@ -76,6 +84,14 @@ JSON Schema at `renda://schema/v1`.
 - `video` `{ codec?: h264 | h265 | vp9 | prores | gif, crf = 18 }`
 - `keepFrames` = false: also return individual frames for video
 
+## post (optional, all fields optional)
+- `exposure` = 0 (stops), `tonemap` = `"agx"`: `agx filmic aces neutral standard` (run inside the engine where it can)
+- grade: `contrast` −1…1 = 0, `saturation` 0…2 = 1, `temperature` −1 (cool)…1 (warm) = 0, `tint` −1…1 = 0
+- lens: `vignette` 0…1, `chromaticAberration` 0…1, `lensDistortion` −1 (barrel)…1 (pincushion)
+- `bloom` `{ intensity = 0.3, threshold = 0.8, radius = 0.4 }`, `filmGrain` 0…1, `sharpen` 0…1
+- Everything except exposure/tonemap is a shared post stage applied identically to every engine's frames.
+
 ## Cross-field rules
 - Video `format` requires `animation`.
 - `transparent: true` requires png/webp/exr/webm/mov.
+- `render.motionBlur` requires an animation range (something has to move: a turntable or scene animation).

@@ -46,6 +46,8 @@ rewritten to `asset://<sha256>` automatically; `https://` URLs are fetched by th
 | Too dark / blown out | `environment.intensity`; add `lights` (a `sun` gives crisp shadows) |
 | Need a cut-out | `output.transparent: true` + png/webp/exr (video: webm/mov) |
 | Noisy | raise `render.quality` (draft → standard → final) before touching `samples` |
+| Want a cinematic look | `camera.lens: { "focalLengthMm": 85, "fStop": 2 }` + `post: { "vignette": 0.3, "filmGrain": 0.15 }` |
+| Turntable looks stroby | `render.motionBlur: {}` (180° shutter) |
 
 ## Engine matrix
 
@@ -64,6 +66,28 @@ rewritten to `asset://<sha256>` automatically; `https://` URLs are fetched by th
 `auto` picks Blender for `.blend` and the cheapest engine that fits the quality for
 everything else. Anything an engine can't honour shows up in job `warnings`, never as a
 silent drop. Read them.
+
+## Lens and camera effects
+
+Depth of field (`camera.lens.fStop`), focal length (`lens.focalLengthMm`), antialias filter
+(`render.antialias`), motion blur (`render.motionBlur`, needs an animation) and `post`
+(exposure, tonemap, grade, vignette, chromatic aberration, lens distortion, bloom, grain,
+sharpen). Same controls on every engine:
+
+| | cycles | eevee | workbench | mitsuba | threejs | gsplat |
+|---|---|---|---|---|---|---|
+| Depth of field | native | native | native | native (thin lens) | emulated from depth | emulated from depth |
+| Bokeh blades / anamorphic | native | native | native | ✗ (round) | emulated | emulated |
+| AA filter | native | native (width) | native (width) | native | approx (downscale filter) | ✗ (built-in AA) |
+| Motion blur | native | native | emulated (subframes) | emulated (same cost) | emulated (subframes) | emulated (subframes) |
+| Exposure | native | native | native | native | native | on display colours |
+| Tonemap | agx filmic standard neutral (aces→filmic) | same | same | all (filmic approx) | all (filmic approx) | ✗ (splats are display-referred) |
+| Post (grade, vignette, CA, distortion, bloom, grain, sharpen) | shared | shared | shared | shared | shared | shared |
+
+Emulated motion blur multiplies render time by `subframes` (default 8) on workbench,
+threejs and gsplat; check `renda estimate`. Shallow focus wants a long lens and a low f-stop:
+`{"focalLengthMm": 85, "fStop": 1.8}`. Scene units are treated as metres for depth of field,
+so set `scene.unitScale` for mm/cm files.
 
 ## Per-format notes
 

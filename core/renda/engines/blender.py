@@ -148,6 +148,34 @@ class BlenderEngine(Engine):
             transparent_film = True  # meshes only: the compositor adds splats and the background
             if "depth" not in passes:
                 passes.append("depth")
+            if (getattr(pkg.camera, "lens", None) and pkg.camera.lens.fStop) or pkg.render.motionBlur:
+                warnings.append(f"{self.name}: depth of field and motion blur apply to the meshes; the composited "
+                                "splat layer stays sharp")
+        lens = getattr(pkg.camera, "lens", None)
+        lens_job = None
+        if lens is not None:
+            if lens.focalLengthMm and camera.get("mode") in ("auto", "lookat"):
+                from ..lens import effective_fov_y
+
+                w, h = pkg.render.resolution
+                camera = {**camera, "fovDeg": effective_fov_y(camera.get("fovDeg", 35), lens, w / h)}
+            ft = lens.focusTarget
+            lens_job = {
+                "focal_mm": lens.focalLengthMm, "sensor_mm": lens.sensorWidthMm, "fstop": lens.fStop,
+                "focus_distance": lens.focusDistance,
+                "focus_point": list(ft) if isinstance(ft, (tuple, list)) else None,
+                "focus_object": ft if isinstance(ft, str) and ft != "auto" else None,
+                "blades": lens.apertureBlades, "rotation_deg": lens.apertureRotationDeg, "ratio": lens.anamorphicRatio,
+            }
+        mb = pkg.render.motionBlur
+        mb_job = None
+        if mb is not None:
+            from ..effects import subframe_offsets
+
+            mb_job = {"shutter": mb.shutter, "position": mb.position, "subframes": mb.subframes,
+                      "emulate": self.flavour == "workbench", "offsets": subframe_offsets(pkg)}
+        aa = pkg.render.antialias
+        post = pkg.post
         return {
             "input": str(root),
             "format": src_fmt,
@@ -174,6 +202,11 @@ class BlenderEngine(Engine):
             "passes": passes,
             "out_dir": str(ctx.out_dir),
             "image_format": "OPEN_EXR" if pkg.output.format == "exr" else "PNG",
+            "lens": lens_job,
+            "motion_blur": mb_job,
+            "antialias": {"filter": aa.filter, "width": aa.filterWidth} if aa is not None else None,
+            "exposure": post.exposure if post is not None else 0.0,
+            "tonemap": post.tonemap if post is not None else "agx",
         }
 
     def render(self, ctx: RenderContext, frames: list[int]) -> RenderResult:
@@ -189,6 +222,7 @@ class BlenderEngine(Engine):
             finally:
                 _cleanup_scratch(job)
             warnings += result.get("warnings", [])
+            merge_subframes(ctx.out_dir, frames)
             files = postprocess(ctx, frames, warnings)
             return RenderResult(files, warnings, time.time() - t0)
 
@@ -206,6 +240,7 @@ class BlenderEngine(Engine):
         finally:
             _cleanup_scratch(job)
         warnings += result.get("warnings", [])
+        merge_subframes(ctx.out_dir, frames)
         depths = {f: _read_exr_channel(ctx.out_dir / frame_filename("depth", f, "exr")) for f in frames}
         if "depth" not in ctx.pkg.output.passes:
             for f in frames:
@@ -308,6 +343,39 @@ def postprocess(ctx: RenderContext, frames: list[int], warnings: list[str]) -> l
             else:
                 files.append(_exr_pass_to_png(exr, p, warnings))
     return files
+
+
+def merge_subframes(out_dir: Path, frames: list[int]) -> None:
+    """Average `frame_NNNN.subKK.{png,exr}` (Workbench's emulated motion blur) into `frame_NNNN.*`."""
+    from PIL import Image
+
+    from ..post import accumulate
+
+    for f in frames:
+        for ext in ("png", "exr"):
+            subs = sorted(Path(out_dir).glob(f"frame_{f:04d}.sub*.{ext}"))
+            if not subs:
+                continue
+            dst = Path(out_dir) / frame_filename("beauty", f, ext)
+            if ext == "png":
+                shots = []
+                for s in subs:
+                    arr = np.asarray(Image.open(s).convert("RGBA"), dtype=np.float64) / 255.0
+                    shots.append((arr[..., :3], arr[..., 3]))
+                rgb, a = accumulate(shots)
+                Image.fromarray(np.dstack([(np.clip(rgb, 0, 1) * 255 + 0.5).astype(np.uint8),
+                                           (np.clip(a, 0, 1) * 255 + 0.5).astype(np.uint8)]), "RGBA").save(dst)
+            else:
+                import mitsuba as mi
+
+                from ..images import save_exr
+
+                if not mi.variant():
+                    mi.set_variant("scalar_rgb")
+                acc = sum(np.array(mi.Bitmap(str(s)), copy=True).astype(np.float64) for s in subs) / len(subs)
+                save_exr(acc.astype(np.float32), dst)
+            for s in subs:
+                s.unlink(missing_ok=True)
 
 
 def _read_exr_channel(path: Path) -> np.ndarray | None:

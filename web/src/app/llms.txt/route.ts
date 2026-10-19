@@ -37,6 +37,7 @@ Credentials live in ~/.config/renda/credentials.json (or $RENDA_API_KEY).
     renda new model.glb                                  # starter .renda.json: camera, HDRI, lights, materials, frames, output
     renda render capture.spz                             # Gaussian splats → engine gsplat (GPU, cheapest)
 Gaussian splats: splat-only scenes render with engine "gsplat"; put meshes inside a capture with scene.include (threejs renders both natively; blender-*/mitsuba composite the splats by depth, without engine lighting on them). Splat .ply/.splat captures are Y-down: scene.upAxis defaults to "-Y"; set "Y" if a render is upside down.
+Lens and look, in the package: camera.lens {focalLengthMm, fStop (turns on depth of field), focusTarget, apertureBlades}, render.antialias {filter, filterWidth}, render.motionBlur {shutter} (needs an animation), post {exposure, tonemap: agx|filmic|aces|neutral|standard, contrast, saturation, temperature, vignette, chromaticAberration, lensDistortion, bloom, filmGrain, sharpen}. Same controls on every engine: native in Blender, emulated where an engine lacks them (warnings say so); post effects are one shared stage, identical across engines. Emulated motion blur (workbench, threejs, gsplat) costs subframes × the frame time.
 Identical re-renders are cached and free. Local paths are uploaded automatically (deduped by sha256).
 
 ## 5. MCP (if you'd rather use tools than the CLI)
