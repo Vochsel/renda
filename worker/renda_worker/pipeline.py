@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
-from . import dispatch, hardware as hw
+from . import dispatch, hardware as hw, media
 from .assets import AssetCache, name_hints
 from .core_api import Core, get
 from .dispatch import ChunkResult, ChunkTask
@@ -116,7 +116,11 @@ def _restore_from_cache(deps: Deps, job: JobRequest, cache_key: str | None) -> l
         for obj in manifest["outputs"]:
             dst = job.outputPrefix + obj["key"].rsplit("/", 1)[-1]
             deps.storage.copy(obj["key"], dst)
-            outputs.append({**obj, "key": dst})
+            restored = {**obj, "key": dst}
+            if obj.get("thumbKey"):
+                restored["thumbKey"] = media.thumb_key_for(dst)
+                deps.storage.copy(obj["thumbKey"], restored["thumbKey"])
+            outputs.append(restored)
     except Exception as exc:  # expired source objects etc. → just render again
         log.warning("cache restore failed for %s: %s", cache_key, exc)
         return None
@@ -237,6 +241,8 @@ def run_chunk(task: ChunkTask, deps: Deps, started: float | None = None) -> Chun
             # core names passes like frame_0001.depth.exr; anything with a 2nd suffix is a pass.
             if len(f.suffixes) > 1:
                 obj["pass"] = f.suffixes[-2].lstrip(".")
+            if task.final:  # user-facing output: dimensions + thumbnail for the dashboard gallery
+                media.attach(obj, f, deps.storage)
             return obj
 
         # R2 round-trips dominate small frames; sequential uploads cost ~40s of GPU time per 48 frames.
@@ -263,6 +269,7 @@ def run_encode(task: EncodeTask, deps: Deps, started: float | None = None) -> di
         ctype = content_type(out)
         size = deps.storage.put_file(out, task.output_key, ctype)
         result: dict[str, Any] = {"key": task.output_key, "contentType": ctype, "bytes": size}
+        media.attach(result, out, deps.storage, poster_frame=frames[0] if frames else None)
         if task.keep_frames_prefix:
             def keep(key: str) -> dict[str, Any]:
                 dst = task.keep_frames_prefix + key.rsplit("/", 1)[-1]
@@ -342,7 +349,7 @@ def run_hyperframes_job(job: JobRequest, deps: Deps, run: Runner = _subprocess_r
         ev.status("encoding", progress=0.95)
         key = job.outputPrefix + out.name
         size = deps.storage.put_file(out, key, content_type(out))
-        outputs = [{"key": key, "contentType": content_type(out), "bytes": size}]
+        outputs = [media.attach({"key": key, "contentType": content_type(out), "bytes": size}, out, deps.storage)]
         shutil.rmtree(work, ignore_errors=True)
         ev.status("succeeded", progress=1.0)
         ev.done(outputs, cached=False)

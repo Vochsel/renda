@@ -3,17 +3,24 @@ import { requireAccount } from "@/lib/auth";
 import { getBilling } from "@/lib/accounts";
 import { monthRange, usageSummary } from "@/lib/billing";
 import { listJobs } from "@/lib/jobs";
+import { listOutputs } from "@/lib/outputs";
 import { fmtAgo, fmtMinutes, fmtUsd } from "@/lib/format";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Code } from "@/components/code";
 import { SpendChart } from "@/components/spend-chart";
 import { StatusBadge } from "@/components/status-badge";
+import { RecentStrip } from "@/components/gallery/recent-strip";
 
 export default async function Overview() {
   const { org } = await requireAccount();
   const range = monthRange();
-  const [usage, billing, recent] = await Promise.all([usageSummary(org.id, range.from, range.to), getBilling(org.id), listJobs(org.id, { limit: 8 })]);
+  const [usage, billing, recent, renders] = await Promise.all([
+    usageSummary(org.id, range.from, range.to),
+    getBilling(org.id),
+    listJobs(org.id, { limit: 8 }),
+    listOutputs(org.id, { limit: 10 }),
+  ]);
   const totalSeconds = usage.seconds.cpu + usage.seconds.gpu;
 
   return (
@@ -25,6 +32,15 @@ export default async function Overview() {
         <Stat label="Free minutes left" value={fmtMinutes(billing.freeSecondsRemaining)}
           sub={billing.hasPaymentMethod ? "Card on file" : "No card on file"} />
       </div>
+      {renders.items.length > 0 && (
+        <Card>
+          <CardHeader className="flex-row items-center justify-between">
+            <CardTitle className="text-sm">Recent renders</CardTitle>
+            <Link href="/dashboard/gallery" className="text-muted-foreground text-sm hover:underline">Gallery</Link>
+          </CardHeader>
+          <CardContent><RecentStrip items={renders.items} /></CardContent>
+        </Card>
+      )}
       <Card>
         <CardHeader><CardTitle className="text-sm">Daily render time</CardTitle></CardHeader>
         <CardContent><SpendChart days={usage.byDay} monthStart={range.from} /></CardContent>

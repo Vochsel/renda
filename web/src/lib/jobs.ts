@@ -234,11 +234,36 @@ export async function sweepStaleJobs(maxMinutes = Number(envOptional("JOB_MAX_MI
 
 // ---- worker events -------------------------------------------------------
 
+export type WorkerOutput = {
+  key: string;
+  contentType: string;
+  bytes: number;
+  name?: string;
+  pass?: string;
+  width?: number;
+  height?: number;
+  thumbKey?: string;
+  placeholder?: string;
+};
+
+/** Keep only known, well-typed fields from a worker output (the payload is HMAC-signed, but stay strict). */
+export function toJobOutput(o: WorkerOutput): JobOutput {
+  const out: JobOutput = { name: o.name ?? o.key.split("/").pop()!, key: o.key, contentType: o.contentType, bytes: o.bytes };
+  if (typeof o.pass === "string") out.pass = o.pass;
+  if (Number.isInteger(o.width) && Number.isInteger(o.height) && o.width! > 0 && o.height! > 0) {
+    out.width = o.width;
+    out.height = o.height;
+  }
+  if (typeof o.thumbKey === "string" && o.thumbKey.startsWith(o.key.slice(0, o.key.lastIndexOf("/") + 1))) out.thumbKey = o.thumbKey;
+  if (typeof o.placeholder === "string" && o.placeholder.startsWith("data:image/") && o.placeholder.length <= 4096) out.placeholder = o.placeholder;
+  return out;
+}
+
 export type WorkerEvent =
   | { jobId: string; type: "status"; status: JobRow["status"]; progress?: number; engine?: string; hardware?: string }
   | { jobId: string; type: "usage"; hardware: Hardware; seconds: number; chunk: number | string }
   | { jobId: string; type: "warning"; message: string }
-  | { jobId: string; type: "done"; outputs: { key: string; contentType: string; bytes: number; name?: string }[]; cached?: boolean }
+  | { jobId: string; type: "done"; outputs: WorkerOutput[]; cached?: boolean }
   | { jobId: string; type: "failed"; error: string };
 
 const SECONDS_COLUMN: Record<Hardware, "secondsCpu" | "secondsGpuL4" | "secondsGpuL40s"> = {
@@ -286,7 +311,7 @@ export async function applyWorkerEvent(ev: WorkerEvent) {
       return { ok: true };
     case "done": {
       if (job.status === "canceled") return { ignored: true };
-      const outputs: JobOutput[] = ev.outputs.map((o) => ({ name: o.name ?? o.key.split("/").pop()!, key: o.key, contentType: o.contentType, bytes: o.bytes }));
+      const outputs: JobOutput[] = ev.outputs.map(toJobOutput);
       await db().update(jobs).set({ status: "succeeded", progress: 1, outputs, cached: Boolean(ev.cached), finishedAt: new Date(), startedAt: job.startedAt ?? new Date() })
         .where(eq(jobs.id, job.id));
       return { ok: true };

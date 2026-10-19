@@ -36,7 +36,8 @@ ASSET_ROOT = "/assets"
 CACHE_ROOT = "/cache"
 
 _IGNORE = ["**/.venv/**", "**/__pycache__/**", "**/tests/**", "**/.pytest_cache/**", "**/*.egg-info/**"]
-_WORKER_DEPS = ["requests>=2.32", "boto3>=1.35", "pydantic>=2.7", "fastapi[standard]>=0.115"]
+# pillow: gallery thumbnails (media.py) in every image, incl. hyperframes which has no core.
+_WORKER_DEPS = ["requests>=2.32", "boto3>=1.35", "pydantic>=2.7", "fastapi[standard]>=0.115", "pillow>=10"]
 _X11_GL_LIBS = [
     "libxi6", "libxxf86vm1", "libxfixes3", "libxrender1", "libgl1", "libegl1", "libglu1-mesa",
     "libxkbcommon0", "libsm6", "libice6", "libx11-6", "libxext6",

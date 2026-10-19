@@ -215,6 +215,11 @@ using `RENDA_WORKER_SECRET`, header `x-renda-signature: sha256=<hex>`):
 { "jobId": "...", "type": "failed", "error": "..." }
 ```
 
+User-facing image/video outputs also carry gallery metadata the worker computes right after upload:
+`width`, `height`, `thumbKey` (`outputs/<id>/thumbs/<name>.webp`, ≤480px; a poster for video) and
+`placeholder` (a ~16px blurred webp data URI). The dashboard gallery and `GET /api/v1/outputs` read
+these from `jobs.outputs`; `worker/scripts/backfill_thumbs.py` fills them in for older jobs.
+
 ## 4. Billing
 
 - Meter = container-seconds actually spent on a job (scene load + render + encode),

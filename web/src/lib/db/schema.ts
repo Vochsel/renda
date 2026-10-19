@@ -73,7 +73,19 @@ export const assets = pgTable("assets", {
   createdAt: createdAt(),
 }, (t) => [primaryKey({ columns: [t.orgId, t.sha256] })]);
 
-export type JobOutput = { name: string; key: string; contentType: string; bytes: number };
+export type JobOutput = {
+  name: string;
+  key: string;
+  contentType: string;
+  bytes: number;
+  /** Render pass for non-beauty outputs (depth, normal, …). */
+  pass?: string;
+  /** Gallery metadata written by the worker (absent on outputs from before it existed). */
+  width?: number;
+  height?: number;
+  thumbKey?: string;
+  placeholder?: string;
+};
 
 export const jobs = pgTable("jobs", {
   id: id("job"),

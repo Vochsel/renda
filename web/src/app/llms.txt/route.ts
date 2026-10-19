@@ -65,6 +65,7 @@ ${HARDWARE.map((h) => `  - ${HARDWARE_LABEL[h]} (${h}): $${PRICE_PER_MINUTE[h]}`
 - Email: POST /api/v1/auth/magic/start {email} → POST /api/v1/auth/magic/verify {email, code} → {apiKey}
 - Upload: POST /api/v1/uploads {filename, size, sha256} → PUT bytes to uploadUrl (skip when exists) → use asset://<sha256>
 - Estimate: POST /api/v1/estimate {package} · Submit: POST /api/v1/jobs {package, kind?, priority?, idempotencyKey?} · Poll: GET /api/v1/jobs/{id}
+- Past renders: GET /api/v1/outputs?limit=30&kind=image|video|model → {items:[{jobId, name, url, thumbUrl, width, height, …}], nextCursor} (pass cursor=nextCursor for the next page)
 - Send \`Authorization: Bearer <apiKey>\` on everything except auth routes.
 
 ## Links
