@@ -14,7 +14,10 @@ sensibly. The result is cached by content hash + tolerances.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import os
+import sys
 import tempfile
 from pathlib import Path
 
@@ -35,6 +38,41 @@ def available() -> bool:
     return True
 
 
+@contextlib.contextmanager
+def _native_stdout_to_stderr():
+    """OpenCASCADE prints progress ("Total number of loaded entities …") straight to fd 1 from C++,
+    which would corrupt `--json` output; point fd 1 at stderr while it runs."""
+    try:
+        sys.stdout.flush()
+        saved = os.dup(1)
+    except (OSError, ValueError):  # no real fd 1 (e.g. some test runners)
+        yield
+        return
+    try:
+        os.dup2(2, 1)
+        yield
+    finally:
+        _flush_c_stdio()  # C/C++ buffers would otherwise flush to the real stdout later
+        os.dup2(saved, 1)
+        os.close(saved)
+
+
+def _flush_c_stdio() -> None:
+    try:
+        import ctypes
+
+        ctypes.CDLL(None).fflush(None)
+    except (OSError, AttributeError):
+        pass
+
+
+def _load(data: bytes, **kw) -> bytes:
+    import cascadio
+
+    with _native_stdout_to_stderr():
+        return cascadio.load(data, **kw)
+
+
 def _glb_bounds(glb: bytes) -> np.ndarray | None:
     import trimesh
 
@@ -45,7 +83,7 @@ def _glb_bounds(glb: bytes) -> np.ndarray | None:
 def tessellate(data: bytes, fmt: str, tessellation=None, cache_dir: Path | None = None) -> tuple[Path, float, dict]:
     """→ (glb path, factor to metres, info). Raises ValueError if OpenCASCADE yields nothing."""
     try:
-        import cascadio
+        import cascadio  # noqa: F401
     except ImportError as e:
         raise RuntimeError("STEP/IGES need the CAD extra locally: `uvx --with 'renda[cad]' renda …` "
                            "(or render with --cloud, where it's always installed)") from e
@@ -56,7 +94,7 @@ def tessellate(data: bytes, fmt: str, tessellation=None, cache_dir: Path | None 
     ang = (getattr(tessellation, "angularDeflection", None) if tessellation is not None else None) or DEFAULT_ANGULAR_DEFLECTION
     info: dict = {"angularDeflection": ang}
     if lin is None:
-        coarse = cascadio.load(data, file_type=file_type, tol_linear=0.1, tol_relative=True, tol_angular=1.0)
+        coarse = _load(data, file_type=file_type, tol_linear=0.1, tol_relative=True, tol_angular=1.0)
         bounds = _glb_bounds(coarse) if coarse else None
         if bounds is None:
             raise ValueError(f"OpenCASCADE found no surfaces to tessellate in this {file_type.upper()} file")
@@ -69,7 +107,7 @@ def tessellate(data: bytes, fmt: str, tessellation=None, cache_dir: Path | None 
     out_dir.mkdir(parents=True, exist_ok=True)
     glb_path = out_dir / f"{key}.glb"
     if not glb_path.exists():
-        glb = cascadio.load(data, file_type=file_type, tol_linear=lin * 1000.0, tol_angular=ang)
+        glb = _load(data, file_type=file_type, tol_linear=lin * 1000.0, tol_angular=ang)
         if not glb or _glb_bounds(glb) is None:
             raise ValueError(f"OpenCASCADE produced no geometry for this {file_type.upper()} file (unsupported or empty B-rep?)")
         tmp = glb_path.with_suffix(".part")

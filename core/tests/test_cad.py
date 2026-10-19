@@ -71,6 +71,20 @@ def test_package_with_step_root_and_unit_scale(tmp_path):
     assert np.allclose(hi, [1.2, 0.8, 0.44], atol=1e-3)
 
 
+def test_cli_json_output_stays_clean_for_iges(tmp_path):
+    """OpenCASCADE prints to fd 1 from C++; `--json` must still be exactly one JSON document."""
+    import json
+    import subprocess
+    import sys
+
+    code = "from renda.cli import app; app()"
+    p = subprocess.run([sys.executable, "-c", code, "info", str(IGES), "--json"], capture_output=True, text=True,
+                       env={**__import__("os").environ, "RENDA_CACHE_DIR": str(tmp_path)}, cwd=Path(__file__).parents[1])
+    assert p.returncode == 0, p.stderr
+    doc = json.loads(p.stdout)
+    assert doc["format"] == "iges"
+
+
 def test_planner_treats_cad_like_product_shots():
     assert choose_engine("step", "standard", None)[0] == "mitsuba"
     assert choose_engine("iges", "final", None)[0] == "blender-cycles"
