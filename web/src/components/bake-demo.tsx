@@ -35,7 +35,7 @@ type ModelViewerEl = HTMLElement & {
   jumpCameraToGoal(): void;
 };
 
-/** Copy the viewpoint (orbit, target, zoom, turntable angle) from one viewer to another. */
+/** Copy the viewpoint (orbit, target, zoom) from one viewer to another. No auto-rotate: comparisons hold still. */
 function syncCamera(from: ModelViewerEl, to: ModelViewerEl) {
   try {
     const o = from.getCameraOrbit();
@@ -105,8 +105,6 @@ function DemoCard({ demo }: { demo: Demo }) {
               src={x.src}
               alt={`${demo.credit?.title ?? demo.id} — ${x.label}`}
               camera-controls=""
-              auto-rotate=""
-              rotation-per-second="18deg"
               interaction-prompt="none"
               environment-image="neutral"
               shadow-intensity="0"
