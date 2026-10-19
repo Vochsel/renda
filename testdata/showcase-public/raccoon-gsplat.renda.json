@@ -1,0 +1,5 @@
+{ "version": 1, "name": "Raccoon family carving — gsplat",
+  "scene": { "root": "assets/racoonfamily.spz" },
+  "camera": { "mode": "lookat", "position": [0.0, -0.1, 0.4], "target": [0.0, -0.65, -1.0], "fovDeg": 45 },
+  "environment": { "background": "#1b1c20" },
+  "render": { "engine": "gsplat", "resolution": [1000, 750], "quality": "final" }, "output": { "format": "png" } }

@@ -1,0 +1,7 @@
+{ "version": 1, "name": "Knock Community Hall turntable — gsplat",
+  "scene": { "root": "assets/knock-community-hall.spz", "upAxis": "-Y" },
+  "camera": { "mode": "auto", "elevationDeg": 28, "fovDeg": 36 },
+  "environment": { "background": "#1b1c20" },
+  "render": { "engine": "gsplat", "resolution": [960, 720], "quality": "final" },
+  "animation": { "frames": [1, 72], "fps": 24, "turntable": { "revolutions": 1 } },
+  "output": { "format": "mp4", "video": { "codec": "h264", "crf": 22 } } }

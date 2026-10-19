@@ -26,3 +26,5 @@ renders/
 testdata/out/
 *.blend1
 .DS_Store
+testdata/showcase-public/assets/
+testdata/showcase-public/probe/

@@ -254,8 +254,10 @@ def render(
         files = client.download_outputs(job, output) if job.get("status") == "succeeded" else []
         result = {**job, "files": [str(f) for f in files]}
         if job.get("status") != "succeeded":
-            emit(json_out, {"error": {"code": "job_" + job.get("status", "failed"), "message": job.get("error") or job.get("status"),
-                                      "hint": f"see `renda jobs {job['id']}`"}, "job": job})
+            code, message = "job_" + job.get("status", "failed"), job.get("error") or job.get("status")
+            hint = f"see `renda jobs {job['id']}`"
+            emit(json_out, {"status": "error", "reason": code, "message": message, "hint": hint,
+                            "error": {"code": code, "message": message, "hint": hint}, "job": job})
             raise typer.Exit(1)
 
         def human():

@@ -228,3 +228,64 @@ def test_info_reports_splats():
     r = CliRunner().invoke(app, ["info", str(SPLATS / "garden.spz"), "--json"])
     d = json.loads(r.output.strip().splitlines()[-1])
     assert d["splats"] > 40000 and d["shDegree"] == 1 and d["meshes"] == 0
+
+
+def _pack_smallest_three(wxyz: np.ndarray) -> bytes:
+    """Reference v3+ rotation packing (mirrors nianticlabs/spz packQuaternionSmallestThree)."""
+    q = wxyz[:, [1, 2, 3, 0]].astype(np.float64)  # spz order x, y, z, w
+    largest = np.abs(q).argmax(1)
+    q *= np.where(q[np.arange(len(q)), largest] < 0, -1.0, 1.0)[:, None]
+    comp = np.zeros(len(q), dtype=np.uint64)
+    for i in range(4):
+        sel = largest != i
+        mag = np.round(np.abs(q[:, i]) / np.sqrt(0.5) * 511).astype(np.uint64)
+        bits = ((q[:, i] < 0).astype(np.uint64) << np.uint64(9)) | mag
+        comp = np.where(sel, (comp << np.uint64(10)) | bits, comp)
+    comp |= largest.astype(np.uint64) << np.uint64(30)
+    return comp.astype("<u4").tobytes()
+
+
+def _spz_v4(s: Splats, v2: Path, v4: Path) -> None:
+    """Re-container a (v2) .spz the way current Niantic/PlayCanvas tools write v4."""
+    import gzip
+    import struct
+
+    import zstandard
+
+    raw = gzip.decompress(v2.read_bytes())
+    magic, _version, n, sh, frac, flags, _ = struct.unpack_from("<IIIBBBB", raw, 0)
+    k = {0: 0, 1: 3, 2: 8, 3: 15}[sh]
+    off = 16
+    cols = []
+    for size in (n * 9, n, n * 3, n * 3):
+        cols.append(raw[off:off + size])
+        off += size
+    off += n * 3  # v2 rotations → v3+ smallest-three
+    cols.append(_pack_smallest_three(s.rotations))
+    if k:
+        cols.append(raw[off:off + n * k * 3])
+    streams = [(c, zstandard.ZstdCompressor().compress(c)) for c in cols]
+    header = struct.pack("<IIIBBBBI12x", magic, 4, n, sh, frac, flags, len(streams), 32)
+    table = b"".join(struct.pack("<QQ", len(c), len(u)) for u, c in streams)
+    v4.write_bytes(header + table + b"".join(c for _, c in streams))
+
+
+def test_spz_v4_reads_like_v3(tmp_path):
+    src = blob()
+    write_spz(src, tmp_path / "a.spz")
+    _spz_v4(src, tmp_path / "a.spz", tmp_path / "b.spz")
+    a, b = read_spz(tmp_path / "a.spz"), read_spz(tmp_path / "b.spz")
+    np.testing.assert_array_equal(a.means, b.means)
+    np.testing.assert_array_equal(a.sh_rest, b.sh_rest)
+    np.testing.assert_allclose(a.alphas(), b.alphas())
+    # same orientation up to sign, within quantisation
+    dots = np.abs((b.rotations * src.rotations).sum(1))
+    assert dots.min() > 0.999
+    blob_path = tmp_path / ("cd" * 32)  # extensionless, as in the worker's asset cache
+    shutil.copy(tmp_path / "b.spz", blob_path)
+    assert detect(blob_path) == "splat"
+    from renda.ir.loaders.splat import kind_of
+    from renda.render import with_extensions
+
+    assert kind_of(blob_path) == "spz"
+    assert with_extensions({"s": blob_path}, tmp_path / "named")["s"].suffix == ".spz"

@@ -122,3 +122,25 @@ def test_cloud_render_max_minutes_refuses(monkeypatch, tmp_path):
     _mock_client(monkeypatch, api, key="rnd_live_xxxxxxxxxxxxxxxxxxxxxxxx")
     code, data = run("render", files["glb"], "--cloud", "--max-minutes", "5")
     assert code == 1 and data["reason"] == "over_budget"
+
+
+def test_cloud_render_failed_job_is_an_error(monkeypatch, tmp_path):
+    import httpx
+
+    files = write_mesh_files(tmp_path)
+    job = {"id": "job_x", "status": "failed", "error": "UnknownFormat: blob", "outputs": []}
+
+    def api(req):
+        p = req.url.path
+        if p == "/api/v1/uploads":
+            return httpx.Response(200, json={"assetUri": "asset://" + "a" * 64, "exists": True})
+        if p == "/api/v1/jobs" and req.method == "POST":
+            return httpx.Response(200, json={**job, "status": "queued"})
+        if p == "/api/v1/jobs/job_x":
+            return httpx.Response(200, json=job)
+        raise AssertionError(f"unexpected {req.method} {p}")
+
+    _mock_client(monkeypatch, api, key="rnd_live_xxxxxxxxxxxxxxxxxxxxxxxx")
+    code, data = run("render", files["glb"], "--cloud")
+    assert code == 1
+    assert data["status"] == "error" and data["reason"] == "job_failed" and "UnknownFormat" in data["message"]

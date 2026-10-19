@@ -54,20 +54,54 @@ def frame_bounds(
     elevation_deg: float = 20,
     azimuth_deg: float = 35,
     padding: float = 0.1,
+    orbit: bool = False,
 ) -> ResolvedCamera:
-    """Place a camera so the bounding sphere of [lo, hi] fills the frame."""
+    """Place a camera so the box [lo, hi] fills the frame from the given view direction.
+
+    Fits the 8 box corners in perspective (not the bounding sphere, which leaves long or flat objects
+    tiny) and re-centres on their projection. With orbit=True (turntables) the distance is the worst
+    case over a full revolution about `up` and the target stays at the box centre, so nothing clips."""
     center = (lo + hi) / 2
     radius = max(float(np.linalg.norm(hi - lo)) / 2, 1e-4)
-    fov_y = math.radians(fov_y_deg)
-    fov_x = 2 * math.atan(math.tan(fov_y / 2) * aspect)
-    half = min(fov_y, fov_x) / 2
-    dist = radius * (1 + padding) / math.sin(half)
+    corners = np.array([[x, y, z] for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])], float) - center
+    tan_y = math.tan(math.radians(fov_y_deg) / 2) / (1 + padding)
+    tan_x = tan_y * aspect
     side, front = _basis(up)
-    az, el = math.radians(azimuth_deg), math.radians(elevation_deg)
-    horiz = math.cos(az) * front + math.sin(az) * side
-    direction = math.cos(el) * horiz + math.sin(el) * up
-    pos = center + direction * dist
-    return ResolvedCamera(pos, center, up.astype(float), fov_y_deg, near=max(dist - radius * 2, dist * 0.001), far=dist + radius * 4)
+    el = math.radians(elevation_deg)
+
+    def view(az_deg: float) -> np.ndarray:
+        az = math.radians(az_deg)
+        horiz = math.cos(az) * front + math.sin(az) * side
+        return math.cos(el) * horiz + math.sin(el) * up
+
+    def fit(direction: np.ndarray, offset=(0.0, 0.0)) -> tuple[float, np.ndarray, np.ndarray]:
+        fwd = -direction
+        right = np.cross(fwd, up)
+        right = right / max(np.linalg.norm(right), 1e-9) if np.linalg.norm(right) > 1e-6 else side
+        cam_up = np.cross(right, fwd)
+        x = corners @ right - offset[0]
+        y = corners @ cam_up - offset[1]
+        z = corners @ direction  # towards the camera
+        dist = float(np.max(np.maximum(z + np.abs(x) / tan_x, z + np.abs(y) / tan_y)))
+        return dist, right, cam_up
+
+    direction = view(azimuth_deg)
+    if orbit:
+        dist = max(fit(view(azimuth_deg + a))[0] for a in range(0, 360, 15))
+        target = center
+    else:
+        # re-centre on the perspective projection of the corners and refit; converges in a few steps
+        offset = (0.0, 0.0)
+        for _ in range(4):
+            dist, right, cam_up = fit(direction, offset)
+            target = center + right * offset[0] + cam_up * offset[1]
+            rel = corners - (target - center)
+            depth = dist - rel @ direction
+            px, py = (rel @ right) / depth, (rel @ cam_up) / depth
+            offset = (offset[0] + (px.max() + px.min()) / 2 * dist, offset[1] + (py.max() + py.min()) / 2 * dist)
+    dist = max(dist, radius * 1e-3)
+    pos = target + direction * dist
+    return ResolvedCamera(pos, target, up.astype(float), fov_y_deg, near=max(dist - radius * 2, dist * 0.001), far=dist + radius * 4)
 
 
 def resolve_cameras(pkg: RendaPackage, stage: Stage, frames: list[int], warnings: list[str] | None = None,
@@ -100,7 +134,8 @@ def resolve_cameras(pkg: RendaPackage, stage: Stage, frames: list[int], warnings
             base = _from_scene_camera(sc, stage)
     else:
         assert isinstance(cam, AutoCamera)
-        base = frame_bounds(lo, hi, up, cam.fovDeg, aspect, cam.elevationDeg, cam.azimuthDeg, cam.padding)
+        tt_auto = bool(pkg.animation and pkg.animation.turntable and len(frames) > 1)
+        base = frame_bounds(lo, hi, up, cam.fovDeg, aspect, cam.elevationDeg, cam.azimuthDeg, cam.padding, orbit=tt_auto)
 
     tt = pkg.animation.turntable if pkg.animation else None
     if not tt or len(frames) <= 1:

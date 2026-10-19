@@ -38,6 +38,7 @@ def test_package_validates(path):
 
 
 def test_testdata_is_small():
-    total = sum(p.stat().st_size for p in TESTDATA.rglob("*") if p.is_file() and "out" not in p.parts
-                and "node_modules" not in p.parts)
+    # committed files only: rendered outputs and fetched third-party assets are gitignored
+    skip = {"out", "node_modules", "assets", "probe"}
+    total = sum(p.stat().st_size for p in TESTDATA.rglob("*") if p.is_file() and not skip & set(p.parts))
     assert total < 20 * 1024 * 1024

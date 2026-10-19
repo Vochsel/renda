@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "name": "The Noble Craftsman \u2014 three.js",
+  "scene": {
+    "root": "assets/craftsman.glb"
+  },
+  "camera": {
+    "mode": "lookat",
+    "position": [
+      103.6301,
+      104.1141,
+      133.8519
+    ],
+    "target": [
+      3.0327,
+      20.9006,
+      13.9646
+    ],
+    "fovDeg": 30
+  },
+  "environment": {
+    "hdri": "studio",
+    "intensity": 1.0,
+    "background": "#f0ebe3"
+  },
+  "render": {
+    "engine": "threejs",
+    "resolution": [
+      1000,
+      750
+    ],
+    "quality": "final"
+  },
+  "output": {
+    "format": "png"
+  }
+}

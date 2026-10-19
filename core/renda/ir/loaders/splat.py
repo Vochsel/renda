@@ -7,6 +7,8 @@
   from 3DGS .ply without changing axes, so also Y down. No view-dependent colour.
 - Niantic ``.spz`` (v2/v3): gzip, 16-byte header then column blocks (24-bit fixed-point
   positions, alpha, colour, log-scale, rotation, SH). Stored in RUB (three.js-style, Y up).
+  v4 (current Niantic/PlayCanvas tools): uncompressed 32-byte NGSP header + table of contents,
+  then the same columns as separately zstd-compressed streams.
 - ``.ksplat`` (mkkellogg's GaussianSplats3D) is not decoded here; the three.js engine reads it
   natively through Spark, everything else asks for a conversion.
 """
@@ -53,6 +55,9 @@ def is_splat_ply(path: str | Path) -> bool:
 
 
 def is_spz(path: str | Path) -> bool:
+    with open(path, "rb") as f:
+        if f.read(4) == struct.pack("<I", SPZ_MAGIC):  # v4: header isn't compressed
+            return True
     try:
         with gzip.open(path, "rb") as f:
             head = f.read(8)
@@ -184,13 +189,18 @@ def write_splat(s: Splats, path: Path) -> Path:
 
 def read_spz(path: str | Path) -> Splats:
     path = Path(path)
-    raw = gzip.decompress(Path(path).read_bytes())
-    magic, version, n, sh_degree, frac_bits, flags, _ = struct.unpack_from("<IIIBBBB", raw, 0)
-    if magic != SPZ_MAGIC:
-        raise SplatFormatError(f"{path.name}: not an .spz file")
-    if version not in (2, 3):
-        raise SplatFormatError(f"{path.name}: .spz version {version} isn't supported (2 or 3)")
-    off = 16
+    data = path.read_bytes()
+    if struct.unpack_from("<I", data, 0)[0] == SPZ_MAGIC:
+        raw, version, n, sh_degree, frac_bits, flags = _spz_v4_columns(path, data)
+        off = 0
+    else:
+        raw = gzip.decompress(data)
+        magic, version, n, sh_degree, frac_bits, flags, _ = struct.unpack_from("<IIIBBBB", raw, 0)
+        if magic != SPZ_MAGIC:
+            raise SplatFormatError(f"{path.name}: not an .spz file")
+        if version not in (2, 3):
+            raise SplatFormatError(f"{path.name}: .spz version {version} isn't supported (2–4)")
+        off = 16
     k = {0: 0, 1: 3, 2: 8, 3: 15}[sh_degree]
 
     def take(nbytes: int) -> np.ndarray:
@@ -217,6 +227,27 @@ def read_spz(path: str | Path) -> Splats:
         rest = (take(n * k * 3).reshape(n, k, 3).astype(np.float32) - 128.0) / 128.0
     sh_dc = (color / 255.0 - 0.5) / SPZ_COLOR_SCALE
     return Splats(path.stem, means, scales, rot, logit(alpha), sh_dc, rest, antialiased=bool(flags & 1))
+
+
+def _spz_v4_columns(path: Path, data: bytes) -> tuple[bytes, int, int, int, int, int]:
+    """Decode the v4 container into the v3 column layout (the per-attribute bytes are identical)."""
+    import zstandard
+
+    magic, version, n, sh_degree, frac_bits, flags, num_streams, toc = struct.unpack_from("<IIIBBBBI", data, 0)
+    if version != 4:
+        raise SplatFormatError(f"{path.name}: .spz version {version} isn't supported (2–4)")
+    if toc < 32 or toc + num_streams * 16 > len(data):
+        raise SplatFormatError(f"{path.name}: corrupt .spz table of contents")
+    sizes = [struct.unpack_from("<QQ", data, toc + i * 16) for i in range(num_streams)]
+    off = toc + num_streams * 16
+    dctx = zstandard.ZstdDecompressor()
+    columns = []
+    for compressed, uncompressed in sizes:
+        if off + compressed > len(data):
+            raise SplatFormatError(f"{path.name}: .spz stream runs past end of file")
+        columns.append(dctx.decompress(data[off:off + compressed], max_output_size=uncompressed))
+        off += compressed
+    return b"".join(columns), version, n, sh_degree, frac_bits, flags
 
 
 def _spz_unpack_smallest_three(b: np.ndarray) -> np.ndarray:
@@ -283,7 +314,7 @@ def kind_of(path: str | Path) -> str:
         head = f.read(4)
     if head.startswith(b"ply"):
         return "ply"
-    if head.startswith(b"\x1f\x8b") and is_spz(path):
+    if head == struct.pack("<I", SPZ_MAGIC) or (head.startswith(b"\x1f\x8b") and is_spz(path)):  # v4 / v2–3
         return "spz"
     return "splat"
 

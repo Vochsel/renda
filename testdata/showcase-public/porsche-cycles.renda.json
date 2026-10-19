@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "name": "Porsche 911 Turbo \u2014 Cycles",
+  "scene": {
+    "root": "assets/porsche.glb"
+  },
+  "camera": {
+    "mode": "lookat",
+    "position": [
+      4.1989,
+      1.9065,
+      7.3003
+    ],
+    "target": [
+      -0.4511,
+      0.477,
+      0.6596
+    ],
+    "fovDeg": 28
+  },
+  "environment": {
+    "hdri": "studio",
+    "intensity": 1.1,
+    "rotationDeg": 60,
+    "background": "#ebe8e3"
+  },
+  "render": {
+    "engine": "blender-cycles",
+    "resolution": [
+      1600,
+      1000
+    ],
+    "quality": "final"
+  },
+  "output": {
+    "format": "png"
+  }
+}

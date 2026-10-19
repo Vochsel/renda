@@ -1,0 +1,7 @@
+{ "version": 1, "name": "Monstera (mesh) in a captured courtyard (splats) — Cycles",
+  "assets": { "courtyard": { "uri": "assets/apartment.spz" }, "plant": { "uri": "assets/monstera.glb" } },
+  "scene": { "root": "courtyard", "upAxis": "-Y",
+             "include": [{ "asset": "plant", "transform": { "translate": [-1.45, 0.33, 3.05], "rotateDeg": [0, 30, 0], "scale": 0.9 } }] },
+  "camera": { "mode": "lookat", "position": [-1.96, 1.56, 1.38], "target": [-2.2, 1.26, 2.88], "fovDeg": 85 },
+  "environment": { "hdri": "sunset", "intensity": 1.0, "background": "#1b1c20" },
+  "render": { "engine": "blender-cycles", "resolution": [1000, 750], "quality": "final" }, "output": { "format": "png" } }

@@ -116,6 +116,8 @@ def detect(path: str | Path) -> str:
         zipped = _zip_format(p)
         if zipped:
             return zipped
+    if head.startswith(b"NGSP"):  # .spz v4: uncompressed header, zstd streams
+        return "splat"
     if head.startswith(b"\x1f\x8b"):
         from .ir.loaders.splat import is_spz
 

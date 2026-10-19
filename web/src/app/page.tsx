@@ -10,7 +10,13 @@ const FORMATS = [".blend", ".usd(z)", ".glb", ".fbx", ".obj", ".stl", ".ply", ".
 const ENGINES = ["Cycles", "Eevee", "Workbench", "Mitsuba 3", "three.js", "gsplat", "HyperFrames"];
 
 // Under the hero, in a 2-column grid with one shared aspect ratio.
-const GRID = ["splat-mixed-cycles", "mitsuba-blend", "splat-gsplat", "threejs-eevee", "usdz-turntable", "splat-turntable"];
+const HERO = "porsche-cycles";
+const GRID = [
+  "courtyard-mixed-cycles", "lizard-gsplat",
+  "camera-mitsuba", "hall-turntable",
+  "samurai-eevee", "raccoon-gsplat",
+  "craftsman-threejs", "venus-turntable",
+];
 
 const GPU_SHORT: Record<ShowcaseItem["hardware"], string> = { cpu: "CPU", "gpu-l4": "L4 GPU", "gpu-l40s": "L40S GPU" };
 
@@ -48,6 +54,12 @@ function Render({ item, priority, aspect, className }: { item: ShowcaseItem; pri
           {item.engine}
         </p>
         <Stats item={item} />
+        <p className="text-muted-foreground mt-0.5 truncate text-[11px]">
+          <a href={item.credit.url} className="hover:text-foreground underline-offset-2 hover:underline">
+            {item.credit.title}
+          </a>{" "}
+          · {item.credit.author} · {item.credit.license}
+        </p>
       </figcaption>
     </figure>
   );
@@ -55,7 +67,7 @@ function Render({ item, priority, aspect, className }: { item: ShowcaseItem; pri
 
 export default function Home() {
   const byId = Object.fromEntries(SHOWCASE.map((s) => [s.id, s]));
-  const hero = byId["hero-cycles"];
+  const hero = byId[HERO];
   const grid = GRID.map((id) => byId[id]);
   const shown = [hero, ...grid];
   const total = shown.reduce((n, s) => n + s.costUsd, 0);
@@ -100,9 +112,10 @@ export default function Home() {
             ))}
           </div>
           <p className="text-muted-foreground mt-10 text-xs">
-            Real jobs on the production pipeline, unretouched. All {shown.length} cost ${total.toFixed(2)} together. Packages in{" "}
-            <a href="https://github.com/vochsel/renda/tree/main/testdata" className="underline underline-offset-2">
-              testdata
+            Real jobs on the production pipeline, unretouched. All {shown.length} cost ${total.toFixed(2)} together. Models from
+            Sketchfab, splats from SuperSplat and Niantic, under CC0 / CC BY 4.0 / MIT — see{" "}
+            <a href="https://github.com/vochsel/renda/blob/main/testdata/showcase-public/CREDITS.md" className="underline underline-offset-2">
+              credits
             </a>
             .
           </p>

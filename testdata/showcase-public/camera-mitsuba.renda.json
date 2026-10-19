@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "name": "Canon AT-1 \u2014 Mitsuba",
+  "scene": {
+    "root": "assets/camera.glb"
+  },
+  "camera": {
+    "mode": "lookat",
+    "position": [
+      0.1743,
+      0.1552,
+      0.2839
+    ],
+    "target": [
+      -0.0023,
+      0.0308,
+      0.0317
+    ],
+    "fovDeg": 28
+  },
+  "environment": {
+    "hdri": "studio",
+    "intensity": 1.0,
+    "background": "#e8eaed"
+  },
+  "render": {
+    "engine": "mitsuba",
+    "resolution": [
+      1000,
+      750
+    ],
+    "quality": "final"
+  },
+  "output": {
+    "format": "png"
+  }
+}
