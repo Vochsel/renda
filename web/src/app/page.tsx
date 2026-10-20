@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { SiteHeader } from "@/components/site-header";
 import { PageToc, type TocItem } from "@/components/page-toc";
+import { SplatHero } from "@/components/splat-hero";
 import { CopyButton } from "@/components/copy-button";
 import { InstallTabs } from "@/components/install-tabs";
 import { installSnippets } from "@/lib/install-snippets";
@@ -126,6 +127,10 @@ export default function Home() {
             </p>
           </div>
         </section>
+
+        <div className="-mt-4 mb-14">
+          <SplatHero />
+        </div>
 
         <section id="renders" aria-label="Example renders" className="scroll-mt-20 pb-6">
           <div id="mesh-image" className="scroll-mt-20">
