@@ -551,7 +551,8 @@ def frame_auto(scene, cam_spec: dict, aspect: float, orbit: bool = False) -> tup
     radius = max((hi - lo).length / 2, 1e-4)
     fov_deg = cam_spec.get("fovDeg", 35)
     padding = cam_spec.get("padding", 0.1)
-    tan_y = math.tan(math.radians(fov_deg) / 2) / (1 + padding)
+    # fitFovDeg: core narrows the fit when post lens distortion / CA push content outwards (resolve_cameras)
+    tan_y = math.tan(math.radians(cam_spec.get("fitFovDeg", fov_deg)) / 2) / (1 + padding)
     tan_x = tan_y * aspect
     corners = [Vector((x, y, z)) - center for x in (lo.x, hi.x) for y in (lo.y, hi.y) for z in (lo.z, hi.z)]
     up, front, side = Vector((0, 0, 1)), Vector((0, -1, 0)), Vector((1, 0, 0))
