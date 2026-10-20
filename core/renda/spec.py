@@ -42,8 +42,8 @@ EXTENSION_FORMATS: dict[str, str] = {
     ".rir": "rir",
 }
 
-EngineName = Literal["auto", "blender-cycles", "blender-eevee", "blender-workbench", "mitsuba", "threejs", "gsplat"]
-ENGINES: tuple[str, ...] = ("blender-cycles", "blender-eevee", "blender-workbench", "mitsuba", "threejs", "gsplat")
+EngineName = Literal["auto", "blender-cycles", "blender-eevee", "blender-workbench", "mitsuba", "threejs", "gsplat", "filament", "pbrt"]
+ENGINES: tuple[str, ...] = ("blender-cycles", "blender-eevee", "blender-workbench", "mitsuba", "threejs", "gsplat", "filament", "pbrt")
 
 Vec3 = tuple[float, float, float]
 _HEX = re.compile(r"^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")

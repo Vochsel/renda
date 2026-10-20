@@ -56,6 +56,8 @@ export const Engine = z.enum([
   "mitsuba",
   "threejs",
   "gsplat",
+  "filament",
+  "pbrt",
 ]);
 export type Engine = z.infer<typeof Engine>;
 

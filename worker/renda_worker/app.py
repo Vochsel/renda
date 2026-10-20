@@ -132,6 +132,33 @@ threejs_image = _with_core(threejs_image, "threejs,cad").env({"RENDA_CACHE_DIR":
     "python -c 'from renda.engines.threejs import three_dir, spark_dir; three_dir(); spark_dir()'",
 ).env({"RENDA_ASSET_ROOT": ASSET_ROOT}).add_local_python_source("renda_worker")
 
+# Google Filament (real-time PBR) through filly: offscreen EGL on Mesa's llvmpipe, so a plain CPU container.
+filament_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .apt_install("ffmpeg", "libegl1", "libegl-mesa0", "libgl1-mesa-dri", "libglx-mesa0", "libgl1")
+    .pip_install(*_WORKER_DEPS)
+    .env({"RENDA_ASSET_ROOT": ASSET_ROOT})
+)
+filament_image = _with_core(filament_image, "filament,usd,cad").add_local_python_source("renda_worker")
+
+# pbrt-v4, built from a pinned commit (CPU build; the GPU build needs the OptiX SDK, which isn't redistributable).
+PBRT_COMMIT = "b4ce9687e6c695f5582997c61b0c66cf064bdb4a"
+pbrt_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .apt_install("git", "cmake", "build-essential", "zlib1g-dev", "libpng-dev", "libgl1-mesa-dev", "libxrandr-dev",
+                 "libxinerama-dev", "libxcursor-dev", "libxi-dev", "libwayland-dev", "libxkbcommon-dev", "pkg-config", "ffmpeg")
+    .run_commands(
+        "git clone --recursive https://github.com/mmp/pbrt-v4.git /src/pbrt-v4",
+        f"cd /src/pbrt-v4 && git checkout {PBRT_COMMIT} && git submodule update --init --recursive",
+        "mkdir -p /src/pbrt-v4/build && cd /src/pbrt-v4/build"
+        " && cmake .. -DCMAKE_BUILD_TYPE=Release -DPBRT_BUILD_NATIVE_EXECUTABLE=OFF"
+        " && make -j$(nproc) pbrt_exe imgtool && cp pbrt imgtool /usr/local/bin/ && rm -rf /src/pbrt-v4",
+    )
+    .pip_install(*_WORKER_DEPS, "OpenEXR>=3.3", "pyoidn>=2.4")
+    .env({"RENDA_ASSET_ROOT": ASSET_ROOT, "RENDA_PBRT_VERSION": f"pbrt-v4@{PBRT_COMMIT[:7]}"})
+)
+pbrt_image = _with_core(pbrt_image, "usd,cad").add_local_python_source("renda_worker")
+
 # HyperFrames HTML compositions → video. `browser ensure` bakes the pinned Chrome into the image.
 hyperframes_image = (
     _node(modal.Image.debian_slim(python_version="3.11"))
@@ -344,6 +371,18 @@ def render_chunk_threejs(task):
     return _chunk(task, time.monotonic())
 
 
+@app.function(image=filament_image, secrets=SECRETS, volumes={ASSET_ROOT: assets_volume}, retries=_retries(),
+              **_shape_kwargs(hw.FILAMENT))
+def render_chunk_filament(task):
+    return _chunk(task, time.monotonic())
+
+
+@app.function(image=pbrt_image, secrets=SECRETS, volumes={ASSET_ROOT: assets_volume}, retries=_retries(),
+              **_shape_kwargs(hw.PBRT))
+def render_chunk_pbrt(task):
+    return _chunk(task, time.monotonic())
+
+
 def _train(task, started: float):
     from renda_worker.pipeline import run_train
 
@@ -384,6 +423,8 @@ RUNNER_FUNCTIONS = {
     "l4": render_chunk_l4,
     "l40s": render_chunk_l40s,
     "threejs": render_chunk_threejs,
+    "filament": render_chunk_filament,
+    "pbrt": render_chunk_pbrt,
     "splat-l4": render_chunk_splat_l4,
     "splat-l40s": render_chunk_splat_l40s,
 }

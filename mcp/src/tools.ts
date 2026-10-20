@@ -85,7 +85,7 @@ export function validatePackage(input: unknown): { valid: true; package: RendaPa
 const PackageArg = z.record(z.string(), z.any()).describe("A Renda package object (see resource renda://docs/package).");
 
 const StarterOptions = {
-  engine: z.enum(["auto", "blender-cycles", "blender-eevee", "blender-workbench", "mitsuba", "threejs", "gsplat"]).optional(),
+  engine: z.enum(["auto", "blender-cycles", "blender-eevee", "blender-workbench", "mitsuba", "threejs", "gsplat", "filament", "pbrt"]).optional(),
   resolution: z.tuple([z.number().int(), z.number().int()]).optional().describe("[width, height]"),
   quality: z.enum(["draft", "standard", "final"]).optional().describe("Start with draft; switch to final once it looks right."),
   format: z.enum(["png", "jpg", "webp", "exr", "mp4", "webm", "gif", "mov"]).optional(),
@@ -463,7 +463,7 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
 
   server.registerTool("renda_render", {
     title: "Render a 3D scene",
-    description: "Render a 3D file or Renda package in the cloud (Blender Cycles/Eevee, Mitsuba, three.js, gsplat). Meshes and Gaussian splats (.ply/.splat/.spz), alone or mixed via scene.include. Accepts a package object" + (local ? ", a .renda.json path," : "") + " or a bare scene file. "
+    description: "Render a 3D file or Renda package in the cloud (Blender Cycles/Eevee, Mitsuba, three.js, gsplat, Google Filament, pbrt-v4). Meshes and Gaussian splats (.ply/.splat/.spz), alone or mixed via scene.include. Accepts a package object" + (local ? ", a .renda.json path," : "") + " or a bare scene file. "
       + (local ? "Local file paths are uploaded automatically. " : "Use https:// or asset:// URIs. ")
       + "By default waits for completion and returns output URLs plus a preview image. Tip: render quality \"draft\" first (cheap), check it, then \"final\".",
     inputSchema: {

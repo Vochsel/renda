@@ -53,20 +53,20 @@ rewritten to `asset://<sha256>` automatically; `https://` URLs are fetched by th
 
 ## Engine matrix
 
-| | blender-cycles | blender-eevee | blender-workbench | mitsuba | threejs | gsplat |
-|---|---|---|---|---|---|---|
-| Look | path-traced, photoreal | real-time PBR | clay/solid | spectral path tracer | WebGL raster (matches web viewers) | Gaussian splat rasteriser |
-| Native formats | blend usd gltf fbx obj stl ply abc | same | same | via IR (all) | threejs, gltf, splats via Spark (others via IR) | splats only (.ply .splat .spz) |
-| Gaussian splats | composited by depth | composited | composited | composited | native, mixed with meshes | native, meshes ignored |
-| Hardware | GPU (L4) | GPU | CPU | CPU (LLVM) / GPU | CPU/GPU, cheapest | GPU (L4), cheapest for splats |
-| Transparent bg | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Passes depth/normal/albedo | ✓ | partial | ✗ | depth, normal, albedo | depth, normal | depth, alpha |
-| Blender materials (node trees) | exact | most | flat colour | principled subset | principled subset | n/a |
-| Volumes, hair, displacement | ✓ | partial | ✗ | ✗ | ✗ | ✗ |
-| Good for | final stills, product shots | turntables, previews, stylised | geometry checks | physically exact stills | three.js scenes, fast thumbnails, splat + mesh previews | splat captures: stills, turntables |
+| | blender-cycles | blender-eevee | blender-workbench | mitsuba | threejs | gsplat | filament | pbrt |
+|---|---|---|---|---|---|---|---|---|
+| Look | path-traced, photoreal | real-time PBR | clay/solid | spectral path tracer | WebGL raster (matches web viewers) | Gaussian splat rasteriser | Google Filament real-time PBR (Android/web look) | pbrt-v4 spectral reference path tracer |
+| Native formats | blend usd gltf fbx obj stl ply abc | same | same | via IR (all) | threejs, gltf, splats via Spark (others via IR) | splats only (.ply .splat .spz) | via IR → glTF | via IR → pbrt scene |
+| Gaussian splats | composited by depth | composited | composited | composited | native, mixed with meshes | native, meshes ignored | ✗ (meshes only) | ✗ (meshes only) |
+| Hardware | GPU (L4) | GPU | CPU | CPU (LLVM) / GPU | CPU/GPU, cheapest | GPU (L4), cheapest for splats | CPU (EGL/llvmpipe), very cheap | CPU (8 cores) |
+| Transparent bg | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Passes depth/normal/albedo | ✓ | partial | ✗ | depth, normal, albedo | depth, normal | depth, alpha | alpha | alpha |
+| Blender materials (node trees) | exact | most | flat colour | principled subset | principled subset | n/a | glTF PBR | principled → conductor/dielectric/coated-diffuse |
+| Volumes, hair, displacement | ✓ | partial | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| Good for | final stills, product shots | turntables, previews, stylised | geometry checks | physically exact stills | three.js scenes, fast thumbnails, splat + mesh previews | splat captures: stills, turntables | real-time look, cheap previews of glTF/USD/CAD | ground-truth reference stills |
 
 `auto` picks Blender for `.blend` and the cheapest engine that fits the quality for
-everything else. Anything an engine can't honour shows up in job `warnings`, never as a
+everything else (never filament or pbrt — ask for those explicitly). Anything an engine can't honour shows up in job `warnings`, never as a
 silent drop. Read them.
 
 ## Lens and camera effects
@@ -76,18 +76,18 @@ Depth of field (`camera.lens.fStop`), focal length (`lens.focalLengthMm`), antia
 (exposure, tonemap, grade, vignette, chromatic aberration, lens distortion, bloom, grain,
 sharpen). Same controls on every engine:
 
-| | cycles | eevee | workbench | mitsuba | threejs | gsplat |
-|---|---|---|---|---|---|---|
-| Depth of field | native | native | native | native (thin lens) | emulated from depth | emulated from depth |
-| Bokeh blades / anamorphic | native | native | native | ✗ (round) | emulated | emulated |
-| AA filter | native | native (width) | native (width) | native | approx (downscale filter) | ✗ (built-in AA) |
-| Motion blur | native | native | emulated (subframes) | emulated (same cost) | emulated (subframes) | emulated (subframes) |
-| Exposure | native | native | native | native | native | on display colours |
-| Tonemap | agx filmic standard neutral (aces→filmic) | same | same | all (filmic approx) | all (filmic approx) | ✗ (splats are display-referred) |
-| Post (grade, vignette, CA, distortion, bloom, grain, sharpen) | shared | shared | shared | shared | shared | shared |
+| | cycles | eevee | workbench | mitsuba | threejs | gsplat | filament | pbrt |
+|---|---|---|---|---|---|---|---|---|
+| Depth of field | native | native | native | native (thin lens) | emulated from depth | emulated from depth | native | native (thin lens) |
+| Bokeh blades / anamorphic | native | native | native | ✗ (round) | emulated | emulated | ✗ (round) | ✗ (round) |
+| AA filter | native | native (width) | native (width) | native | approx (downscale filter) | ✗ (built-in AA) | approx (MSAA) | native |
+| Motion blur | native | native | emulated (subframes) | emulated (same cost) | emulated (subframes) | emulated (subframes) | emulated (subframes) | emulated (subframes) |
+| Exposure | native | native | native | native | native | on display colours | native | native |
+| Tonemap | agx filmic standard neutral (aces→filmic) | same | same | all (filmic approx) | all (filmic approx) | ✗ (splats are display-referred) | all | all (filmic approx) |
+| Post (grade, vignette, CA, distortion, bloom, grain, sharpen) | shared | shared | shared | shared | shared | shared | shared | shared |
 
 Emulated motion blur multiplies render time by `subframes` (default 8) on workbench,
-threejs and gsplat; check `renda estimate`. Shallow focus wants a long lens and a low f-stop:
+threejs, gsplat, filament and pbrt; check `renda estimate`. Shallow focus wants a long lens and a low f-stop:
 `{"focalLengthMm": 85, "fStop": 1.8}`. Scene units are treated as metres for depth of field,
 so set `scene.unitScale` for mm/cm files.
 

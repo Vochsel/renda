@@ -35,13 +35,13 @@ const LAYERED = `// shot.renda.json — layers underneath (later wins), then thi
 
 /** Mirrors core/renda/effects.py MATRIX. */
 const EFFECTS: [string, ...string[]][] = [
-  ["Depth of field", "native", "native", "native", "native (thin lens)", "emulated (depth)", "emulated (depth)"],
-  ["Bokeh blades / anamorphic", "native", "native", "native", "round only", "emulated", "emulated"],
-  ["Antialias filter", "native", "native", "native", "native", "approx.", "built-in"],
-  ["Motion blur", "native", "native", "emulated", "emulated (same cost)", "emulated", "emulated"],
-  ["Exposure", "native", "native", "native", "native", "native", "display colours"],
-  ["Tonemap", "aces → filmic", "aces → filmic", "aces → filmic", "filmic approx.", "filmic approx.", "n/a"],
-  ["Post (grade, vignette, CA, distortion, bloom, grain, sharpen)", "shared", "shared", "shared", "shared", "shared", "shared"],
+  ["Depth of field", "native", "native", "native", "native (thin lens)", "emulated (depth)", "emulated (depth)", "native", "native (thin lens)"],
+  ["Bokeh blades / anamorphic", "native", "native", "native", "round only", "emulated", "emulated", "round only", "round only"],
+  ["Antialias filter", "native", "native", "native", "native", "approx.", "built-in", "approx. (MSAA)", "native"],
+  ["Motion blur", "native", "native", "emulated", "emulated (same cost)", "emulated", "emulated", "emulated", "emulated"],
+  ["Exposure", "native", "native", "native", "native", "native", "display colours", "native", "native"],
+  ["Tonemap", "aces → filmic", "aces → filmic", "aces → filmic", "filmic approx.", "filmic approx.", "n/a", "all", "filmic approx."],
+  ["Post (grade, vignette, CA, distortion, bloom, grain, sharpen)", "shared", "shared", "shared", "shared", "shared", "shared", "shared", "shared"],
 ];
 
 type JsonSchema = { type?: string | string[]; description?: string; properties?: Record<string, JsonSchema>; enum?: unknown[]; anyOf?: JsonSchema[]; oneOf?: JsonSchema[]; default?: unknown; $ref?: string; items?: JsonSchema; required?: string[] };
@@ -186,7 +186,7 @@ mat.lightmapTexture = texture; mat.lightmapTexture.coordinatesIndex = 1; mat.lig
           <TableHeader>
             <TableRow>
               <TableHead />
-              {["cycles", "eevee", "workbench", "mitsuba", "threejs", "gsplat"].map((e) => <TableHead key={e} className="font-mono text-xs">{e}</TableHead>)}
+              {["cycles", "eevee", "workbench", "mitsuba", "threejs", "gsplat", "filament", "pbrt"].map((e) => <TableHead key={e} className="font-mono text-xs">{e}</TableHead>)}
             </TableRow>
           </TableHeader>
           <TableBody>

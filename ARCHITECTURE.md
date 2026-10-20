@@ -172,7 +172,7 @@ without Hydra's weight. In `core/renda/ir/`:
   format use it (Blender + `.blend`), else convert via IR (Mitsuba + `.blend` → IR →
   Mitsuba dict with PLY meshes).
 
-Engines: `blender-cycles`, `blender-eevee`, `blender-workbench` (natively load blend/usd/gltf/fbx/obj/stl/ply/abc via Blender importers, plus `.rir`), `mitsuba` (via IR), `threejs` (headless Chromium + three.js WebGL rasteriser — the cheapest preview engine, renders three.js JSON natively and anything else via IR→glTF; splats via Spark in the same scene, so meshes and splats occlude each other properly), `gsplat` (Gaussian splats only: nerfstudio gsplat on CUDA, a vectorised numpy reference rasteriser elsewhere). New engines (pbrt-v4, LuxCore, Arnold…) are one adapter file each.
+Engines: `blender-cycles`, `blender-eevee`, `blender-workbench` (natively load blend/usd/gltf/fbx/obj/stl/ply/abc via Blender importers, plus `.rir`), `mitsuba` (via IR), `threejs` (headless Chromium + three.js WebGL rasteriser — the cheapest preview engine, renders three.js JSON natively and anything else via IR→glTF; splats via Spark in the same scene, so meshes and splats occlude each other properly), `gsplat` (Gaussian splats only: nerfstudio gsplat on CUDA, a vectorised numpy reference rasteriser elsewhere). `filament` (Google Filament, real-time PBR, headless over EGL via the `filly` bindings; CPU containers with Mesa llvmpipe), `pbrt` (pbrt-v4 spectral path tracer: IR → pbrt scene with PLY meshes and an equal-area environment map; CPU). New engines are one adapter file each — see [docs/renderers.md](docs/renderers.md) for what else was evaluated and why it isn't in yet.
 
 ### Lens, motion blur and post effects across engines
 

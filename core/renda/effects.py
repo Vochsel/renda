@@ -42,6 +42,14 @@ MATRIX: dict[str, dict[str, object]] = {
         "dof": EMULATED, "blades": EMULATED, "anamorphic": EMULATED, "filter": APPROX, "motionBlur": EMULATED,
         "exposure": NATIVE, "tonemap": {"agx": NATIVE, "aces": NATIVE, "neutral": NATIVE, "standard": NATIVE, "filmic": APPROX},
     },
+    "filament": {
+        "dof": NATIVE, "blades": NO, "anamorphic": NO, "filter": APPROX, "motionBlur": EMULATED,
+        "exposure": NATIVE, "tonemap": {"agx": NATIVE, "aces": NATIVE, "neutral": NATIVE, "standard": NATIVE, "filmic": NATIVE},
+    },
+    "pbrt": {
+        "dof": NATIVE, "blades": NO, "anamorphic": NO, "filter": NATIVE, "motionBlur": EMULATED,
+        "exposure": NATIVE, "tonemap": {"agx": NATIVE, "aces": NATIVE, "neutral": NATIVE, "standard": NATIVE, "filmic": APPROX},
+    },
     "gsplat": {
         "dof": EMULATED, "blades": EMULATED, "anamorphic": EMULATED, "filter": NO, "motionBlur": EMULATED,
         "exposure": EMULATED, "tonemap": {k: NO for k in ("agx", "aces", "neutral", "standard", "filmic")},
@@ -66,6 +74,14 @@ _NOTES = {
     ("gsplat", "motionBlur", "*"): "motion blur emulated with subframe accumulation",
     ("threejs", "filter", "*"): "antialias filter approximated by the supersample downscale filter",
     ("gsplat", "filter", "*"): "gsplat's anti-aliased rasteriser ignores antialias filter settings",
+    ("filament", "blades", "*"): "Filament's depth of field is round; aperture blades ignored",
+    ("filament", "anamorphic", "*"): "Filament's depth of field is round; anamorphic ratio ignored",
+    ("filament", "motionBlur", "*"): "motion blur emulated with subframe accumulation",
+    ("filament", "filter", "*"): "antialias filter approximated by MSAA + the supersample downscale",
+    ("pbrt", "blades", "*"): "pbrt's thin lens is round; aperture blades ignored",
+    ("pbrt", "anamorphic", "*"): "pbrt's thin lens is round; anamorphic ratio ignored",
+    ("pbrt", "motionBlur", "*"): "motion blur emulated with subframes",
+    ("pbrt", "tonemap", "filmic"): "Filmic is approximated with a Hable curve",
 }
 
 
