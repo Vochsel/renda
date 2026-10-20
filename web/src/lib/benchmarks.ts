@@ -1,125 +1,134 @@
 /**
- * Benchmark data for /benchmarks. Every number is a measured run, not a projection.
- * `source` says where it ran: "production" = renda.vochsel.com jobs; "isolated" = the same worker code
- * deployed as a separate Modal app with a fixed benchmark set (so production traffic and caches don't skew it).
- * Cost is list price for the billed seconds per hardware class (cpu $0.015, L4 $0.035, L40S $0.075 per min).
+ * Data for /benchmarks: Renda against doing the same jobs yourself.
+ *
+ * Every number carries a basis:
+ *  - "measured"  — we ran it (Renda jobs on the isolated benchmark copy of the worker; local runs on the Mac below)
+ *  - "computed"  — arithmetic on a published price list, with the inputs and assumptions stated in ASSUMPTIONS
+ *  - "published" — a number someone else measured and published (cited in SOURCES)
+ * Prices checked 2026-10-20. Renda's list prices: CPU $0.015, L4 $0.035, L40S $0.075 per minute, billed per second.
  */
 
-export type Source = "production" | "isolated";
+export type Basis = "measured" | "computed" | "published" | "estimate";
 
-export type BeforeAfter = {
+export type Cite = { label: string; url: string };
+
+export const SOURCES = {
+  awsG6: { label: "AWS g6.xlarge (1× L4) on-demand, us-east-1: $0.8048/h", url: "https://calculator.holori.com/aws/ec2/g6.xlarge/us-east-1" },
+  gcpG2: { label: "GCP g2-standard-4 (1× L4) on-demand, us-central1: $0.7068/h", url: "https://cloud.google.com/products/compute/pricing/accelerator-optimized" },
+  awsBilling: { label: "EC2: per-second billing, 60-second minimum", url: "https://aws.amazon.com/ec2/pricing" },
+  gcpBilling: { label: "Compute Engine: per-second billing, 1-minute minimum", url: "https://techcrunch.com/2017/09/26/following-aws-google-compute-engine-also-moves-to-per-second-billing" },
+  rebus: { label: "RebusFarm GPU: 0.53 ¢ per OctaneBench-hour (May 2026, as reported)", url: "https://superrendersfarm.com/article/super-renders-farm-vs-rebusfarm-comparison-2026" },
+  ranch: { label: "Ranch Computing GPU: €0.005–0.009 per OB-hour by priority (2026, as reported)", url: "https://superrendersfarm.com/article/ranch-computing-vs-super-renders-farm-comparison-2026" },
+  garage: { label: "GarageFarm GPU: $0.004–0.012 per OB-hour by priority (2026, as reported)", url: "https://superrendersfarm.com/article/garagefarm-vs-super-renders-farm-comparison-2026" },
+  sheepit: { label: "SheepIt: free, volunteer machines, points-based queue", url: "https://www.sheepit-renderfarm.com/faq" },
+  ob4090: { label: "RTX 4090 ≈ 1,352 OctaneBench 2020.1 points (OpenBenchmarking.org)", url: "https://openbenchmarking.org/vs/Graphics/NVIDIA+GeForce+RTX+4090" },
+  gsplat: { label: "gsplat paper: 30k steps ≈ 19.4 min on an A100 (Mip-NeRF 360 average)", url: "https://arxiv.org/abs/2409.06765" },
+  colmap: { label: "CuSfM paper: COLMAP on GPU ≈ 346 s per 100 frames (KITTI, sequential matching)", url: "https://arxiv.org/abs/2510.15271" },
+} satisfies Record<string, Cite>;
+
+/** The machine the "local" numbers were measured on. */
+export const LOCAL_MACHINE = "MacBook Pro (Apple M1 Pro, 8P+2E cores, 32 GB) · Blender 4.0.2 · Mitsuba 3";
+
+/** Inputs to the computed numbers. */
+export const ASSUMPTIONS = {
+  awsL4PerHour: 0.8048,
+  gcpL4PerHour: 0.7068,
+  vmMinimumSeconds: 60,
+  /** Launch → Blender ready on a pre-baked image (driver and Blender already installed). An estimate, not a measurement. */
+  vmBootSeconds: 90,
+  hoursPerMonth: 730,
+  /** OctaneBench points of the node a farm would run one GPU job on (one RTX 4090). */
+  farmNodeOb: 1352,
+  rebusUsdPerObHour: 0.0053,
+  /** Assumed: a 4090 renders the job 3× faster than our L4. We found no published L4 Blender Open Data median, so this is a guess. */
+  farmSpeedupVsL4: 3,
+};
+
+const vmCost = (seconds: number) =>
+  (Math.max(ASSUMPTIONS.vmMinimumSeconds, ASSUMPTIONS.vmBootSeconds + seconds) / 3600) * ASSUMPTIONS.awsL4PerHour;
+const farmCost = (seconds: number) =>
+  (seconds / ASSUMPTIONS.farmSpeedupVsL4 / 3600) * ASSUMPTIONS.farmNodeOb * ASSUMPTIONS.rebusUsdPerObHour;
+
+/** Per-GPU-hour list price of each option, for the comparison table. */
+export const HOURLY = {
+  renda: 0.035 * 60,
+  aws: ASSUMPTIONS.awsL4PerHour,
+  gcp: ASSUMPTIONS.gcpL4PerHour,
+  farm: ASSUMPTIONS.farmNodeOb * ASSUMPTIONS.rebusUsdPerObHour,
+};
+
+export type Job = {
+  id: string;
   label: string;
-  before: number;
-  after: number;
-  note?: string;
+  short: string;
+  /** Renda, measured on the isolated benchmark copy of the worker: billed seconds, cost, wall time (submit → output, cold container). */
+  renda: { billedSeconds: number; costUsd: number; wallSeconds: number };
+  /** This Mac, measured wall time with Blender already warm (a first launch adds shader/kernel compile). */
+  localSeconds: number;
 };
 
-/** Render optimisation pass, 2026-10-20 (isolated app, standard priority, new seed each run). */
-export const OPTIMISATION = {
-  date: "2026-10-20",
-  source: "isolated" as Source,
-  billedSeconds: [
-    { label: "STL draft (Workbench)", before: 14.1, after: 9.4 },
-    { label: "GLB still (Cycles)", before: 15.2, after: 10.1 },
-    { label: "GLB still (Eevee)", before: 36.1, after: 9.8, note: "before run had a cold shader cache" },
-    { label: "GLB still (Mitsuba)", before: 11.6, after: 10.4, note: "second run; first after-run billed 12.4 s" },
-    { label: "GLB still (three.js)", before: 10.4, after: 7.3 },
-    { label: "72-frame turntable (Cycles)", before: 53.4, after: 41.7 },
-    { label: "48-frame splat turntable (gsplat)", before: 43.0, after: 27.1 },
-    { label: ".blend still (Cycles)", before: 15.3, after: 8.2 },
-    { label: "STEP still", before: 12.7, after: 7.5 },
-  ] satisfies BeforeAfter[],
-  costUsd: [
-    { label: "STL draft (Workbench)", before: 0.0066, after: 0.0048 },
-    { label: "GLB still (Cycles)", before: 0.0072, after: 0.0053 },
-    { label: "GLB still (Eevee)", before: 0.0193, after: 0.0051, note: "before run had a cold shader cache" },
-    { label: "GLB still (Mitsuba)", before: 0.0051, after: 0.0052 },
-    { label: "GLB still (three.js)", before: 0.0026, after: 0.0018 },
-    { label: "72-frame turntable (Cycles)", before: 0.0269, after: 0.0239 },
-    { label: "48-frame splat turntable (gsplat)", before: 0.021, after: 0.0154 },
-    { label: ".blend still (Cycles)", before: 0.0072, after: 0.0043 },
-    { label: "STEP still", before: 0.0057, after: 0.0038 },
-  ] satisfies BeforeAfter[],
-};
-
-/** Billing fixes found by measuring real jobs (production, 2026-10-19 → 2026-10-20). */
-export const BILLING_FIXES = {
-  source: "production" as Source,
-  rows: [
-    { label: "USDZ turntable, 72 frames (Cycles)", before: 273.1, after: 45.8 },
-    { label: "Splat turntable, 48 frames (gsplat)", before: 214.6, after: 30.0 },
-    { label: "Turntable, 24 frames (Eevee)", before: 133.1, after: 12.5 },
-    { label: "Coordinator per job", before: 86, after: 2.3, note: "56–86 s before: it billed time spent waiting on other containers" },
-  ] satisfies BeforeAfter[],
-};
-
-/** Cold start: seconds from calling a Modal function to our code running (isolated probe app, 2026-10-20). */
-export const COLD_START = {
-  date: "2026-10-20",
-  source: "isolated" as Source,
-  images: [
-    { label: "Blender · L4", variant: "CPU snapshot (shipped)", samples: [31.9, 5.1, 30.0, 3.4, 24.8, 3.8, 6.5], warm: 0.1 },
-    { label: "Blender · L4", variant: "GPU snapshot (not shipped)", samples: [15.3, 7.1, 9.2, 5.0, 4.9, 6.1, 2.1], warm: 0.1 },
-    { label: "Splat · L4", variant: "CPU snapshot (shipped)", samples: [26.6, 12.4, 61.1, 3.4, 60.9, 8.8, 2.5], warm: 0.1 },
-    { label: "Splat · L4", variant: "GPU snapshot (not shipped)", samples: [26.4, 12.4, 4.7, 5.3, 86.2, 10.5, 166.7], warm: 0.2 },
-    { label: "CPU · 8 cores", variant: "CPU snapshot", samples: [9.9, 8.4, 2.8], warm: 0.15 },
-    { label: "three.js · CPU", variant: "CPU snapshot", samples: [8.2, 7.1, 7.6], warm: 0.1 },
-  ],
-};
-
-export type SplatRun = {
-  label: string;
-  date: string;
-  source: Source;
-  billedSeconds: number;
-  costUsd: number;
-  wallSeconds: number;
-  psnr: number;
-  note?: string;
-};
-
-/** Mesh → Gaussian splat, table scene, `standard` preset, over time. */
-export const SPLAT_PROGRESSION: SplatRun[] = [
-  { label: "First bake", date: "2026-10-19", source: "production", billedSeconds: 315.2, costUsd: 0.18, wallSeconds: 360, psnr: 35.2, note: "wall time ≈ 6 min" },
-  { label: "Overhaul", date: "2026-10-20", source: "isolated", billedSeconds: 237, costUsd: 0.136, wallSeconds: 246, psnr: 36.9 },
-  { label: "After deploy", date: "2026-10-20", source: "production", billedSeconds: 236.3, costUsd: 0.138, wallSeconds: 264, psnr: 33.5, note: "different 12 hold-out views each run" },
+/** The same packages on Renda and locally, 2026-10-20. */
+export const JOBS: Job[] = [
+  { id: "glb-cycles", label: "GLB still, Cycles (640×480, standard)", short: "GLB still · Cycles", renda: { billedSeconds: 10.1, costUsd: 0.0053, wallSeconds: 38.6 }, localSeconds: 5.4 },
+  { id: "blend-cycles", label: ".blend still, Cycles (640×480, standard)", short: ".blend still · Cycles", renda: { billedSeconds: 8.2, costUsd: 0.0043, wallSeconds: 37.9 }, localSeconds: 2.9 },
+  { id: "mitsuba", label: "GLB still, Mitsuba (640×480, standard)", short: "GLB still · Mitsuba", renda: { billedSeconds: 10.4, costUsd: 0.0052, wallSeconds: 44.5 }, localSeconds: 4.2 },
+  { id: "step", label: "STEP still (640×480, standard)", short: "STEP still", renda: { billedSeconds: 7.5, costUsd: 0.0038, wallSeconds: 44.3 }, localSeconds: 3.3 },
+  { id: "turntable", label: "72-frame turntable, Cycles (800×800, draft)", short: "72-frame turntable", renda: { billedSeconds: 41.7, costUsd: 0.0239, wallSeconds: 72.1 }, localSeconds: 93.3 },
 ];
 
-/** Other splat-bake configurations (isolated app, 2026-10-20 unless noted). PSNR on hold-out views. */
-export const SPLAT_VARIANTS = [
-  { scene: "Table", config: "fast preset (no training)", source: "production" as Source, billedSeconds: 3.6, costUsd: 0.002, wall: "seconds", psnr: null as number | null, size: "2.1 MB" },
-  { scene: "Table", config: "standard, Cycles views", source: "isolated" as Source, billedSeconds: 237, costUsd: 0.136, wall: "4.1 min", psnr: 36.9, size: "8.5 MB" },
-  { scene: "Table", config: "standard, Eevee views", source: "isolated" as Source, billedSeconds: 251, costUsd: 0.125, wall: "—", psnr: 33.6, size: "7.8 MB" },
-  { scene: "Table", config: "standard, Mitsuba views", source: "isolated" as Source, billedSeconds: 344, costUsd: 0.177, wall: "6.3 min", psnr: 35.5, size: "11.3 MB" },
-  { scene: "Table", config: "rush (4 × L40S view containers)", source: "isolated" as Source, billedSeconds: 201, costUsd: 0.152, wall: "—", psnr: 32.9, size: "8.2 MB" },
-  { scene: "Canon AT-1", config: "fast preset", source: "production" as Source, billedSeconds: 5.4, costUsd: 0.003, wall: "seconds", psnr: null, size: "2.1 MB" },
-  { scene: "Canon AT-1", config: "standard", source: "isolated" as Source, billedSeconds: 214, costUsd: 0.124, wall: "4.0 min", psnr: 28.1, size: "7.8 MB" },
-  { scene: "Canon AT-1", config: "high (L40S, 200 views, SH 3)", source: "isolated" as Source, billedSeconds: 939, costUsd: 0.99, wall: "12.9 min", psnr: 32.2, size: "50 MB" },
-];
+export type SeriesId = "renda" | "vm" | "farm" | "local" | "always";
 
-/**
- * Estimate vs billed seconds for 9 production jobs submitted for this page (2026-10-20): the API's stored
- * estimate range at submit time against what was billed.
- */
-export const ESTIMATES = {
-  date: "2026-10-20",
-  source: "production" as Source,
-  rows: [
-    { label: "Cycles still", lo: 5.2, hi: 15.6, actual: 9.5 },
-    { label: "Eevee still", lo: 3.3, hi: 10, actual: 29.2, note: "cold shader cache on a fresh container" },
-    { label: "Mitsuba still", lo: 3.5, hi: 10.4, actual: 10.9 },
-    { label: "three.js still", lo: 3.6, hi: 10.8, actual: 6.1 },
-    { label: "Cycles + lens & post", lo: 5.7, hi: 17.1, actual: 10.7 },
-    { label: "Mitsuba CPU, denoised", lo: 3.3, hi: 9.8, actual: 7.5 },
-    { label: "Mitsuba CPU, no denoise", lo: 3.3, hi: 9.8, actual: 4.5 },
-    { label: "Splat render, fast .spz", lo: 3.3, hi: 9.8, actual: 12.2 },
-    { label: "Splat render, standard .spz", lo: 3.3, hi: 9.8, actual: 11.9 },
-  ],
-  /** The optimisation pass's planner check across its benchmark set (isolated). */
-  plannerInRange: { before: [6, 9] as [number, number], after: [9, 10] as [number, number] },
-  /** A priced example: USDZ turntable, standard priority. */
-  usdz: { lo: 0.0138, hi: 0.0414, actual: 0.0224 },
-};
+/** Cost per job: Renda measured; VM and farm computed from published prices with ASSUMPTIONS. Local is $0 marginal (not plottable on a log axis). */
+export const JOB_COSTS = JOBS.map((j) => ({
+  label: j.short,
+  values: { renda: j.renda.costUsd, vm: vmCost(j.renda.billedSeconds), farm: farmCost(j.renda.billedSeconds) } as Partial<Record<SeriesId, number>>,
+}));
+
+/** Wall time per job: Renda measured (cold container), this Mac measured, a per-job VM computed (boot estimate + the same render time). */
+export const JOB_WALL = JOBS.map((j) => ({
+  label: j.short,
+  values: {
+    renda: j.renda.wallSeconds,
+    local: j.localSeconds,
+    vm: ASSUMPTIONS.vmBootSeconds + j.renda.billedSeconds,
+  } as Partial<Record<SeriesId, number>>,
+}));
+
+/** Monthly cost of rendering N Cycles stills (the GLB still above). */
+export const VOLUME = (() => {
+  const still = JOBS[0];
+  const perJob = { renda: still.renda.costUsd, vm: vmCost(still.renda.billedSeconds), farm: farmCost(still.renda.billedSeconds) };
+  const alwaysOn = ASSUMPTIONS.awsL4PerHour * ASSUMPTIONS.hoursPerMonth;
+  const volumes = [10, 30, 100, 300, 1_000, 3_000, 10_000, 30_000, 100_000, 300_000];
+  return {
+    perJob,
+    alwaysOn,
+    /** Above this many stills a month, an always-on VM is cheaper than paying per job, if you keep it busy and run it yourself. */
+    crossover: Math.round(alwaysOn / perJob.renda),
+    series: [
+      { id: "renda" as SeriesId, label: "Renda, per second", points: volumes.map((n) => ({ x: n, y: n * perJob.renda })) },
+      { id: "vm" as SeriesId, label: "AWS L4 VM, started per job", points: volumes.map((n) => ({ x: n, y: n * perJob.vm })) },
+      { id: "farm" as SeriesId, label: "Render farm, 4090 node", points: volumes.map((n) => ({ x: n, y: n * perJob.farm })) },
+      { id: "always" as SeriesId, label: "AWS L4 VM, always on", points: volumes.map((n) => ({ x: n, y: alwaysOn })) },
+    ],
+  };
+})();
+
+/** Mesh → Gaussian splat: Renda's standard bake (measured) vs a DIY pipeline on an AWS L4 (published timings, computed cost). */
+export const SPLAT_DIY = (() => {
+  const steps = [
+    { label: "Boot a GPU VM", seconds: ASSUMPTIONS.vmBootSeconds, basis: "estimate" as Basis, note: "pre-baked image" },
+    { label: "Render ~100 views", seconds: 90, basis: "measured" as Basis, note: "our L4 view work" },
+    { label: "COLMAP structure-from-motion", seconds: 346, basis: "published" as Basis, note: "KITTI, 100 frames · Renda skips this: camera poses are exact" },
+    { label: "Train 30k steps (gsplat)", seconds: 19.4 * 60, basis: "published" as Basis, note: "A100 average · an L4 is slower, so this is a lower bound" },
+  ];
+  const total = steps.reduce((n, s) => n + s.seconds, 0);
+  return {
+    renda: { costUsd: 0.136, wallMinutes: 4.1, billedSeconds: 237, psnr: 36.9 },
+    diy: { costUsd: (total / 3600) * ASSUMPTIONS.awsL4PerHour, wallMinutes: total / 60 },
+    steps,
+  };
+})();
 
 export type ComparePair = {
   id: string;
@@ -172,7 +181,7 @@ export const SETS: CompareSet[] = [
     ],
     width: 960,
     height: 640,
-    note: "Framing differs slightly by engine; the scene, lighting and camera angles are the same package.",
+    note: "The scene, lighting and camera angles are the same package.",
   },
   {
     id: "splat",
