@@ -71,6 +71,7 @@ Render
                [--frames a-b] [--format png|mp4|…] [-o dir] [--no-wait] [--max-minutes N] [--local]
                [--fast]  fast mode: wider fan-out on faster GPUs, costs a bit more (= --priority rush)
                [--texture "material=/Wood.*/i,slot=baseColor,scale=4:./oak.jpg"]  (repeatable; any image or video)
+               [--ground shadow|solid|reflective|none]  ground plane / shadow catcher under the scene
   renda splat <file|pkg> [--preset fast|standard|high] [--format spz|ply|splat] [--views N] [--steps N]
         [--coverage auto|sphere|hemisphere|orbit] [--fan-out | --no-fan-out]
                [--engine …] [--dataset] [--local]   bake any 3D scene into a Gaussian splat, lighting included
@@ -560,6 +561,18 @@ async function buildPackage(ctx: Ctx, file: string, edit?: (pkg: any) => void, f
     pkg.animation = { ...(pkg.animation ?? { fps: 30 }), frames: parseFrames(str(flags, "frames")!) };
   }
   edit?.(pkg);
+  const ground = str(flags, "ground");
+  if (ground) {
+    const modes: Record<string, string> = { shadow: "shadowCatcher", shadowcatcher: "shadowCatcher", catcher: "shadowCatcher", solid: "solid", reflective: "reflective" };
+    const g = ground.toLowerCase();
+    if (g === "none" || g === "off") {
+      if (pkg.scene) delete pkg.scene.ground;
+    } else if (!modes[g]) {
+      throw new UsageError(`--ground must be shadow, solid, reflective or none (got "${ground}")`);
+    } else {
+      pkg.scene = { ...(pkg.scene ?? {}), ground: { ...(pkg.scene?.ground ?? {}), mode: modes[g] } };
+    }
+  }
   for (const t of ctx.lists.texture ?? []) {
     let entry: any;
     try {

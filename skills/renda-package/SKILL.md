@@ -141,6 +141,29 @@ so set `scene.unitScale` for mm/cm files.
   `.splat` stores no view-dependent colour; `.ply`/`.spz` keep spherical harmonics. Package lights
   don't affect splats.
 
+## Ground plane and shadow catcher
+
+Add `scene.ground` (CLI `--ground shadow|solid|reflective`, MCP `ground: "shadow"`) for product shots:
+
+```json
+"scene": { "root": "./shoe.glb", "ground": { "mode": "shadowCatcher" } },
+"environment": { "hdri": "studio", "background": "transparent" },
+"output": { "format": "png", "transparent": true }
+```
+
+- `shadowCatcher`: only the object's shadows show, composited onto any background — a transparent PNG
+  keeps the shadow in its alpha, ready to drop onto a website. `solid`: a matte floor (`color`,
+  `roughness`). `reflective`: a glossy floor (`reflectivity`).
+- The plane sits at the bottom of the scene's bounds (`offset` overrides, in scene units along the up
+  axis); `size` defaults to large enough for the shadows (catcher) or the horizon (floors). It never
+  changes auto-framing and stays put during turntables. `shadowOpacity` lightens shadows,
+  `contactShadows` toggles the darkening where object meets floor (engines with emulated lighting).
+- Engines: Cycles catches shadows natively; Eevee, Workbench and Mitsuba emulate it (plane-only and
+  object-mask renders composited — about 2× the frame time); three.js uses soft shadow maps; gsplat
+  approximates shadows from the splats' top-down opacity (splats carry no lighting) and reflects them
+  with a mirrored render. Workbench can't reflect. In mixed mesh + splat scenes only the meshes cast.
+- Off by default; recommended whenever the subject would otherwise float.
+
 ## GLB output and light baking
 
 `"output": {"format": "glb"}` converts the scene to GLB (meshes in world space, Y-up, PBR materials).

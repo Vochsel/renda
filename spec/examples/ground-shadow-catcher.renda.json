@@ -1,0 +1,12 @@
+{
+  "$schema": "https://renda.dev/schema/v1.json",
+  "version": 1,
+  "name": "product shot with a shadow catcher",
+  "scene": {
+    "root": "./sneaker.glb",
+    "ground": { "mode": "shadowCatcher", "shadowOpacity": 0.85, "contactShadows": true }
+  },
+  "environment": { "hdri": "studio", "background": "transparent" },
+  "render": { "engine": "blender-cycles", "resolution": [1600, 1200], "quality": "standard" },
+  "output": { "format": "png", "transparent": true }
+}

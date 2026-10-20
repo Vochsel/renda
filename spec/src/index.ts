@@ -161,6 +161,21 @@ export const Tessellation = z.strictObject({
   angularDeflection: z.number().positive().max(3.14).optional().describe("Max angle between facets, radians. Default 0.3."),
 });
 
+/** Ground plane under the scene: a shadow catcher (shadows only, composited onto any background) or a visible floor. */
+export const Ground = z.strictObject({
+  enabled: z.boolean().default(true),
+  mode: z.enum(["shadowCatcher", "solid", "reflective"]).default("shadowCatcher")
+    .describe("shadowCatcher: only the shadows show (transparent-friendly); solid: a matte floor; reflective: a glossy floor."),
+  offset: z.number().nullable().default(null)
+    .describe("Height of the plane along the up axis, in scene units. null = the bottom of the scene's bounds."),
+  size: z.number().positive().nullable().default(null).describe("Plane side length. null = large enough to reach the horizon."),
+  color: Color.default("#d9d9d9").describe("Floor colour for solid/reflective."),
+  roughness: z.number().min(0).max(1).default(0.6),
+  reflectivity: z.number().min(0).max(1).default(0.5).describe("reflective mode: strength of reflections."),
+  shadowOpacity: z.number().min(0).max(1).default(1).describe("shadowCatcher: shadow darkness multiplier."),
+  contactShadows: z.boolean().default(true).describe("Ambient-occlusion style darkening where the object meets the floor."),
+});
+
 export const Scene = z.strictObject({
   root: AssetRef.describe("Asset id or uri of the main scene file."),
   include: z.array(Include).default([]),
@@ -173,6 +188,7 @@ export const Scene = z.strictObject({
   textureOverrides: z.array(TextureOverride).default([])
     .describe("Replace material textures with images or videos; later entries win."),
   tessellation: Tessellation.optional().describe("Meshing density for CAD (STEP/IGES) inputs."),
+  ground: Ground.optional().describe("Add a ground plane / shadow catcher under the scene. Recommended for product shots."),
 });
 
 /** Physical lens: focal length (overrides fovDeg) and depth of field (on when fStop is set). */

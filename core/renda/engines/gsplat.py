@@ -117,11 +117,22 @@ def render_splat_frames(ctx: RenderContext, stage, frames: list[int], warnings: 
     lens = getattr(pkg.camera, "lens", None)
     files: list[Path] = []
     none = np.zeros((h, w))
+    ground = pkg.scene.ground if pkg.scene.ground is not None and pkg.scene.ground.enabled else None
+    gp = cov = None
+    if ground is not None:
+        from ..ground import for_stage, splat_coverage, splat_ground_background
+
+        gp = for_stage(stage, ground)
+        cov = splat_coverage(splats, gp, ground.contactShadows)
+        warnings.append("splats: ground shadows are approximated from a top-down opacity map (splats carry no "
+                        "lighting to cast real shadows)")
     for f in frames:
         shots, depth = [], None
         for i, cam in enumerate(subs[f]):
             layer = rasterize(splats, cam, w, h)
             bg_rgb, bg_a = background_for(ctx, stage, cam, w, h)
+            if gp is not None and cam.ortho_height is None:
+                bg_rgb, bg_a = splat_ground_background(splats, gp, ground, cam, w, h, bg_rgb, bg_a, cov, rasterize)
             rgb, alpha = composite_over(layer, np.zeros((h, w, 3)), none, None, bg_rgb, bg_a)
             if lens is not None and lens.fStop is not None and cam.focus_distance:
                 d = np.where(layer.alpha > 0.05, layer.depth, np.inf) if layer.depth is not None else np.full((h, w), np.inf)

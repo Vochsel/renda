@@ -254,8 +254,20 @@ def parse_texture_flag(value: str) -> dict:
     return entry
 
 
+GROUND_MODES = {"shadow": "shadowCatcher", "shadowcatcher": "shadowCatcher", "catcher": "shadowCatcher",
+                "solid": "solid", "reflective": "reflective"}
+
+
 def apply_overrides(raw: dict, *, engine=None, res=None, quality=None, samples=None, frames=None, fmt=None,
-                    transparent=None, turntable=False, fps=None, textures=None) -> dict:
+                    transparent=None, turntable=False, fps=None, textures=None, ground=None) -> dict:
+    if ground:
+        mode = GROUND_MODES.get(ground.lower())
+        if ground.lower() in ("none", "off"):
+            raw.setdefault("scene", {}).pop("ground", None)
+        elif mode is None:
+            raise CliError("bad_option", f"--ground must be shadow, solid, reflective or none, got {ground!r}")
+        else:
+            raw.setdefault("scene", {})["ground"] = {**(raw.get("scene", {}).get("ground") or {}), "mode": mode}
     if textures:
         raw.setdefault("scene", {}).setdefault("textureOverrides", []).extend(parse_texture_flag(t) for t in textures)
     r = raw.setdefault("render", {}) if any(v is not None for v in (engine, res, quality, samples)) else raw.get("render")
@@ -317,6 +329,8 @@ def render(
     texture: Annotated[Optional[list[str]], typer.Option(
         "--texture", help='Override a texture (repeatable): "material=/Wood.*/i,slot=baseColor,scale=4:./oak.jpg". '
                           "Any image or video; matches material/object/texture names by glob or /regex/.")] = None,
+    ground: Annotated[Optional[str], typer.Option(
+        "--ground", help="Add a ground plane: shadow (shadow catcher, works on any background), solid, reflective or none")] = None,
     priority: Annotated[str, typer.Option(help="economy|standard|rush (cloud)")] = "standard",
     fast: Annotated[bool, typer.Option("--fast", help="Fast mode (= --priority rush): fan out wider on faster GPUs; costs a bit more")] = False,
     cloud: Annotated[bool, typer.Option("--cloud", help="Render in the Renda cloud")] = False,
@@ -327,7 +341,7 @@ def render(
     """Render a scene locally (default) or in the cloud (--cloud)."""
     raw, base = load_input(input)
     raw = apply_overrides(raw, engine=engine, res=res, quality=quality, samples=samples, frames=frames, fmt=fmt,
-                          transparent=transparent, turntable=turntable, textures=texture)
+                          transparent=transparent, turntable=turntable, textures=texture, ground=ground)
     _run(raw, base, output, priority="rush" if fast else priority, cloud=cloud, wait=wait, max_minutes=max_minutes, json_out=json_out)
 
 
@@ -747,6 +761,8 @@ def estimate(
     fmt: Annotated[Optional[str], typer.Option("--format", help="Output format")] = None,
     turntable: Annotated[bool, typer.Option(help="360° camera orbit")] = False,
     texture: Annotated[Optional[list[str]], typer.Option("--texture", help="Texture override, as for `render`")] = None,
+    ground: Annotated[Optional[str], typer.Option(
+        "--ground", help="Add a ground plane: shadow (shadow catcher, works on any background), solid, reflective or none")] = None,
     local: Annotated[bool, typer.Option("--local", help="Use the local planner only (no network)")] = False,
     json_out: JsonOpt = False,
 ):
@@ -757,7 +773,7 @@ def estimate(
 
     raw, base = load_input(input)
     raw = apply_overrides(raw, engine=engine, res=res, quality=quality, frames=frames, fmt=fmt, turntable=turntable,
-                          textures=texture)
+                          textures=texture, ground=ground)
     pkg = load_package(raw)
     data = None
     if not local:

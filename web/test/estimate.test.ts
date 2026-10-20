@@ -3,6 +3,18 @@ import { parsePackage } from "@rendahq/spec";
 import { readFileSync } from "node:fs";
 import { autoEngine, estimateHyperframes, estimateScene, frameCount } from "@/lib/estimate";
 
+describe("scene.ground cost", () => {
+  const pkg = (engine: string, ground?: object) =>
+    parsePackage({ version: 1, scene: { root: "asset://" + "a".repeat(64), ...(ground ? { ground } : {}) }, render: { engine, resolution: [640, 480] } });
+  it("an emulated shadow catcher costs more than no ground; Cycles' native one barely does", () => {
+    // the factor scales frame time only; fixed load time is unchanged
+    const ratio = (engine: string) =>
+      estimateScene(pkg(engine, { mode: "shadowCatcher" })).estSeconds[1] / estimateScene(pkg(engine)).estSeconds[1];
+    expect(ratio("mitsuba")).toBeGreaterThan(1.1);
+    expect(ratio("blender-cycles")).toBeLessThan(ratio("mitsuba"));
+  });
+});
+
 describe("auto engine parity with core", () => {
   it("matches spec/fixtures/estimator/auto-engine.json", () => {
     const { cases } = JSON.parse(readFileSync(new URL("../../spec/fixtures/estimator/auto-engine.json", import.meta.url), "utf8"));

@@ -156,6 +156,22 @@ class Tessellation(_M):
     angularDeflection: float | None = Field(default=None, gt=0, le=3.14)  # radians; default 0.3
 
 
+class Ground(_M):
+    """Ground plane under the scene: a shadow catcher (shadows only) or a visible floor."""
+
+    enabled: bool = True
+    mode: Literal["shadowCatcher", "solid", "reflective"] = "shadowCatcher"
+    offset: float | None = None  # height along the up axis; None = bottom of the scene bounds
+    size: float | None = Field(default=None, gt=0)  # None = reaches the horizon
+    color: Color = "#d9d9d9"
+    roughness: float = Field(default=0.6, ge=0, le=1)
+    reflectivity: float = Field(default=0.5, ge=0, le=1)
+    shadowOpacity: float = Field(default=1, ge=0, le=1)
+    contactShadows: bool = True
+
+    _c = field_validator("color")(_check_color)
+
+
 class Scene(_M):
     root: str = Field(min_length=1)
     include: list[Include] = Field(default_factory=list)
@@ -164,6 +180,7 @@ class Scene(_M):
     materialOverrides: dict[str, MaterialOverride] = Field(default_factory=dict)
     textureOverrides: list[TextureOverride] = Field(default_factory=list)
     tessellation: Tessellation | None = None  # CAD (STEP/IGES) meshing density
+    ground: Ground | None = None  # ground plane / shadow catcher
 
 
 class Lens(_M):

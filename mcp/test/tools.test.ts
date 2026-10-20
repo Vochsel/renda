@@ -113,6 +113,21 @@ describe("account flow", () => {
   });
 });
 
+describe("ground", () => {
+  it("renda_render ground: \"shadow\" adds a shadow catcher; an object passes through", async () => {
+    const f = fakeFetch(({ method, url }) => {
+      if (method === "POST" && url.endsWith("/jobs")) return { json: job({ status: "succeeded", progress: 1, outputs: [] }) };
+    });
+    const mcp = await connect(new RendaClient({ baseUrl: "https://x.test", apiKey: "k", fetch: f.fetch }), "remote");
+    await mcp.callTool({ name: "renda_render", arguments: { file: "https://h/a.glb", ground: "shadow" } });
+    let pkg = f.calls.filter((c) => c.method === "POST" && c.url.endsWith("/jobs")).at(-1)!.body.package;
+    expect(pkg.scene.ground).toEqual({ mode: "shadowCatcher" });
+    await mcp.callTool({ name: "renda_render", arguments: { file: "https://h/a.glb", ground: { mode: "reflective", reflectivity: 0.9 } } });
+    pkg = f.calls.filter((c) => c.method === "POST" && c.url.endsWith("/jobs")).at(-1)!.body.package;
+    expect(pkg.scene.ground).toEqual({ mode: "reflective", reflectivity: 0.9 });
+  });
+});
+
 describe("renda_bake", () => {
   it("submits a glb package with the bake block, or a plain conversion", async () => {
     const f = fakeFetch(({ method, url }) => {

@@ -804,6 +804,89 @@ def setup_passes(scene, passes: list, out_dir: Path) -> None:
         WARN.append(f"blender: couldn't set up pass outputs ({e}); passes skipped")
 
 
+# -- ground plane / shadow catcher (scene.ground) ----------------------------------
+
+GROUND = "renda_ground"
+
+
+def add_ground(scene, g: dict, job: dict, conv):
+    """Plane under the scene (Blender space is Z-up). Cycles catches shadows natively; other engines get a white
+    matte plane plus the extra layers rendered in render_ground_layers for core's differential composite."""
+    meshes = [ob for ob in _mesh_objects(scene) if ob.name != GROUND]
+    if not meshes:
+        return None
+    corners = [ob.matrix_world @ Vector(c) for ob in meshes for c in ob.bound_box]
+    lo = Vector((min(c.x for c in corners), min(c.y for c in corners), min(c.z for c in corners)))
+    hi = Vector((max(c.x for c in corners), max(c.y for c in corners), max(c.z for c in corners)))
+    diag = (hi - lo).length or 1.0
+    unit = float(job.get("unit_scale", 1.0))
+    if g.get("offset") is not None:
+        up_src = {"Z": (0, 0, 1), "-Y": (0, -1, 0)}.get(job.get("source_up") or "", (0, 1, 0))
+        z = Vector(conv([c * float(g["offset"]) for c in up_src])).z * unit
+    else:
+        z = lo.z - float(g["epsilon"]) * diag
+    size = float(g["size"]) * unit if g.get("size") else float(g["auto_size"]) * diag
+    bpy.ops.mesh.primitive_plane_add(size=size, location=((lo.x + hi.x) / 2, (lo.y + hi.y) / 2, z))
+    plane = bpy.context.active_object
+    plane.name = GROUND
+    mat = bpy.data.materials.new("renda_ground_mat")
+    bsdf = principled(mat)
+    links = mat.node_tree.links
+    _set_input(bsdf, ["Base Color"], (*g["color"], 1.0), links)
+    _set_input(bsdf, ["Roughness"], float(g["roughness"]), links)
+    _set_input(bsdf, ["Specular IOR Level", "Specular"], float(g["specular"]), links)
+    plane.data.materials.append(mat)
+    if g.get("catcher_native"):
+        plane.is_shadow_catcher = True
+    if scene.render.engine != "CYCLES" and scene.render.engine != "BLENDER_WORKBENCH":
+        ev = scene.eevee
+        if g["mode"] == "reflective":
+            for attr in ("use_raytracing", "use_ssr"):  # Eevee Next / legacy screen-space reflections
+                if hasattr(ev, attr):
+                    setattr(ev, attr, True)
+        if g.get("contact") and hasattr(ev, "use_gtao"):  # legacy Eevee casts no world-light shadows: add AO
+            ev.use_gtao = True
+            if hasattr(ev, "gtao_distance"):
+                ev.gtao_distance = 0.25 * diag
+    if g["mode"] == "reflective" and scene.render.engine == "BLENDER_WORKBENCH":
+        WARN.append("blender-workbench: no reflections; the reflective ground renders as a plain floor")
+    return {"plane": plane, "meshes": meshes, "size": size}
+
+
+def render_ground_layers(scene, ground: dict, g: dict, out_dir: Path, f: int) -> None:
+    """Extra layers for core's catcher composite: the plane alone (same lighting), an object-coverage mask
+    (fast Workbench) and, over a visible HDRI, the backdrop with neither."""
+    r = scene.render
+    plane, meshes = ground["plane"], ground["meshes"]
+
+    def shot(name: str) -> None:
+        scene.render.filepath = str(out_dir / f"frame_{f:04d}.{name}.png")
+        bpy.ops.render.render(write_still=True)
+
+    if g.get("emulate"):
+        for ob in meshes:
+            ob.hide_render = True
+        shot("gplane")
+        for ob in meshes:
+            ob.hide_render = False
+    if g.get("object_mask"):
+        plane.hide_render = True
+        engine, film = r.engine, r.film_transparent
+        r.engine, r.film_transparent = "BLENDER_WORKBENCH", True
+        shot("gobj")
+        r.engine, r.film_transparent = engine, film
+        plane.hide_render = False
+    if g.get("backdrop"):
+        for ob in meshes + [plane]:
+            ob.hide_render = True
+        film = r.film_transparent
+        r.film_transparent = False
+        shot("gback")
+        r.film_transparent = film
+        for ob in meshes + [plane]:
+            ob.hide_render = False
+
+
 # -- main ------------------------------------------------------------------------
 
 
@@ -889,6 +972,8 @@ def main() -> None:
         write_result(job, bake(scene, job))
         return
     cam, base_pos, target = make_camera(scene, job, conv)
+    ground_job = job.get("ground")
+    ground = add_ground(scene, ground_job, job, conv) if ground_job else None  # after framing: never affects it
 
     out_dir = Path(job["out_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -948,10 +1033,14 @@ def main() -> None:
             elif tt and not rigged:
                 turntable_camera(cam, base_pos, target, tt, t)
             update_focus(scene, cam, lens, conv)
+            if ground is not None:
+                cam.data.clip_end = max(cam.data.clip_end, ground["size"] * 1.5)  # don't clip the floor
             name = f"frame_{f:04d}.{ext}" if len(offsets) == 1 else f"frame_{f:04d}.sub{i:02d}.{ext}"
             path = out_dir / name
             scene.render.filepath = str(path)
             bpy.ops.render.render(write_still=True)
+            if ground is not None and i == len(offsets) // 2:
+                render_ground_layers(scene, ground, ground_job, out_dir, f)
         written.append(str(out_dir / f"frame_{f:04d}.{ext}"))
     write_result(job, {"files": written, "warnings": WARN, "gpu": scene.cycles.device if scene.render.engine == "CYCLES" else None})
 

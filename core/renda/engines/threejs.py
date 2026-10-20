@@ -81,6 +81,21 @@ def _chromium_ok() -> bool:
     return browsers.exists() and any(p.name.startswith(("chromium", "chromium_headless_shell")) for p in browsers.iterdir())
 
 
+def _ground_job(pkg, stage, warnings: list[str]) -> dict | None:
+    """scene.ground for the page (index.html addGround): placement from the shared core helper."""
+    g = pkg.scene.ground
+    if g is None or not g.enabled:
+        return None
+    from ..ground import for_stage, plane_material
+
+    gp = for_stage(stage, g)
+    pm = plane_material(g)
+    if stage.splats:
+        warnings.append("threejs: splats don't cast shadows onto the ground (meshes do)")
+    return {**gp.to_json(), "color": list(pm["base_color"]), "roughness": pm["roughness"],
+            "opacity": g.shadowOpacity, "reflectivity": g.reflectivity, "contact": g.contactShadows}
+
+
 def _texture_jobs(ctx: RenderContext, stage, frames: list[int], work: Path, warnings: list[str]) -> list[dict]:
     """Texture overrides for the page: match on the IR (before glTF export, so object-scoped material
     copies are in the file), copy each frame's image next to index.html, and let the page assign them."""
@@ -268,6 +283,7 @@ class ThreeEngine(Engine):
             "frameStart": pkg.animation.frames[0] if pkg.animation else 1,
             "tonemap": pkg.post.tonemap if pkg.post is not None else "agx",
             "exposure": pkg.post.exposure if pkg.post is not None else 0.0,
+            "ground": _ground_job(pkg, stage, warnings),
         }
         aa = pkg.render.antialias
         resample = {"box": Image.BOX, "gaussian": Image.BICUBIC, "mitchell": Image.BICUBIC,
