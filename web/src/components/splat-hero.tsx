@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 /**
- * Homepage hero: the Porsche baked into a Gaussian splat by `renda splat` (production job, 2026-10-20), shown
+ * Homepage hero: the Porsche baked into a Gaussian splat by `renda splat --preset high` (production job, 2026-10-20), shown
  * with Spark. Slow orbit until the visitor grabs it. Bounds come from the core loader so we don't load the mesh.
  */
 const HERO = {
@@ -108,8 +108,8 @@ export function SplatHero() {
         )}
       </div>
       <figcaption className="text-muted-foreground mt-2 font-mono text-[11px] tracking-tight">
-        Gaussian splat baked from a .glb by <span className="text-foreground">renda splat</span> · 128 Cycles views · 254k Gaussians · 423 s
-        billed · ≈$0.25 · drag to orbit ·{" "}
+        Gaussian splat baked from a .glb by <span className="text-foreground">renda splat</span> · 200 Cycles views · 267k Gaussians · SH 3 · PSNR 35.8 dB ·
+        589 s billed · ≈$0.61 · drag to orbit ·{" "}
         <a href="https://sketchfab.com/models/8568d9d14a994b9cae59499f0dbed21e" className="hover:text-foreground underline-offset-2 hover:underline">
           1975 Porsche 911 Turbo
         </a>{" "}
