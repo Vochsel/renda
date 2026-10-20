@@ -195,6 +195,21 @@ and the planner's cost factors:
 - Lens maths (`core/renda/lens.py`) treats scene units as metres; `ResolvedCamera` carries focal length,
   focus distance and aperture so every engine focuses on the same plane.
 
+### Ground plane / shadow catcher (`scene.ground`)
+
+`core/renda/ground.py` places one plane for every engine — under the lowest point of the scene bounds
+along the up axis (or at `offset`), sized from the scene diagonal — and engines add it *after* cameras
+are resolved, so auto-framing never sees it. Solid and reflective floors are just a plane with a
+principled material (4% F0 dielectric everywhere). The shadow catcher is native in Cycles
+(`is_shadow_catcher`, shadows land in alpha on a transparent film) and three.js (`ShadowMaterial` fed by
+two near-zero-intensity VSM shadow lights, so object lighting is unchanged). Eevee, Workbench and
+Mitsuba emulate it differentially: render with a white matte plane, render the plane alone (same
+lighting) and an object-coverage mask; shadow = 1 − L(with)/L(plane-only) above a small noise floor,
+composited premultiplied, onto a backdrop render when the HDRI is visible. gsplat has no lighting, so
+it approximates: a blurred top-down opacity map of the splats (weighted towards the floor for contact
+shadows) is looked up through per-pixel ray/plane hits; reflective floors add the splats rendered from
+the camera mirrored in the plane.
+
 ### Gaussian splats across engines
 
 | Scene | auto picks | how |

@@ -170,7 +170,16 @@ function effectsFactor(pkg: RendaPackage, engine: string): number {
     else f *= 1.15;
   }
   if (pkg.camera.lens?.fStop) f *= ["threejs", "gsplat"].includes(engine) ? 1.05 : 1.2;
-  return f;
+  return f * groundFactor(pkg, engine);
+}
+
+/** Frame-time multiplier for scene.ground; mirrors ground.cost_factor in core. */
+function groundFactor(pkg: RendaPackage, engine: string): number {
+  const g = pkg.scene.ground;
+  if (!g || !g.enabled) return 1;
+  if (g.mode === "shadowCatcher") return ({ "blender-cycles": 1.1, threejs: 1.15, gsplat: 1.1 } as Record<string, number>)[engine] ?? 2.3;
+  if (g.mode === "reflective") return ({ gsplat: 2.0, threejs: 1.6 } as Record<string, number>)[engine] ?? 1.15;
+  return 1.05;
 }
 
 /** Splat bake presets (mirror core/renda/splatbake PRESETS). views 0 = direct mesh → Gaussians on CPU. */

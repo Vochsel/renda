@@ -148,6 +148,20 @@ describe("render", () => {
     for (const t of pkg.scene.textureOverrides) expect(t.source).toMatch(/^asset:\/\//);
   });
 
+  it("--ground adds a ground plane (shadow → shadowCatcher) and rejects unknown modes", async () => {
+    const route: Route = ({ method, url }) => {
+      if (method === "POST" && url.endsWith("/jobs")) return { status: 201, json: job() };
+      if (url.endsWith("/jobs/job_1")) return { json: job({ status: "succeeded", progress: 1, outputs: [] }) };
+    };
+    const creds = { creds: { apiKey: "rnd_live_xxxxxxxxxxxxxxxxxxxxxxxx" } };
+    let t = await setup(route, creds);
+    expect(await run(["render", "https://example.com/a.glb", "--ground", "shadow"], t.deps)).toBe(0);
+    const pkg = t.calls.find((c) => c.method === "POST" && c.url.endsWith("/jobs"))!.body.package;
+    expect(pkg.scene.ground).toEqual({ mode: "shadowCatcher" });
+    t = await setup(route, creds);
+    expect(await run(["render", "https://example.com/a.glb", "--ground", "glass"], t.deps)).toBe(2);
+  });
+
   it("--max-minutes refuses over-budget jobs before submitting", async () => {
     const t = await setup(({ method, url }) => {
       if (url.endsWith("/estimate")) return { json: { engine: "blender-cycles", hardware: "gpu-l4", estSeconds: [300, 900], estCostUsd: [0.2, 0.5] } };

@@ -222,8 +222,32 @@ class MitsubaEngine(Engine):
             sensor["to_world"] = sensor["to_world"] @ mi.ScalarTransform4f().scale([first.ortho_height / 2 * width / height, first.ortho_height / 2, 1])
         scene["camera"] = sensor
 
+        # Ground plane (scene.ground), placed after framing so it never changes the auto camera. A shadow
+        # catcher is emulated: plane-only + objects-only renders feed ground.composite_catcher.
+        ground = pkg.scene.ground if pkg.scene.ground is not None and pkg.scene.ground.enabled else None
+        variants: dict[str, dict] = {}
+        if ground is not None:
+            from ..ground import for_stage
+
+            gp = for_stage(stage, ground)
+            scene["renda_ground"] = _ground_shape(gp, ground, mi)
+            if ground.mode == "shadowCatcher":
+                scene["integrator"] = _hide_emitters(scene["integrator"])  # main render on a transparent film
+                variants["plane"] = {k: v for k, v in scene.items() if not k.startswith(("shape_", "bsdf_"))}
+                cheap = {**sensor, "sampler": {"type": "independent", "sample_count": 16, "seed": pkg.render.seed}}
+                variants["objects"] = {**{k: v for k, v in scene.items() if k != "renda_ground"}, "camera": cheap,
+                                       "integrator": {"type": "path", "max_depth": 1, "hide_emitters": True}}
+                if not hide_env and "environment" in scene:
+                    variants["backdrop"] = {"camera": {**cheap, "sampler": {"type": "independent", "sample_count": 4}},
+                                            "environment": scene["environment"],
+                                            "integrator": {"type": "path", "max_depth": 1, "hide_emitters": False}}
+
         mi_scene = mi.load_dict(scene)
         params = mi.traverse(mi_scene)
+        variant_scenes = {}
+        for name, d in variants.items():
+            vs = mi.load_dict(d)
+            variant_scenes[name] = (vs, mi.traverse(vs))
         denoiser = None
         if pkg.render.denoise:
             # OptixDenoiser aborts the whole process (uncatchable) when the driver's weights file is absent,
@@ -270,15 +294,35 @@ class MitsubaEngine(Engine):
             rgba = acc / len(subs[f])
             if hybrid and "depth" in channels:
                 depths[f] = _planar_depth(channels["depth"], cam, width, height)
-            if denoiser is not None:
-                rgb = np.array(denoiser(mi.TensorXf(rgba[..., :3].copy())))
-                rgba = np.concatenate([rgb, rgba[..., 3:4]], axis=-1)
-            elif use_oidn:
-                rgb = oidn.denoise_rgb(rgba[..., :3], channels.get("albedo"), channels.get("normal"))
-                rgba = np.concatenate([rgb, rgba[..., 3:4]], axis=-1)
-                err = oidn.last_error()
-                if err:
-                    warnings.append(f"mitsuba: OIDN denoise failed ({err}); output is undenoised")
+            def _denoise(img: np.ndarray, ch: dict) -> np.ndarray:
+                if denoiser is not None:
+                    rgb = np.array(denoiser(mi.TensorXf(img[..., :3].copy())))
+                    return np.concatenate([rgb, img[..., 3:4]], axis=-1)
+                if use_oidn:
+                    rgb = oidn.denoise_rgb(img[..., :3], ch.get("albedo"), ch.get("normal"))
+                    err = oidn.last_error()
+                    if err:
+                        warnings.append(f"mitsuba: OIDN denoise failed ({err}); output is undenoised")
+                    return np.concatenate([rgb, img[..., 3:4]], axis=-1)
+                return img
+
+            rgba = _denoise(rgba, channels)
+            if variant_scenes:
+                from ..ground import composite_catcher
+
+                mid = subs[f][len(subs[f]) // 2]
+                imgs = {}
+                for name, (vs, vp) in variant_scenes.items():
+                    _aim(vp, mid, first, width, height, mi)
+                    mi.render(vs, vp, seed=(pkg.render.seed + f) * 64 + 7, spp=spp if name == "plane" else 0)
+                    vb = vs.sensors()[0].film().bitmap(raw=False)
+                    img = np.array(vb, copy=True)[..., :4].astype(np.float32)
+                    if name == "plane":
+                        img = _denoise(img, {k: np.array(v, copy=True) for k, v in vb.split()})
+                    imgs[name] = img
+                bd = imgs.get("backdrop")
+                rgba = composite_catcher(rgba, imgs["plane"], imgs["objects"][..., 3], ground.shadowOpacity,
+                                         None if bd is None else bd[..., :3])
             if hybrid:  # mesh layer with alpha; composite_files adds splats + background and the final format
                 save_beauty(rgba, ctx.out_dir / frame_filename("beauty", f, "png"), "png", True, None, tm_mode, exposure)
             else:
@@ -296,6 +340,37 @@ class MitsubaEngine(Engine):
             files = list(composite_files(ctx, stage, frames, depths.get, warnings, self.name, cams).values()) + files
         return RenderResult(files, warnings, time.time() - t0)
 
+
+
+def _ground_shape(gp, ground, mi) -> dict:
+    """scene.ground as a Mitsuba rectangle (a 2×2 XY quad placed by GroundPlacement.matrix)."""
+    from ..ground import plane_material
+
+    pm = plane_material(ground)
+    col = {"type": "rgb", "value": list(pm["base_color"])}
+    if ground.mode == "shadowCatcher":
+        bsdf = {"type": "diffuse", "reflectance": col}
+    else:
+        bsdf = {"type": "principled", "base_color": col, "roughness": float(pm["roughness"]), "metallic": 0.0,
+                "specular": float(pm["specular"])}
+    return {"type": "rectangle", "to_world": mi.ScalarTransform4f(gp.matrix().tolist()), "bsdf": bsdf}
+
+
+def _hide_emitters(integrator: dict) -> dict:
+    """Same integrator with the environment hidden (alpha = coverage), through an aov wrapper if present."""
+    if integrator.get("type") == "aov":
+        return {**integrator, "integrator": {**integrator["integrator"], "hide_emitters": True}}
+    return {**integrator, "hide_emitters": True}
+
+
+def _aim(params, cam, first, width: int, height: int, mi) -> None:
+    if first.ortho_height is not None:
+        return
+    params["camera.to_world"] = mi.Transform4f().look_at(origin=cam.position.tolist(), target=cam.target.tolist(), up=cam.up.tolist())
+    if abs(cam.fov_y_deg - first.fov_y_deg) > 1e-6 and "camera.x_fov" in params:
+        half = math.radians(cam.fov_y_deg) / 2
+        params["camera.x_fov"] = math.degrees(2 * math.atan(math.tan(half) * width / height))
+    params.update()
 
 
 def bake_atlas(ctx: RenderContext, stage, layout, texels, warnings: list[str]) -> np.ndarray:

@@ -874,6 +874,100 @@
             }
           },
           "additionalProperties": false
+        },
+        "ground": {
+          "description": "Add a ground plane / shadow catcher under the scene. Recommended for product shots.",
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "default": true,
+              "type": "boolean"
+            },
+            "mode": {
+              "default": "shadowCatcher",
+              "description": "shadowCatcher: only the shadows show (transparent-friendly); solid: a matte floor; reflective: a glossy floor.",
+              "type": "string",
+              "enum": [
+                "shadowCatcher",
+                "solid",
+                "reflective"
+              ]
+            },
+            "offset": {
+              "default": null,
+              "description": "Height of the plane along the up axis, in scene units. null = the bottom of the scene's bounds.",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "size": {
+              "default": null,
+              "description": "Plane side length. null = large enough to reach the horizon.",
+              "anyOf": [
+                {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "color": {
+              "default": "#d9d9d9",
+              "description": "Floor colour for solid/reflective.",
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"
+                },
+                {
+                  "type": "array",
+                  "prefixItems": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "items": false,
+                  "minItems": 3,
+                  "maxItems": 3
+                }
+              ]
+            },
+            "roughness": {
+              "default": 0.6,
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "reflectivity": {
+              "default": 0.5,
+              "description": "reflective mode: strength of reflections.",
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "shadowOpacity": {
+              "default": 1,
+              "description": "shadowCatcher: shadow darkness multiplier.",
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "contactShadows": {
+              "default": true,
+              "description": "Ambient-occlusion style darkening where the object meets the floor.",
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

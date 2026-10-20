@@ -395,7 +395,8 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
   }
 
   // ---------- render ----------
-  const resolvePackage = async (args: { package?: Record<string, unknown>; file?: string; packagePath?: string; packageDir?: string; options?: StarterOpts; textureOverrides?: any[] },
+  const GROUND_MODES: Record<string, string> = { shadow: "shadowCatcher", solid: "solid", reflective: "reflective" };
+  const resolvePackage = async (args: { package?: Record<string, unknown>; file?: string; packagePath?: string; packageDir?: string; options?: StarterOpts; textureOverrides?: any[]; ground?: any },
     edit?: (pkg: any) => void) => {
     let pkg: any;
     let baseDir = args.packageDir ? resolve(args.packageDir) : process.cwd();
@@ -416,6 +417,13 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
     }
     if (args.textureOverrides?.length) {
       pkg = { ...pkg, scene: { ...(pkg.scene ?? {}), textureOverrides: [...(pkg.scene?.textureOverrides ?? []), ...args.textureOverrides] } };
+    }
+    if (args.ground !== undefined) {
+      const g = typeof args.ground === "string" ? { mode: GROUND_MODES[args.ground] ?? args.ground } : args.ground;
+      const scene = { ...(pkg.scene ?? {}) };
+      if (args.ground === "none" || args.ground === false) delete scene.ground;
+      else scene.ground = { ...(scene.ground ?? {}), ...g };
+      pkg = { ...pkg, scene };
     }
     const v = validatePackage(pkg);
     if (!v.valid) return { issues: v.issues } as const;
@@ -446,6 +454,10 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
       + "match?: {material?, object?, texture?, slot?: baseColor|normal|roughness|metallic|emission|opacity} (exact name, glob like \"wood*\", or \"/regex/i\"), "
       + "uv?: {scale, offset, rotationDeg}, video?: {loop, startSec, speed, frame}, colorSpace?, strength?}. "
       + "Videos play in sync with the animation. Example: [{source: \"./oak.jpg\", match: {material: \"/wood/i\"}, uv: {scale: 4}}]."),
+    ground: z.union([z.enum(["shadow", "solid", "reflective", "none"]), z.record(z.string(), z.any())]).optional().describe(
+      "Ground plane under the scene (sets scene.ground). \"shadow\" = shadow catcher: only the shadows show, on any background "
+      + "(transparent PNGs too) — the usual product-shot look. \"solid\" = matte floor, \"reflective\" = glossy floor, \"none\" removes it. "
+      + "Or the full object: {mode: shadowCatcher|solid|reflective, offset?, size?, color?, roughness?, reflectivity?, shadowOpacity?, contactShadows?}."),
   };
 
   server.registerTool("renda_estimate", {

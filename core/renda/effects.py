@@ -137,7 +137,9 @@ def frame_cost_factor(pkg: "RendaPackage", engine: str) -> float:
     lens = getattr(pkg.camera, "lens", None)
     if lens is not None and lens.fStop is not None:
         f *= 1.2 if status(engine, "dof") == NATIVE else 1.05
-    return f
+    from .ground import cost_factor
+
+    return f * cost_factor(pkg, engine)
 
 
 def subframe_offsets(pkg: "RendaPackage") -> list[float]:

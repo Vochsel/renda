@@ -205,6 +205,31 @@ class BlenderEngine(Engine):
                       "emulate": self.flavour == "workbench", "offsets": subframe_offsets(pkg)}
         aa = pkg.render.antialias
         post = pkg.post
+        ground_job = None
+        g = pkg.scene.ground
+        if g is not None and g.enabled:
+            from ..ground import AUTO_SIZE, EPSILON, plane_material
+
+            catcher = g.mode == "shadowCatcher"
+            emulate = catcher and self.flavour != "cycles"
+            if emulate and pkg.output.format == "exr":
+                warnings.append(f"{self.name}: shadow catcher emulation needs PNG frames; EXR output renders without it "
+                                "(use blender-cycles for a native catcher in EXR)")
+                emulate = catcher = False
+            if catcher or g.mode != "shadowCatcher":
+                pm = plane_material(g)
+                backdrop = emulate and not transparent_film  # visible HDRI: shadows go onto a backdrop render
+                if emulate:
+                    transparent_film = True
+                    warnings.append(f"{self.name}: shadow catcher emulated (plane-only and object-mask renders "
+                                    "composited); Cycles catches shadows natively")
+                ground_job = {
+                    "mode": g.mode, "offset": g.offset, "size": g.size, "auto_size": AUTO_SIZE[g.mode], "epsilon": EPSILON,
+                    "color": list(pm["base_color"]), "roughness": pm["roughness"], "specular": pm["specular"],
+                    "catcher_native": catcher and not emulate, "emulate": emulate, "backdrop": backdrop,
+                    "object_mask": emulate or (catcher and g.shadowOpacity < 1),
+                    "contact": g.contactShadows,
+                }
         return {
             "input": str(root),
             "format": src_fmt,
@@ -239,6 +264,7 @@ class BlenderEngine(Engine):
             "antialias": {"filter": aa.filter, "width": aa.filterWidth} if aa is not None else None,
             "exposure": post.exposure if post is not None else 0.0,
             "tonemap": post.tonemap if post is not None else "agx",
+            "ground": ground_job,
         }
 
     def render(self, ctx: RenderContext, frames: list[int]) -> RenderResult:
@@ -258,6 +284,7 @@ class BlenderEngine(Engine):
                 _cleanup_scratch(job)
             warnings += result.get("warnings", [])
             merge_subframes(ctx.out_dir, frames)
+            composite_ground_layers(ctx, job, frames)
             files = postprocess(ctx, frames, warnings)
             return RenderResult(files, warnings, time.time() - t0)
 
@@ -276,6 +303,7 @@ class BlenderEngine(Engine):
             _cleanup_scratch(job)
         warnings += result.get("warnings", [])
         merge_subframes(ctx.out_dir, frames)
+        composite_ground_layers(ctx, job, frames)
         depths = {f: _read_exr_channel(ctx.out_dir / frame_filename("depth", f, "exr")) for f in frames}
         if "depth" not in ctx.pkg.output.passes:
             for f in frames:
@@ -284,6 +312,41 @@ class BlenderEngine(Engine):
         composite_files(ctx, stage, frames, depths.get, warnings, self.name, cams, src_ext=ext, out_fmt=ext)
         files = postprocess(ctx, frames, warnings)  # format conversion, alpha/passes
         return RenderResult(files, warnings, time.time() - t0)
+
+
+def composite_ground_layers(ctx: RenderContext, job: dict, frames: list[int]) -> None:
+    """Fold render.py's ground layers (frame_N.gplane/gobj/gback.png) into frame_N.png and delete them:
+    the differential shadow catcher for Eevee/Workbench, or shadow-opacity scaling of Cycles' native catcher."""
+    g = job.get("ground")
+    if not g or not g.get("object_mask"):
+        return
+    from PIL import Image
+
+    from ..ground import composite_catcher, scale_shadow_alpha
+
+    def load(p: Path) -> np.ndarray:
+        a = np.asarray(Image.open(p).convert("RGBA"), dtype=np.float32) / 255.0
+        a[..., :3] *= a[..., 3:4]  # premultiply
+        return a
+
+    opacity = ctx.pkg.scene.ground.shadowOpacity
+    out = Path(ctx.out_dir)
+    for f in frames:
+        main_p = out / f"frame_{f:04d}.png"
+        layers = {k: out / f"frame_{f:04d}.{k}.png" for k in ("gplane", "gobj", "gback")}
+        if not main_p.exists() or not layers["gobj"].exists():
+            continue
+        main, obj = load(main_p), load(layers["gobj"])[..., 3]
+        if g.get("emulate") and layers["gplane"].exists():
+            back = load(layers["gback"])[..., :3] if layers["gback"].exists() else None
+            res = composite_catcher(main, load(layers["gplane"]), obj, opacity, back)
+        else:
+            res = scale_shadow_alpha(main, obj, opacity)
+        a = np.clip(res[..., 3:4], 0, 1)
+        rgb = np.where(a > 1e-6, res[..., :3] / np.maximum(a, 1e-6), 0.0)
+        Image.fromarray((np.clip(np.concatenate([rgb, a], axis=-1), 0, 1) * 255 + 0.5).astype(np.uint8), "RGBA").save(main_p)
+        for p in layers.values():
+            p.unlink(missing_ok=True)
 
 
 def with_fit_fov(camera: dict, post) -> dict:
