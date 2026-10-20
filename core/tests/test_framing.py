@@ -177,3 +177,72 @@ def test_auto_framing_compensates_post_lens_distortion(distortion, ca, res):
     from renda.spec import Lens
 
     assert cam.fov_y_deg == pytest.approx(effective_fov_y(35, Lens(focalLengthMm=85), res[0] / res[1]))
+
+
+ASPECT_RES = [(1920, 1080), (1600, 1200), (1000, 1000), (1080, 1920)]
+
+
+def test_blender_camera_projects_like_core_for_every_aspect(tmp_path):
+    """End to end through render.py make_camera (sensor fit, angle_y, render resolution): Blender must put the box
+    corners where core's resolved camera does, for 16:9, 4:3, 1:1 and 9:16, with and without post lens distortion
+    (which core compensates by fitting a narrower view — engines/blender.py with_fit_fov)."""
+    import json
+    import subprocess
+    from pathlib import Path
+
+    from renda.engines.blender import with_fit_fov
+    from renda.ir.loaders.blender import blender_binary
+
+    exe = blender_binary()
+    if not exe:
+        pytest.skip("blender not installed")
+    lo, hi = [-1.5, 0, -3], [1.5, 1.9, 3.3]  # core Y-up box; Blender sees it Z-up as (x, -z, y)
+    camera = {"mode": "auto", "elevationDeg": 20, "azimuthDeg": 35, "padding": 0.1}
+    posts = {"plain": None, "distorted": {"lensDistortion": 0.5, "chromaticAberration": 0.6}}
+    cases, expected = [], {}
+    for name, post in posts.items():
+        for res in ASPECT_RES:
+            pkg, cams = _resolved(lo, hi, res, camera, post=post)
+            key = f"{name}-{res[0]}x{res[1]}"
+            x, y = _ndc(cams[1], _corners(np.array(lo, float), np.array(hi, float)), res[0] / res[1])
+            expected[key] = np.stack([x, y], axis=1)
+            cases.append({"key": key, "res": list(res), "camera": with_fit_fov(pkg.camera.model_dump(), pkg.post)})
+    script = Path(__file__).parents[1] / "renda" / "engines" / "blender_scripts" / "render.py"
+    out = tmp_path / "proj.json"
+    zlo, zhi = (lo[0], -hi[2], lo[1]), (hi[0], -lo[2], hi[1])
+    expr = f"""
+import bpy, json, importlib.util, sys
+from mathutils import Vector
+from bpy_extras.object_utils import world_to_camera_view
+sys.argv = ["x"]
+spec = importlib.util.spec_from_file_location("rr", {str(script)!r}); rr = importlib.util.module_from_spec(spec)
+sys.path.insert(0, {str(script.parent)!r}); spec.loader.exec_module(rr)
+bpy.ops.wm.read_factory_settings(use_empty=True)
+bpy.ops.mesh.primitive_cube_add()
+ob = bpy.context.active_object
+lo, hi = {list(zlo)!r}, {list(zhi)!r}
+ob.scale = [(b - a) / 2 for a, b in zip(lo, hi)]; ob.location = [(a + b) / 2 for a, b in zip(lo, hi)]
+bpy.context.view_layer.update()
+corners = [Vector((x, y, z)) for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])]
+scene = bpy.context.scene
+res = {{}}
+for c in json.loads({json.dumps(json.dumps(cases))}):
+    scene.render.resolution_x, scene.render.resolution_y = c["res"]
+    scene.render.resolution_percentage = 100
+    cam, _, _ = rr.make_camera(scene, {{"camera": c["camera"], "resolution": c["res"]}}, Vector)
+    bpy.context.view_layer.update()
+    res[c["key"]] = [list(world_to_camera_view(scene, cam, p))[:2] for p in corners]
+    bpy.data.objects.remove(cam)
+json.dump(res, open({str(out)!r}, "w"))
+"""
+    r = subprocess.run([exe, "-b", "--factory-startup", "--python-expr", expr], capture_output=True, text=True, timeout=180)
+    assert out.exists(), r.stdout[-2000:] + r.stderr[-2000:]  # Blender exits 0 even when the script raises
+    got = json.loads(out.read_text())
+    # Corner i is (x, y, z) ∈ {lo, hi}³ in that axis order. Blender's box is core's rotated to Z-up:
+    # Blender (x, y, z) = core (x, -z, y), so Blender corner (ix, iy, iz) is core corner (ix, iz, 1 - iy).
+    order = [(ix, iy, iz) for ix in (0, 1) for iy in (0, 1) for iz in (0, 1)]
+    for key, ref in expected.items():
+        blender = np.array(got[key]) * 2 - 1  # [0, 1] camera view → NDC
+        for bi, (ix, iy, iz) in enumerate(order):
+            ci = order.index((ix, iz, 1 - iy))
+            assert np.allclose(blender[bi], ref[ci], atol=2e-3), (key, bi, blender[bi], ref[ci])

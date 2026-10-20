@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import subprocess
 import time
 from functools import lru_cache
@@ -194,6 +195,7 @@ class BlenderEngine(Engine):
                 "focus_object": ft if isinstance(ft, str) and ft != "auto" else None,
                 "blades": lens.apertureBlades, "rotation_deg": lens.apertureRotationDeg, "ratio": lens.anamorphicRatio,
             }
+        camera = with_fit_fov(camera, pkg.post)
         mb = pkg.render.motionBlur
         mb_job = None
         if mb is not None:
@@ -282,6 +284,20 @@ class BlenderEngine(Engine):
         composite_files(ctx, stage, frames, depths.get, warnings, self.name, cams, src_ext=ext, out_fmt=ext)
         files = postprocess(ctx, frames, warnings)  # format conversion, alpha/passes
         return RenderResult(files, warnings, time.time() - t0)
+
+
+def with_fit_fov(camera: dict, post) -> dict:
+    """Auto camera job for render.py frame_auto. Like core resolve_cameras, fit against a narrower view when post
+    lens distortion / chromatic aberration will push content outwards, then render with the real field of view."""
+    if camera.get("mode") != "auto":
+        return camera
+    from ..post import lens_magnification
+
+    mag = lens_magnification(post)
+    if mag <= 1:
+        return camera
+    fov = camera.get("fovDeg", 35)
+    return {**camera, "fitFovDeg": math.degrees(2 * math.atan(math.tan(math.radians(fov) / 2) / mag))}
 
 
 def _scratch(ctx: RenderContext, name: str) -> Path:
