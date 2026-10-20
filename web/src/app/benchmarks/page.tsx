@@ -4,6 +4,7 @@ import { SiteHeader } from "@/components/site-header";
 import { PageToc, type TocItem } from "@/components/page-toc";
 import { DataTable, Legend, LineChart, MultiDot, StatTile, VIZ_STYLE, type SeriesSpec } from "@/components/benchmarks/charts";
 import { CompareSlider, CompareTabs } from "@/components/benchmarks/compare";
+import { loadAgentBench, type AgentRun } from "@/lib/agent-bench";
 import {
   ASSUMPTIONS,
   HOURLY,
@@ -33,8 +34,21 @@ const SETUP_STEPS = [
   { name: "Render farm", steps: ["Create an account and top up", "Install the farm's uploader/plugin", "Package and upload the project", "Wait in the queue, download frames"] },
 ];
 
+const AGENT_SERIES: Record<string, SeriesSpec> = {
+  "claude-bare": { id: "claude-bare", label: "Claude Code, bare", color: "var(--viz-s2)", shape: "square" },
+  "claude-renda": { id: "claude-renda", label: "Claude Code + Renda", color: "var(--viz-s1)", shape: "circle" },
+  "pi-bare": { id: "pi-bare", label: "pi, bare", color: "var(--viz-s4)", shape: "triangle" },
+  "pi-renda": { id: "pi-renda", label: "pi + Renda", color: "var(--viz-s3)", shape: "diamond" },
+};
+const AGENT_NAME: Record<string, string> = { claude: "Claude Code", pi: "pi" };
+const TASK_LABEL: Record<string, string> = {
+  still: "Product still (.glb)", step: "STEP part", turntable: "3 s turntable (.usdz)", bake: "Bake lighting → .glb", splat: "Mesh → splat",
+};
+const VERDICT: Record<AgentRun["verdict"], string> = { success: "✓ done", partial: "◐ partial", fail: "✕ failed", unjudged: "?" };
+
 const TOC: TocItem[] = [
   { id: "summary", label: "Summary" },
+  { id: "agents", label: "Agents ± Renda" },
   { id: "setup", label: "Steps to first render" },
   { id: "cost", label: "Cost per job" },
   { id: "volume", label: "Monthly cost" },
@@ -128,6 +142,7 @@ const OPTIONS: { name: string; price: string; billing: string; setup: string; id
 ];
 
 export default function BenchmarksPage() {
+  const ab = loadAgentBench();
   const still = JOB_COSTS[0];
   const stillVm = still.values.vm!;
   const stillFarm = still.values.farm!;
@@ -169,6 +184,85 @@ export default function BenchmarksPage() {
               <StatTile label="Cost of a still vs that VM" value={`${times(stillRenda, stillVm)} cheaper`} note={`${usd(stillRenda)} vs ${usd(stillVm)} — billed per second, nothing idle`} />
             </div>
           </header>
+
+          {ab && (
+            <Section
+              id="agents"
+              title="Coding agents with and without Renda"
+              intro={
+                <>
+                  The same {ab.tasks.length} tasks given to {[...new Set(ab.groups.map((g) => AGENT_NAME[g.agent] ?? g.agent))].join(" and ")}, unattended, from an
+                  empty folder with only the input file — once <em>bare</em> (shell, file tools, network; Blender is installed on the machine) and once
+                  with Renda&apos;s skills and MCP/CLI. One run per cell, <BasisTag basis="measured" />, {ab.date}. Every run is logged in{" "}
+                  <a href={`https://github.com/vochsel/renda/blob/main/${ab.file}`} className="underline underline-offset-2">{ab.file}</a>; the harness and
+                  prompts are in <a href="https://github.com/vochsel/renda/tree/main/bench/agents" className="underline underline-offset-2">bench/agents</a>.
+                </>
+              }
+            >
+              <div className="grid gap-3 sm:grid-cols-2">
+                {[...new Set(ab.groups.map((g) => g.agent))].map((agent) => {
+                  const bare = ab.groups.find((g) => g.agent === agent && g.condition === "bare");
+                  const renda = ab.groups.find((g) => g.agent === agent && g.condition === "renda");
+                  if (!bare || !renda) return null;
+                  return (
+                    <StatTile
+                      key={agent}
+                      label={`${AGENT_NAME[agent] ?? agent} (${renda.model}) — tasks done`}
+                      value={`${renda.successes}/${renda.runs} with Renda · ${bare.successes}/${bare.runs} bare`}
+                      note={`median ${secs(renda.medianWall)} vs ${secs(bare.medianWall)} · agent ${usd(renda.agentCost)} vs ${usd(bare.agentCost)} · Renda renders ${usd(renda.rendaCost)}`}
+                    />
+                  );
+                })}
+              </div>
+              <div className="mt-8">
+                <Legend series={Object.values(AGENT_SERIES).filter((sr) => ab.groups.some((g) => `${g.agent}-${g.condition}` === sr.id))} />
+                <div className="mt-4">
+                  <MultiDot
+                    rows={ab.tasks.map((t) => ({
+                      label: TASK_LABEL[t] ?? t,
+                      values: Object.fromEntries(ab.runs.filter((r) => r.task === t).map((r) => [`${r.agent}-${r.condition}`, r.wall_seconds])),
+                    }))}
+                    series={Object.values(AGENT_SERIES).filter((sr) => ab.groups.some((g) => `${g.agent}-${g.condition}` === sr.id))}
+                    fmt="sec"
+                    ariaLabel="Wall time per task for each agent with and without Renda, log scale"
+                  />
+                </div>
+              </div>
+              <DataTable
+                head={["Task", "Agent", "Condition", "Result", "Wall", "Tool calls", "Agent cost", "Renda cost", "Notes"]}
+                rows={ab.runs.map((r) => [
+                  TASK_LABEL[r.task] ?? r.task,
+                  AGENT_NAME[r.agent] ?? r.agent,
+                  r.condition === "renda" ? "+ Renda" : "bare",
+                  VERDICT[r.verdict],
+                  `${secs(r.wall_seconds)}${r.killed ? ` (${r.killed})` : ""}`,
+                  r.tool_calls ?? "–",
+                  usd(r.agent_cost_usd ?? 0),
+                  r.condition === "renda" ? usd(r.renda_cost_usd) : "–",
+                  r.notes || "",
+                ])}
+              />
+              <div className="mt-10 grid gap-x-8 gap-y-10 sm:grid-cols-2">
+                {ab.tasks.map((t) => {
+                  const items = ab.runs
+                    .filter((r) => r.task === t && r.thumb)
+                    .map((r) => ({ src: r.thumb!, label: `${AGENT_NAME[r.agent] ?? r.agent}${r.condition === "renda" ? " + Renda" : ", bare"}`, meta: `${VERDICT[r.verdict]} · ${secs(r.wall_seconds)}` }));
+                  const note =
+                    t === "bake"
+                      ? "Each baked GLB in model-viewer, same camera — how people will view it."
+                      : t === "splat"
+                        ? "Each splat previewed with the same camera, assuming the common COLMAP axis convention."
+                        : undefined;
+                  return items.length ? <CompareTabs key={t} items={items} width={480} height={360} title={TASK_LABEL[t] ?? t} note={note} /> : null;
+                })}
+              </div>
+              <p className="text-muted-foreground mt-6 text-[11px]">
+                Caveats: one run per cell, so a task or two either way is noise. The machine already had Blender installed, which helps the bare
+                runs. Agent cost is what each CLI reports for its own model calls; Renda cost is the billed render time of the jobs each run created
+                (inputs carry a per-run nonce, so no result-cache hits). pi has no MCP support, so pi + Renda uses the skills and the CLI.
+              </p>
+            </Section>
+          )}
 
           <Section id="setup" title="Steps to a first render" intro="What it takes to go from a .glb, .blend or .step on disk to an image.">
             <div className="grid gap-6 text-sm sm:grid-cols-2 lg:grid-cols-4">

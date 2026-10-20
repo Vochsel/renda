@@ -1,0 +1,22 @@
+{
+  "still-claude-bare": {"verdict": "success", "notes": "Wrote its own Blender script (Cycles); clean product shot"},
+  "still-claude-renda": {"verdict": "success", "notes": "Draft then final Cycles render via the CLI"},
+  "still-pi-bare": {"verdict": "success", "notes": "Own Blender script; gold material renders nearly black"},
+  "still-pi-renda": {"verdict": "success", "notes": "CLI render"},
+  "step-claude-bare": {"verdict": "success", "notes": "Converted STEP itself; part colours lost (all grey)"},
+  "step-claude-renda": {"verdict": "success", "notes": "Part colours kept"},
+  "step-pi-bare": {"verdict": "success", "notes": "Converted STEP itself, colours kept"},
+  "step-pi-renda": {"verdict": "success", "notes": "Part colours kept"},
+  "turntable-claude-bare": {"verdict": "success", "notes": "3.0 s, rotates"},
+  "turntable-claude-renda": {"verdict": "success", "notes": "3.0 s, rotates"},
+  "turntable-pi-bare": {"verdict": "success", "notes": "3.0 s, rotates"},
+  "turntable-pi-renda": {"verdict": "success", "notes": "3.0 s, rotates"},
+  "bake-claude-bare": {"verdict": "success", "notes": "Cycles bake to per-object textures, unlit; shadows baked"},
+  "bake-claude-renda": {"verdict": "success", "notes": "Unlit atlas bake; shadows and bounce light baked"},
+  "bake-pi-bare": {"verdict": "success", "notes": "Cycles bake; small black artefacts at the table legs"},
+  "bake-pi-renda": {"verdict": "partial", "notes": "Chose lightmap mode: lighting stored as a Renda lightmap extra that standard glTF viewers ignore, so it displays unbaked. Rerun: the first attempt reused another run's job after its own call hit pi's 120 s tool timeout"},
+  "splat-claude-bare": {"verdict": "success", "notes": "Surface-sampled Gaussians, colours only (no lighting); written Y-up, so COLMAP-convention viewers show it upside down"},
+  "splat-claude-renda": {"verdict": "success", "notes": "Standard bake: trained, lighting and reflections baked"},
+  "splat-pi-bare": {"verdict": "success", "notes": "Surface-sampled Gaussians (50k), colours only; written Y-up (upside down in COLMAP-convention viewers)"},
+  "splat-pi-renda": {"verdict": "success", "notes": "Fast preset: surface Gaussians, colours only"}
+}
