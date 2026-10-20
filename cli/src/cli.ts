@@ -70,7 +70,8 @@ Render
                bake lighting into the textures and download a .glb   (--glb: plain conversion, no bake)
                [--frames a-b] [--format png|mp4|…] [-o dir] [--no-wait] [--max-minutes N] [--local]
                [--texture "material=/Wood.*/i,slot=baseColor,scale=4:./oak.jpg"]  (repeatable; any image or video)
-  renda splat <file|pkg> [--preset fast|standard|high] [--format ply|spz|splat] [--views N] [--steps N]
+  renda splat <file|pkg> [--preset fast|standard|high] [--format spz|ply|splat] [--views N] [--steps N]
+        [--coverage auto|sphere|hemisphere|orbit] [--fan-out | --no-fan-out]
                [--engine …] [--dataset] [--local]   bake any 3D scene into a Gaussian splat, lighting included
   renda estimate <file|pkg>                  time + cost before rendering
   renda jobs [id] [--cancel] [--download dir]
@@ -366,7 +367,7 @@ const COMMANDS: Record<string, Handler> = {
   async splat(ctx, [file]) {
     if (!file) throw new UsageError("usage: renda splat <file|package.renda.json> [--preset fast|standard|high] [--format ply|spz|splat]");
     if (bool(ctx.flags, "local")) return runLocal(ctx, file, "splat");
-    const fmt = str(ctx.flags, "format") ?? "ply";
+    const fmt = str(ctx.flags, "format") ?? "spz";
     if (!["ply", "spz", "splat"].includes(fmt)) throw new UsageError("--format must be ply, spz or splat");
     const { format: _fmt, engine: _engine, ...rest } = ctx.flags;
     const { pkg, baseDir } = await buildPackage(ctx, file, (p) => {
@@ -378,6 +379,9 @@ const COMMANDS: Record<string, Handler> = {
       }
       if (str(ctx.flags, "engine")) sb.engine = str(ctx.flags, "engine"); // the engine that renders the training views
       if (bool(ctx.flags, "dataset")) sb.dataset = true;
+      if (str(ctx.flags, "coverage")) sb.coverage = str(ctx.flags, "coverage");
+      if (bool(ctx.flags, "fan-out")) sb.fanOut = true;
+      if (bool(ctx.flags, "no-fan-out")) sb.fanOut = false;
       p.output = { format: "splat", splatFormat: fmt, splatBake: sb };
       delete p.animation;
     }, rest);

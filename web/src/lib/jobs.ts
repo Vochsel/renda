@@ -5,7 +5,7 @@ import type { JobOutput } from "./db/schema";
 import { appUrl, env, envOptional } from "./env";
 import { ApiError } from "./errors";
 import { assertCanRender, consumeFreeSeconds, reportMeter, splitUsage } from "./billing";
-import { estimateHyperframes, estimateScene, type Priority } from "./estimate";
+import { estimateHyperframes, estimatePriorities, estimateScene, type Priority } from "./estimate";
 import { flattenForOrg } from "./layers";
 import { parseJobPackage } from "./packages";
 import { ensureVerifiedAssets } from "./assets";
@@ -96,6 +96,12 @@ export type SubmitInput = {
 
 export function estimateFor(parsed: ReturnType<typeof parseJobPackage>, priority: Priority) {
   return parsed.kind === "scene" ? estimateScene(parsed.pkg, priority) : estimateHyperframes(parsed.pkg);
+}
+
+/** estimateFor + cost/wall ranges for every priority (the /estimate API response). */
+export function estimateWithPriorities(parsed: ReturnType<typeof parseJobPackage>, priority: Priority) {
+  const e = estimateFor(parsed, priority);
+  return parsed.kind === "scene" ? { ...e, priorities: estimatePriorities(parsed.pkg) } : e;
 }
 
 export async function submitJob(input: SubmitInput): Promise<Job> {

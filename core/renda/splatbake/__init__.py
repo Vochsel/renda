@@ -32,14 +32,17 @@ from ..ir.stage import Stage
 from ..spec import RendaPackage, SplatBake
 
 # Defaults per preset. views=0 → no rendering/training (direct conversion).
+# Steps are an upper bound: training stops early once held-out PSNR plateaus. Mesh-initialised
+# Gaussians with frozen positions for the first FREEZE_STEPS converge in a few thousand steps.
 PRESETS: dict[str, dict] = {
     "fast": {"views": 0, "resolution": 0, "steps": 0, "sh_degree": 0, "init_points": 300_000,
              "max_gaussians": 300_000, "train_hardware": "cpu"},
-    "standard": {"views": 96, "resolution": 768, "steps": 7000, "sh_degree": 2, "init_points": 200_000,
-                 "max_gaussians": 600_000, "train_hardware": "gpu-l4"},
-    "high": {"views": 200, "resolution": 1024, "steps": 30000, "sh_degree": 3, "init_points": 400_000,
+    "standard": {"views": 96, "resolution": 768, "steps": 6000, "sh_degree": None, "init_points": 200_000,
+                 "max_gaussians": 450_000, "train_hardware": "gpu-l4"},
+    "high": {"views": 200, "resolution": 1024, "steps": 15000, "sh_degree": None, "init_points": 400_000,
              "max_gaussians": 2_000_000, "train_hardware": "gpu-l40s"},
 }
+FREEZE_STEPS = 1000  # mesh-initialised positions are exact: optimise colour/opacity/shape first
 VIEW_FOV_DEG = 40.0
 HOLDOUT_EVERY = 8  # every 8th view is held out for PSNR/SSIM
 FAST_ENGINE = "splatbake"  # pseudo-engine: direct conversion on CPU
@@ -60,6 +63,16 @@ class BakeSettings:
     splat_format: str
     train_hardware: str
     seed: int = 0
+    # explicit training cameras ([{position, target, up?, fovDeg}]) instead of the automatic rig
+    cameras: list | None = None
+    # engine=auto for the views: Eevee for diffuse scenes, Cycles when glossy/glass/emissive (decided once the
+    # scene is loaded; the planner routes and estimates as Cycles, both run in the Blender image)
+    view_engine_auto: bool = False
+    fan_out: str | bool = "auto"
+    # planner decision: render the views inside the training container (no chunk fan-out)
+    single_container: bool = False
+    # fanned out: the trainer starts as soon as the first views land on the shared Volume
+    stream: bool = False
 
     @property
     def direct(self) -> bool:
@@ -73,28 +86,95 @@ class BakeSettings:
         return cls(**d)
 
 
+SH_AUTO = -1  # sh_degree placeholder: 3 for glossy scenes, 1 otherwise (decided from the loaded scene)
+
+
 def resolve_settings(pkg: RendaPackage) -> BakeSettings:
     sb = pkg.output.splatBake or SplatBake()
     p = PRESETS[sb.preset]
-    views = sb.views if sb.views is not None else p["views"]
-    if sb.preset == "fast" and sb.views is None:
+    cameras = [c.model_dump() for c in sb.cameras] if sb.cameras else None
+    explicit_views = isinstance(sb.views, int) and not isinstance(sb.views, bool)
+    if cameras:
+        views = len(cameras)
+    elif explicit_views:
+        views = int(sb.views)
+    else:
+        views = p["views"]
+    if sb.preset == "fast" and not cameras and not explicit_views:
         views = 0
     max_g = sb.maxGaussians or p["max_gaussians"]
+    sh = sb.shDegree if sb.shDegree is not None else p["sh_degree"]
+    if views == 0:
+        sh = 0 if sh is None else sh
     return BakeSettings(
         preset=sb.preset,
         views=views,
         resolution=sb.resolution or p["resolution"] or 768,
-        steps=sb.steps if sb.steps is not None else p["steps"],
-        sh_degree=sb.shDegree if sb.shDegree is not None else p["sh_degree"],
-        init_points=min(p["init_points"], max_g),
+        steps=sb.steps if sb.steps is not None else (p["steps"] or PRESETS["standard"]["steps"]),
+        sh_degree=SH_AUTO if sh is None else sh,
+        init_points=min(p["init_points"] or PRESETS["standard"]["init_points"], max_g),
         max_gaussians=max_g,
         engine=sb.engine,
         coverage=sb.coverage,
         dataset=sb.dataset,
-        splat_format=pkg.output.splatFormat or "ply",
-        train_hardware=p["train_hardware"] if views else "cpu",
+        splat_format=pkg.output.splatFormat or "spz",
+        train_hardware=(p["train_hardware"] if p["train_hardware"] != "cpu" else "gpu-l4") if views else "cpu",
         seed=pkg.render.seed,
+        cameras=cameras,
+        view_engine_auto=sb.engine == "auto",
+        fan_out=sb.fanOut,
     )
+
+
+# ---------------------------------------------------------------------------- scene analysis
+
+
+def material_is_glossy(mat) -> bool:
+    """Materials whose look depends on the view (reflections, refraction) or that emit light: these
+    need Cycles for the views and higher-order SH in the splat."""
+    if mat is None or getattr(mat, "unlit", False):
+        return False
+    return (mat.metallic >= 0.5 or mat.roughness < 0.35 or mat.transmission > 0.1 or mat.opacity < 0.95
+            or mat.emission_strength > 0)
+
+
+def glossy_fraction(stage: Stage) -> float:
+    """Share of surface area covered by view-dependent materials."""
+    total = glossy = 0.0
+    for m in stage.meshes:
+        if m.indices is None or len(m.indices) == 0:
+            continue
+        pts = m.world_points() if hasattr(m, "world_points") else m.points
+        t = pts[np.asarray(m.indices, dtype=np.int64)]
+        a = float((0.5 * np.linalg.norm(np.cross(t[:, 1] - t[:, 0], t[:, 2] - t[:, 0]), axis=1)).sum())
+        total += a
+        if material_is_glossy(stage.materials.get(m.material) if m.material else None):
+            glossy += a
+    return glossy / total if total else 0.0
+
+
+GLOSSY_SCENE = 0.03  # ≥ 3% of the surface glossy/glass/emissive → treat the scene as view-dependent
+
+
+def adapt_to_scene(settings: BakeSettings, stage: Stage) -> tuple[BakeSettings, list[str]]:
+    """Resolve the scene-dependent choices (view engine, SH degree). Deterministic, so the view chunks
+    and the trainer (separate containers) agree."""
+    from dataclasses import replace
+
+    notes: list[str] = []
+    gf = glossy_fraction(stage)
+    glossy = gf >= GLOSSY_SCENE
+    if settings.sh_degree == SH_AUTO:
+        # degree 3 has 16 coefficients per colour: worth it for hero (high) bakes of shiny scenes; degree 2
+        # captures most highlights at 60% of the size and converges within the standard step budget
+        settings = replace(settings, sh_degree=(3 if settings.preset == "high" else 2) if glossy else 1)
+    if settings.view_engine_auto and settings.engine in ("blender-cycles", "blender-eevee"):
+        engine = "blender-cycles" if glossy else "blender-eevee"
+        if engine != settings.engine:
+            settings = replace(settings, engine=engine)
+        notes.append(f"splat bake: views rendered with {engine} ({gf:.0%} of the surface is glossy/glass/emissive; "
+                     f"{'path tracing for reflections' if glossy else 'diffuse scene, rasterised for speed'})")
+    return settings, notes
 
 
 def view_package(pkg: RendaPackage, settings: BakeSettings) -> RendaPackage:
@@ -103,6 +183,11 @@ def view_package(pkg: RendaPackage, settings: BakeSettings) -> RendaPackage:
     data["render"] = {**data.get("render", {}), "resolution": [settings.resolution, settings.resolution]}
     if settings.engine != "auto":
         data["render"]["engine"] = settings.engine
+    # Training averages 90+ views and the splat smooths sensor noise anyway: denoised low-spp views
+    # (draft) train as well as clean ones for a fraction of the render time.
+    if "samples" not in data["render"] and data["render"].get("quality") != "final":
+        data["render"]["quality"] = "draft"
+        data["render"]["denoise"] = True
     data["output"] = {"format": "png", "transparent": True, "passes": ["beauty"]}
     data.pop("animation", None)
     data["render"].pop("motionBlur", None)
@@ -155,12 +240,58 @@ def _fibonacci_dirs(n: int, up: np.ndarray, min_elev_deg: float, max_elev_deg: f
     return local[:, :1] * a + local[:, 1:2] * b + local[:, 2:3] * up
 
 
-def camera_rig(stage: Stage, settings: BakeSettings, surface_points: np.ndarray | None = None) -> list[ResolvedCamera]:
-    """Cameras covering the scene: ~70% on a far shell that frames the whole bounding sphere, ~30%
-    close-ups at 0.55x the distance aimed at surface samples (detail + occluded regions).
+def _explicit_cameras(stage: Stage, settings: BakeSettings) -> list[ResolvedCamera]:
+    up_default = stage.up_vector().astype(float)
+    lo, hi = stage.bounds()
+    span = max(float(np.linalg.norm(hi - lo)), 1e-3)
+    cams = []
+    for c in settings.cameras or []:
+        pos = np.asarray(c["position"], float)
+        tgt = np.asarray(c["target"], float)
+        up = np.asarray(c.get("up") or up_default, float)
+        d = float(np.linalg.norm(tgt - pos)) or span
+        cams.append(ResolvedCamera(pos, tgt, up, float(c.get("fovDeg") or VIEW_FOV_DEG), near=max(d * 0.005, 1e-4),
+                                   far=d + span * 3))
+    return cams
 
-    coverage: sphere (all elevations), hemisphere (5°..85° above the ground), auto (−30°..90°: objects
-    usually rest on something, but views from slightly below catch overhangs)."""
+
+def _coverage_targets(samples: "SurfaceSamples", n: int, seed: int) -> tuple[np.ndarray, np.ndarray]:
+    """Close-up targets placed by coverage and importance: farthest-point sampling over surface samples
+    (position + normal), weighted towards detailed (normals vary within a voxel) and glossy regions."""
+    pts, nrm = samples.points.astype(float), samples.normals.astype(float)
+    lo, hi = pts.min(0), pts.max(0)
+    span = max(float(np.linalg.norm(hi - lo)), 1e-6)
+    cell = span / 24
+    keys = np.floor((pts - lo) / cell).astype(np.int64)
+    _, inv = np.unique(keys, axis=0, return_inverse=True)
+    inv = inv.reshape(-1)
+    sums = np.zeros((inv.max() + 1, 3))
+    np.add.at(sums, inv, nrm)
+    counts = np.bincount(inv).astype(float)[:, None]
+    detail = 1.0 - np.linalg.norm(sums / counts, axis=1)[inv]  # 0 flat … 1 normals cancel
+    weight = 1.0 + 3.0 * detail + 2.0 * samples.glossy.astype(float)
+    feat = np.concatenate([(pts - lo) / span, nrm * 0.35], axis=1)
+    rng = np.random.default_rng(seed)
+    chosen = [int(rng.choice(len(pts), p=weight / weight.sum()))]
+    dist = np.full(len(pts), np.inf)
+    for _ in range(1, min(n, len(pts))):
+        dist = np.minimum(dist, np.linalg.norm(feat - feat[chosen[-1]], axis=1))
+        chosen.append(int(np.argmax(dist * weight)))
+    idx = np.array(chosen)
+    return pts[idx], nrm[idx]
+
+
+def camera_rig(stage: Stage, settings: BakeSettings, samples: "SurfaceSamples | None" = None) -> list[ResolvedCamera]:
+    """Training cameras.
+
+    - explicit `cameras` are used as given;
+    - orbit: one ring at 20° elevation framing the bounds;
+    - sphere/hemisphere/auto: a far Fibonacci shell framing everything (~55%) plus close-ups (~45%)
+      placed by surface coverage (see `_coverage_targets`), looking at the surface along its normal so
+      flat faces, crevices and glossy parts each get a dedicated view. auto spans −30°..90° elevation
+      (objects usually rest on something), hemisphere 5°..85°, sphere everything."""
+    if settings.cameras:
+        return _explicit_cameras(stage, settings)
     n = settings.views
     up = stage.up_vector().astype(float)
     up /= np.linalg.norm(up) or 1
@@ -169,29 +300,44 @@ def camera_rig(stage: Stage, settings: BakeSettings, surface_points: np.ndarray 
     radius = max(float(np.linalg.norm(hi - lo)) / 2, 1e-3)
     fov = VIEW_FOV_DEG
     dist = radius / math.sin(math.radians(fov) / 2) * 1.05
+    near_plane = max(dist - radius * 1.5, dist * 0.01)
+    if settings.coverage == "orbit":
+        return [ResolvedCamera(center + d * dist, center.copy(), up.copy(), fov, near=near_plane, far=dist + radius * 3)
+                for d in _fibonacci_dirs(n, up, 20.0, 20.0 + 1e-6)]
     min_elev, max_elev = {"sphere": (-90.0, 90.0), "hemisphere": (5.0, 85.0), "auto": (-30.0, 90.0)}[settings.coverage]
-
-    n_far = n if surface_points is None or len(surface_points) == 0 else max(int(round(n * 0.7)), min(n, 8))
+    have_samples = samples is not None and len(samples.points) > 0
+    n_far = n if not have_samples else max(int(round(n * 0.55)), min(n, 8))
     n_near = n - n_far
     cams: list[ResolvedCamera] = []
-    near_plane = max(dist - radius * 1.5, dist * 0.01)
     for d in _fibonacci_dirs(n_far, up, min_elev, max_elev):
         cams.append(ResolvedCamera(center + d * dist, center.copy(), up.copy(), fov, near=near_plane, far=dist + radius * 3))
     if n_near:
-        rng = np.random.default_rng(settings.seed + 7)
-        targets = surface_points[rng.choice(len(surface_points), size=n_near, replace=len(surface_points) < n_near)]
-        for d, t in zip(_fibonacci_dirs(n_near, up, min_elev, max_elev), targets):
-            # look at the surface point from outside the object along the rig direction
-            pos = t + d * dist * 0.55
-            cams.append(ResolvedCamera(pos, t.astype(float), up.copy(), fov, near=dist * 0.005, far=dist * 0.55 + radius * 3))
+        targets, normals = _coverage_targets(samples, n_near, settings.seed + 7)
+        sin_min = math.sin(math.radians(min_elev))
+        for t, nn in zip(targets, normals):
+            out = t - center
+            out = out / (np.linalg.norm(out) or 1)
+            d = nn * 0.75 + out * 0.25  # mostly along the surface normal, biased outwards
+            d = d / (np.linalg.norm(d) or 1)
+            if float(d @ up) < sin_min:  # respect the coverage band (e.g. no views from under the floor)
+                d = d - up * (float(d @ up) - sin_min)
+                d = d / (np.linalg.norm(d) or 1)
+            pos = t + d * dist * 0.45
+            view_up = up if abs(float(d @ up)) < 0.98 else np.cross(d, np.array([1.0, 0, 0]))
+            cams.append(ResolvedCamera(pos, t.astype(float), view_up.astype(float), fov, near=dist * 0.005,
+                                       far=dist * 0.45 + radius * 3))
+    # shared clip planes: some engines build one sensor per chunk from its first camera
+    near, far = min(c.near for c in cams), max(c.far for c in cams)
+    for c in cams:
+        c.near, c.far = near, far
     return cams
 
 
 def bake_rig(stage: Stage, settings: BakeSettings) -> dict[int, ResolvedCamera]:
     """The rig keyed by frame number (1..views). Deterministic for a given stage + settings, so view
     chunks and the trainer (separate containers) agree on every pose without passing them around."""
-    targets = sample_surface(stage, 4096, settings.seed + 1).points
-    return {i + 1: c for i, c in enumerate(camera_rig(stage, settings, targets))}
+    samples = None if settings.cameras else sample_surface(stage, 6000, settings.seed + 1)
+    return {i + 1: c for i, c in enumerate(camera_rig(stage, settings, samples))}
 
 
 def view_image_name(frame: int) -> str:
@@ -230,6 +376,7 @@ class SurfaceSamples:
     normals: np.ndarray  # (N,3) unit
     colors: np.ndarray  # (N,3) display sRGB 0..1
     radius: np.ndarray  # (N,) tangent radius covering the sample's share of area
+    glossy: np.ndarray | None = None  # (N,) bool: sample lies on a view-dependent material
 
 
 def sample_surface(stage: Stage, n: int, seed: int = 0) -> SurfaceSamples:
@@ -256,7 +403,7 @@ def sample_surface(stage: Stage, n: int, seed: int = 0) -> SurfaceSamples:
     areas = [0.5 * np.linalg.norm(np.cross(t[:, 1] - t[:, 0], t[:, 2] - t[:, 0]), axis=1) for t in tris_p]
     total = float(sum(a.sum() for a in areas)) or 1.0
     rng = np.random.default_rng(seed)
-    out_p, out_n, out_c = [], [], []
+    out_p, out_n, out_c, out_g = [], [], [], []
     for t, tn, tuv, tc, mat, a in zip(tris_p, tris_n, tris_uv, tris_c, mats, areas):
         k = int(round(n * a.sum() / total))
         if k == 0 or a.sum() == 0:
@@ -290,9 +437,11 @@ def sample_surface(stage: Stage, n: int, seed: int = 0) -> SurfaceSamples:
         out_p.append(p)
         out_n.append(nn)
         out_c.append(_linear_to_srgb(np.clip(col, 0, 1)))
+        out_g.append(np.full(k, material_is_glossy(mat)))
     points = np.concatenate(out_p).astype(np.float32)
     radius = np.full(len(points), math.sqrt(total / max(len(points), 1) / math.pi) * 1.3, dtype=np.float32)
-    return SurfaceSamples(points, np.concatenate(out_n).astype(np.float32), np.concatenate(out_c).astype(np.float32), radius)
+    return SurfaceSamples(points, np.concatenate(out_n).astype(np.float32), np.concatenate(out_c).astype(np.float32), radius,
+                          np.concatenate(out_g))
 
 
 def _srgb_to_linear(x: np.ndarray) -> np.ndarray:

@@ -7,7 +7,7 @@ import re
 import shutil
 import tempfile
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .engines import RenderContext, RenderResult, available_engines, engine_versions, get_engine
@@ -82,12 +82,15 @@ def _splat_bake_frames(plan: RenderPlan, pkg: RendaPackage, asset_paths: dict[st
     if plan.engine == splatbake.FAST_ENGINE:
         files, w = splatbake.direct_bake(stage, pkg, settings, out_dir)
         return RenderResult(files, warnings + w, 0.0)
+    settings, notes = splatbake.adapt_to_scene(settings, stage)  # Cycles vs Eevee from the materials
     rig = splatbake.bake_rig(stage, settings)
     vpkg = splatbake.view_package(pkg, settings)
+    vplan = replace(plan, engine=settings.engine) if settings.engine != plan.engine else plan
     with override_cameras(rig):
-        result = get_engine(plan.engine).render(RenderContext(plan, vpkg, asset_paths, out_dir, cache_dir), frames)
+        result = get_engine(vplan.engine).render(RenderContext(vplan, vpkg, asset_paths, out_dir, cache_dir), frames)
     beauty = {splatbake.view_image_name(f) for f in frames}
     result.files = [Path(f) for f in result.files if Path(f).name in beauty]  # views only; no passes
+    result.warnings += [n for n in notes if n not in result.warnings]
     return result
 
 
@@ -169,7 +172,8 @@ def _run_local_splat_bake(p: RenderPlan, pkg: RendaPackage, asset_paths, out_dir
     cache_dir = Path(tempfile.mkdtemp(prefix="renda-work-"))
     views_dir = cache_dir / "views"
     done = 0
-    for chunk in p.chunks:
+    # single-container bakes render their views inside train_bake (the same path the cloud trainer uses)
+    for chunk in ([] if (p.splat_bake or {}).get("single_container") else p.chunks):
         r = render_frames(p, pkg, asset_paths, views_dir, chunk, cache_dir)
         run.warnings += [w for w in r.warnings if w not in run.warnings]
         done += len(chunk)

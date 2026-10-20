@@ -320,7 +320,9 @@ def _train(task, started: float):
     from renda_worker.pipeline import run_train
 
     _reload_assets()
-    return run_train(task, _deps(task.job_id, task.callback_url, on_new_asset=assets_volume.commit), started=started)
+    deps = _deps(task.job_id, task.callback_url, on_new_asset=assets_volume.commit)
+    deps.refresh_volume = _reload_assets  # streaming: pick up views other containers commit
+    return run_train(task, deps, started=started)
 
 
 @app.function(image=splat_image, gpu=_L4.gpu, secrets=SECRETS,
@@ -389,6 +391,8 @@ def orchestrate(job_body: dict):
         run_chunks=run_chunks,
         run_encode=encode_video.remote,
         run_train=lambda task: TRAIN_FUNCTIONS[task.hardware].remote(task),
+        spawn_train=lambda task: TRAIN_FUNCTIONS[task.hardware].spawn(task),
+        join_train=lambda call: call.get(),
         on_new_asset=assets_volume.commit,
     )
     try:
