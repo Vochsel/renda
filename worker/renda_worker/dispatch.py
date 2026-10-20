@@ -24,6 +24,8 @@ RUNNERS = {
     "l4": "render_chunk_l4",
     "l40s": "render_chunk_l40s",
     "threejs": "render_chunk_threejs",
+    "filament": "render_chunk_filament",  # Google Filament via filly, EGL on Mesa (CPU)
+    "pbrt": "render_chunk_pbrt",          # pbrt-v4, CPU
     "splat-l4": "render_chunk_splat_l4",      # + torch/gsplat: Gaussian splat jobs on GPU
     "splat-l40s": "render_chunk_splat_l40s",
 }
@@ -39,6 +41,8 @@ def needs_blender(engine: str, scene_formats: Iterable[str]) -> bool:
 def runner_for(engine: str, hardware: hw.Hardware, scene_formats: Iterable[str], splats: bool = False) -> str:
     if engine == "threejs":
         return "threejs"  # headless Chromium (Spark renders splats there too)
+    if engine in ("filament", "pbrt"):
+        return engine  # their own CPU images
     if engine == "gsplat" or (splats and hardware is not hw.Hardware.CPU):
         # CUDA splat rasteriser lives in the splat image; CPU splat jobs use core's numpy rasteriser
         return "splat-l40s" if hardware is hw.Hardware.GPU_L40S else "splat-l4"

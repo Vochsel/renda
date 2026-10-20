@@ -25,7 +25,7 @@ SOURCES = {
 }
 ENGINE_SOURCES = [("auto", s) for s in ("glb", "stl", "blend", "splat", "mixed")] + [
     ("blender-cycles", "glb"), ("blender-eevee", "glb"), ("blender-workbench", "stl"),
-    ("mitsuba", "glb"), ("mitsuba", "step"), ("threejs", "glb"), ("gsplat", "splat"),
+    ("mitsuba", "glb"), ("mitsuba", "step"), ("threejs", "glb"), ("gsplat", "splat"), ("filament", "glb"), ("pbrt", "glb"),
 ]
 RESOLUTIONS = [[640, 480], [1920, 1080]]
 QUALITIES = ["draft", "standard", "final"]

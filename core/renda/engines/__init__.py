@@ -10,8 +10,10 @@ from .base import Capabilities, Engine, RenderContext, RenderResult, frame_filen
 @lru_cache(maxsize=1)
 def registry() -> dict[str, Engine]:
     from .blender import BlenderEngine
+    from .filament import FilamentEngine
     from .gsplat import GsplatEngine
     from .mitsuba import MitsubaEngine
+    from .pbrt import PbrtEngine
     from .threejs import ThreeEngine
 
     engines: list[Engine] = [
@@ -21,6 +23,8 @@ def registry() -> dict[str, Engine]:
         MitsubaEngine(),
         ThreeEngine(),
         GsplatEngine(),
+        FilamentEngine(),
+        PbrtEngine(),
     ]
     return {e.name: e for e in engines}
 

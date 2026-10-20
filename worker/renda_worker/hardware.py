@@ -62,6 +62,8 @@ ORCHESTRATE = _tuned("ORCHESTRATE", Shape(gpu=None, cpu_cores=0.25, memory_mib=1
 ENCODE = _tuned("ENCODE", Shape(gpu=None, cpu_cores=4.0, memory_mib=8192, timeout_s=60 * 60, max_containers=100, scaledown_s=15))
 HYPERFRAMES = _tuned("HYPERFRAMES", Shape(gpu=None, cpu_cores=4.0, memory_mib=8192, timeout_s=2 * 60 * 60, max_containers=100, scaledown_s=20))
 THREEJS = _tuned("THREEJS", Shape(gpu=None, cpu_cores=2.0, memory_mib=4096, timeout_s=30 * 60, max_containers=100, scaledown_s=20))
+FILAMENT = _tuned("FILAMENT", Shape(gpu=None, cpu_cores=4.0, memory_mib=8192, timeout_s=30 * 60, max_containers=100, scaledown_s=20))
+PBRT = _tuned("PBRT", Shape(gpu=None, cpu_cores=8.0, memory_mib=16384, timeout_s=60 * 60, max_containers=100, scaledown_s=20))
 
 # GPUs the Blender/Mitsuba L4 runner may fall back to when no L4 is free (cold starts waited 25–166 s for
 # an L4 in testing). Cycles ships kernels for every arch and Dr.Jit JITs per device, so an A10G renders

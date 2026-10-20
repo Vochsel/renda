@@ -8,7 +8,7 @@ import type { HyperframesPackage } from "./packages";
  * (worker/renda_worker/planner.py); the worker's actual metering is what gets billed.
  */
 export type Priority = "economy" | "standard" | "rush";
-type ConcreteEngine = "blender-cycles" | "blender-eevee" | "blender-workbench" | "mitsuba" | "threejs" | "gsplat";
+type ConcreteEngine = "blender-cycles" | "blender-eevee" | "blender-workbench" | "mitsuba" | "threejs" | "gsplat" | "filament" | "pbrt";
 
 export const PRESET_SAMPLES: Record<ConcreteEngine, Record<"draft" | "standard" | "final", number>> = {
   "blender-cycles": { draft: 32, standard: 128, final: 512 },
@@ -17,10 +17,14 @@ export const PRESET_SAMPLES: Record<ConcreteEngine, Record<"draft" | "standard" 
   mitsuba: { draft: 16, standard: 64, final: 256 },
   threejs: { draft: 1, standard: 4, final: 8 },
   gsplat: { draft: 1, standard: 1, final: 1 }, // splats are rasterised once per frame
+  filament: { draft: 1, standard: 2, final: 3 }, // supersampling factor (real-time rasteriser)
+  pbrt: { draft: 16, standard: 64, final: 256 },
 };
 
 /** Seconds per frame on each class: `fixed + perMp * megapixels * sampleFactor`. null = unsupported. */
 const FRAME_COST: Record<ConcreteEngine, Partial<Record<Hardware, { fixed: number; perMpSample: number }>>> = {
+  filament: { cpu: { fixed: 0.3, perMpSample: 0.08 } },
+  pbrt: { cpu: { fixed: 0.5, perMpSample: 0.05 } },
   "blender-cycles": {
     cpu: { fixed: 0.5, perMpSample: 0.04 },
     "gpu-l4": { fixed: 0.3, perMpSample: 0.004 },
@@ -165,7 +169,7 @@ function effectsFactor(pkg: RendaPackage, engine: string): number {
   const mb = pkg.render.motionBlur;
   if (mb) {
     if (engine === "mitsuba") f *= 1.1; // samples split across subframes
-    else if (["blender-workbench", "threejs", "gsplat"].includes(engine)) f *= mb.subframes; // emulated
+    else if (["blender-workbench", "threejs", "gsplat", "filament", "pbrt"].includes(engine)) f *= mb.subframes; // emulated
     else if (engine === "blender-eevee") f *= 2;
     else f *= 1.15;
   }
@@ -260,15 +264,19 @@ const ENGINE_COST: Record<ConcreteEngine, { cpu: number; gpu: number }> = {
   mitsuba: { cpu: 0.8, gpu: 0.7 },
   threejs: { cpu: 0.05, gpu: 0.01 },
   gsplat: { cpu: 40.0, gpu: 0.02 },
+  filament: { cpu: 0.06, gpu: 0.01 },
+  pbrt: { cpu: 0.15, gpu: 0.15 },
 };
 const SPLAT_SECONDS_PER_M: Record<Hardware, number> = { cpu: 150.0, "gpu-l4": 0.18, "gpu-l40s": 0.09 };
 const GSPLAT_HOST_SECONDS_PER_1080P = 1.2;
 const DEFAULT_SPLATS = 1_000_000;
 const ENGINE_LOAD_SECONDS: Record<ConcreteEngine, number> = {
   "blender-cycles": 7.0, "blender-eevee": 5.5, "blender-workbench": 6.0, mitsuba: 4.5, threejs: 5.0, gsplat: 6.0,
+  filament: 4.0, pbrt: 4.0,
 };
 const GPU_ONLY = new Set<ConcreteEngine>(["blender-eevee", "blender-workbench", "gsplat"]);
-const MIN_FRAME_SECONDS: Partial<Record<ConcreteEngine, number>> = { threejs: 0.15, "blender-workbench": 0.2, "blender-eevee": 0.5, gsplat: 0.05 };
+const CPU_ONLY = new Set<ConcreteEngine>(["filament", "pbrt"]); // their worker images are CPU containers
+const MIN_FRAME_SECONDS: Partial<Record<ConcreteEngine, number>> = { filament: 0.3, threejs: 0.15, "blender-workbench": 0.2, "blender-eevee": 0.5, gsplat: 0.05 };
 const DEADLINE: Record<Priority, number> = { economy: 3600, standard: 900, rush: 240 };
 
 function frameSeconds(engine: ConcreteEngine, hw: Hardware, pkg: RendaPackage, samples: number, splats: number | null): number {
@@ -295,6 +303,10 @@ function chooseHardware(engine: ConcreteEngine, pkg: RendaPackage, priority: Pri
   if (GPU_ONLY.has(engine)) {
     if (req === "cpu") warnings.push(`${engine} needs a GPU; ignoring render.hardware=cpu`);
     return priority === "rush" && nFrames > 200 ? "gpu-l40s" : "gpu-l4";
+  }
+  if (CPU_ONLY.has(engine)) {
+    if (req === "gpu") warnings.push(`${engine} runs on CPU containers; ignoring render.hardware=gpu`);
+    return "cpu";
   }
   let candidates: Hardware[] = [...HW];
   if (req === "cpu") candidates = ["cpu"];

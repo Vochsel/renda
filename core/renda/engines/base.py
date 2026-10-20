@@ -52,6 +52,8 @@ PRESETS: dict[str, dict[str, int]] = {
     "mitsuba": {"draft": 16, "standard": 64, "final": 256},
     "threejs": {"draft": 1, "standard": 4, "final": 8},  # MSAA-ish supersampling factor (capped)
     "gsplat": {"draft": 1, "standard": 1, "final": 1},  # rasterised once; quality doesn't change the work
+    "filament": {"draft": 1, "standard": 2, "final": 3},  # supersampling factor (real-time rasteriser)
+    "pbrt": {"draft": 16, "standard": 64, "final": 256},
 }
 
 # Cycles adaptive sampling noise threshold per preset

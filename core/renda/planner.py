@@ -30,6 +30,8 @@ ENGINE_COST: dict[str, dict[str, float]] = {
     "mitsuba": {"cpu": 0.8, "gpu": 0.7},
     "threejs": {"cpu": 0.05, "gpu": 0.01},
     "gsplat": {"cpu": 40.0, "gpu": 0.02},  # CPU = the numpy reference rasteriser
+    "filament": {"cpu": 0.06, "gpu": 0.01},  # real-time rasteriser (EGL; llvmpipe on CPU)
+    "pbrt": {"cpu": 0.15, "gpu": 0.15},  # CPU-only; measured 2026-10-20: 640×480×64 spp ≈ 2 s on 8 cores
 }
 
 # Seconds per million splats per frame for the splat rasteriser (sorting/projection dominate on GPU;
@@ -48,9 +50,11 @@ DEFAULT_SPLATS = 1_000_000
 LOAD_SECONDS: dict[str, float] = {
     "blender-cycles": 7.0, "blender-eevee": 5.5, "blender-workbench": 6.0, "mitsuba": 4.5, "threejs": 5.0,
     "gsplat": 6.0,  # torch + CUDA init + file load
+    "filament": 4.0, "pbrt": 4.0,
 }
 GPU_ONLY = {"blender-eevee", "blender-workbench", "gsplat"}
-MIN_FRAME_SECONDS = {"threejs": 0.15, "blender-workbench": 0.2, "blender-eevee": 0.5, "gsplat": 0.05}
+CPU_ONLY = {"filament", "pbrt"}  # their worker images are CPU containers
+MIN_FRAME_SECONDS = {"filament": 0.3, "threejs": 0.15, "blender-workbench": 0.2, "blender-eevee": 0.5, "gsplat": 0.05}
 
 # Fan-out economics. Each extra container costs its load overhead o (start + scene load, billed);
 # N containers on W seconds of work: cost ≈ N·o + W, wall ≈ o + W/N.
@@ -193,6 +197,10 @@ def choose_hardware(engine: str, pkg: RendaPackage, priority: str, samples: int,
         if req == "cpu":
             warnings.append(f"{engine} needs a GPU; ignoring render.hardware=cpu")
         return "gpu-l40s" if priority == "rush" and n_frames > 200 else "gpu-l4"
+    if engine in CPU_ONLY:
+        if req == "gpu":
+            warnings.append(f"{engine} runs on CPU containers; ignoring render.hardware=gpu")
+        return "cpu"
     candidates = list(HARDWARE)
     if req == "cpu":
         candidates = ["cpu"]

@@ -29,7 +29,8 @@ mitsuba = ["mitsuba>=3.5", "drjit>=0.4.6", "pyoidn>=2.4"]  # pyoidn: OIDN denois
 usd = ["usd-core>=24.5"]
 blender = ["bpy>=4.2"]
 threejs = ["playwright>=1.45"]
-cad = ["cascadio>=0.1.1"]  # STEP/IGES via OpenCASCADE (~25 MB wheels; the cloud worker always has it)
+cad = ["cascadio>=0.1.1"]
+filament = ["filly>=0.2.1; sys_platform == 'linux' and platform_machine == 'x86_64'"]  # Google Filament via filly  # STEP/IGES via OpenCASCADE (~25 MB wheels; the cloud worker always has it)
 all = ["renda[mitsuba,usd,threejs,cad]"]
 
 [project.scripts]

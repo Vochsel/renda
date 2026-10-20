@@ -452,6 +452,20 @@ wheels = [
 ]
 
 [[package]]
+name = "filly"
+version = "0.2.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13'" },
+    { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/95/3c/79a3386ee40da60e4560b0bdaf669d2cb406d87bfd72e5a172182d417900/filly-0.2.1.tar.gz", hash = "sha256:8c5b0bae54c4fff319ffc6a4f72623a4d787abfbb7f897cbc5521ad0bd733c11", size = 6437416 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1d/25/6ebd9ced990b28e11cbd1a3d3b9df37e6dc736e66b01a29085c4674a15bf/filly-0.2.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:81555420b89f6ec40b025d7c0d1cc53405a3655a9de25c8a1dcb9b15cd67e51e", size = 2622077 },
+    { url = "https://files.pythonhosted.org/packages/fd/81/2fcc9159988bafc1241116d498372e12639b4bfa88093ec98e1005ef91b2/filly-0.2.1-cp312-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:6a6eb2929145653772890db30ef80c1f7454d040f7201851c80e426b72d68afe", size = 2619708 },
+]
+
+[[package]]
 name = "greenlet"
 version = "3.5.6"
 source = { registry = "https://pypi.org/simple" }
@@ -1495,6 +1509,9 @@ blender = [
 cad = [
     { name = "cascadio" },
 ]
+filament = [
+    { name = "filly", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+]
 mitsuba = [
     { name = "drjit" },
     { name = "mitsuba" },
@@ -1518,6 +1535,7 @@ requires-dist = [
     { name = "bpy", marker = "extra == 'blender'", specifier = ">=4.2" },
     { name = "cascadio", marker = "extra == 'cad'", specifier = ">=0.1.1" },
     { name = "drjit", marker = "extra == 'mitsuba'", specifier = ">=0.4.6" },
+    { name = "filly", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'filament'", specifier = ">=0.2.1" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "imageio-ffmpeg", specifier = ">=0.5" },
     { name = "lxml", specifier = ">=5" },
