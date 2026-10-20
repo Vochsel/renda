@@ -117,6 +117,43 @@ describe("render", () => {
     expect(t.calls.find((c) => c.method === "POST" && c.url.endsWith("/jobs"))!.body.priority).toBe("rush");
   });
 
+  it("announces the job id + resume hint on stderr before waiting, then NDJSON progress with live cost", async () => {
+    let polls = 0;
+    const route: Route = ({ method, url }) => {
+      if (method === "POST" && url.endsWith("/jobs")) {
+        return { status: 201, json: job({ estimate: { hardware: "gpu-l4", estWallSeconds: [20, 60], estCostUsd: [0.003, 0.01] } }) };
+      }
+      if (url.endsWith("/jobs/job_1")) {
+        polls++;
+        return { json: job(polls < 3 ? { status: "rendering", progress: polls / 3, live: { costUsd: 0.002 * polls } } : { status: "succeeded", progress: 1 }) };
+      }
+    };
+    const t = await setup(route, { creds: { apiKey: "rnd_live_xxxxxxxxxxxxxxxxxxxxxxxx" } });
+    expect(await run(["bake", "https://example.com/a.glb", "-o", join(t.dir, "out")], t.deps)).toBe(0);
+    expect(t.json().job.status).toBe("succeeded"); // stdout: still exactly one JSON document
+    const events = t.err.join("").trim().split("\n").filter((l) => l.startsWith("{")).map((l) => JSON.parse(l));
+    expect(events[0]).toMatchObject({ status: "submitted", id: "job_1", estimate: { estWallSeconds: [20, 60] } });
+    expect(events[0].next[0]).toBe(`renda jobs job_1 --wait -o ${join(t.dir, "out")}`);
+    const progress = events.filter((e) => e.status === "progress");
+    expect(progress[0].liveCostUsd).toBe(0.002);
+    expect(progress.at(-1).jobStatus).toBe("succeeded");
+  });
+
+  it("jobs <id> --wait resumes, downloads to -o, and fails with exit 1 on a failed job", async () => {
+    let polls = 0;
+    const out = { name: "baked.glb", url: "https://r2.test/b.glb", contentType: "model/gltf-binary", bytes: 4 };
+    const t = await setup(({ url }) => {
+      if (url.endsWith("/jobs/job_1")) return { json: job(++polls < 2 ? { status: "rendering" } : { status: "succeeded", progress: 1, outputs: [out] }) };
+      if (url === out.url) return { json: "glb" };
+    }, { creds: { apiKey: "rnd_live_xxxxxxxxxxxxxxxxxxxxxxxx" } });
+    expect(await run(["jobs", "job_1", "--wait", "-o", join(t.dir, "res")], t.deps)).toBe(0);
+    expect(existsSync(join(t.dir, "res", "baked.glb"))).toBe(true);
+    const f = await setup(({ url }) => (url.endsWith("/jobs/job_2") ? { json: job({ id: "job_2", status: "failed", error: "boom" }) } : undefined),
+      { creds: { apiKey: "rnd_live_xxxxxxxxxxxxxxxxxxxxxxxx" } });
+    expect(await run(["jobs", "job_2", "--wait"], f.deps)).toBe(1);
+    expect(f.json().reason).toBe("job_failed");
+  });
+
   it("bake submits a glb package with the bake block (and --glb converts without baking)", async () => {
     const route: Route = ({ method, url }) => {
       if (method === "POST" && url.endsWith("/jobs")) return { status: 201, json: job() };

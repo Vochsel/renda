@@ -34,6 +34,10 @@ def load(path: Path, fmt: str) -> Stage:
         if up:
             stage.up_axis = up
 
+    gl = _gltf_uv_info(path) if fmt == "gltf" else None
+    uv1_for_geom = _assign_uv1(scene, gl) if gl else {}
+    mixed_sets: set[str] = set()
+
     mat_ids: dict[int, str] = {}
     for node in scene.graph.nodes_geometry:
         matrix, geom_name = scene.graph[node]
@@ -51,6 +55,10 @@ def load(path: Path, fmt: str) -> Stage:
                 key = id(visual.material)
                 if key not in mat_ids:
                     m = _convert_material(visual.material, tex_dir, len(mat_ids))
+                    if gl:
+                        props = gl["materials"].get(getattr(visual.material, "name", None)) or {}
+                        m.tex_coord = {k: v for k, v in props.get("tex_coord", {}).items() if getattr(m, k, None)}
+                        m.unlit = m.unlit or props.get("unlit", False)
                     m.name = _unique(m.name, stage.materials)
                     stage.materials[m.name] = m
                     mat_ids[key] = m.name
@@ -70,18 +78,34 @@ def load(path: Path, fmt: str) -> Stage:
         if fmt == "stl":  # STL stores every triangle separately; weld so smoothing can see neighbours
             geom.merge_vertices()
         points, faces = geom.vertices, geom.faces
+        uv1 = uv1_for_geom.get(geom_name)
+        if uv1 is not None and len(uv1) != len(points):
+            uv1 = None
+        both = None if uvs is None or uv1 is None else np.concatenate([uvs, uv1], axis=1)
         cached = geom._cache.cache.get("vertex_normals")
         if cached is not None and len(cached) == len(points) and fmt != "stl":
             normals = np.asarray(cached, dtype=np.float32)
         else:
-            points, faces, normals, uvs = auto_smooth(points, faces, 30.0, uvs)
+            if both is not None:  # smooth both UV sets through the same corner split
+                points, faces, normals, both = auto_smooth(points, faces, 30.0, both)
+            else:
+                points, faces, normals, uvs = auto_smooth(points, faces, 30.0, uvs)
+                if uv1 is not None and len(uv1) != len(points):
+                    uv1 = np.asarray(uv1)[np.asarray(geom.faces).reshape(-1)]
             if colors is not None and len(colors) != len(points):
                 colors = colors[np.asarray(geom.faces).reshape(-1)]
+        if both is not None:
+            uvs, uv1 = both[:, :2], both[:, 2:4]
+        uvs, uvs_alt = _active_uv_set(stage.materials.get(mat_name) if mat_name else None, uvs, uv1, mixed_sets)
         stage.meshes.append(Mesh(
-            name=str(node), points=points, indices=faces, normals=normals, uvs=uvs,
+            name=str(node), points=points, indices=faces, normals=normals, uvs=uvs, uvs_alt=uvs_alt,
             colors=colors, transform=np.asarray(matrix, dtype=np.float64), material=mat_name,
         ))
 
+    if mixed_sets:
+        stage.meta.setdefault("warnings", []).append(
+            f"gltf: materials {sorted(mixed_sets)[:5]} sample textures from different UV sets; "
+            "rendering every texture with the base colour's set")
     if fmt == "gltf":
         _gltf_cameras_lights(path, stage)
     elif fmt == "obj":
@@ -234,6 +258,127 @@ def _collada_up(path: Path) -> str | None:
 
 
 # -- glTF cameras + KHR_lights_punctual (trimesh drops them) ----------------------
+
+
+_TEX_SLOTS = {  # glTF material texture → IR Material field
+    ("pbrMetallicRoughness", "baseColorTexture"): "base_color_tex",
+    ("pbrMetallicRoughness", "metallicRoughnessTexture"): "metallic_roughness_tex",
+    (None, "normalTexture"): "normal_tex",
+    (None, "emissiveTexture"): "emission_tex",
+}
+
+
+def _gltf_uv_info(path: Path) -> dict | None:
+    """What trimesh drops: each texture's texCoord, KHR_materials_unlit, and every primitive's TEXCOORD_1."""
+    try:
+        doc, bin_chunk = _read_gltf(path)
+    except Exception:
+        return None
+    mats = []
+    for m in doc.get("materials", []):
+        tc = {}
+        for (parent, key), field in _TEX_SLOTS.items():
+            t = (m.get(parent) or {}).get(key) if parent else m.get(key)
+            if isinstance(t, dict):
+                tc[field] = int(t.get("texCoord", 0))
+        mats.append({"name": m.get("name"), "tex_coord": tc,
+                     "unlit": "KHR_materials_unlit" in (m.get("extensions") or {})})
+    prims = []
+    for mesh in doc.get("meshes", []):
+        for p in mesh.get("primitives", []):
+            attrs = p.get("attributes", {})
+            if "TEXCOORD_1" not in attrs or "POSITION" not in attrs:
+                continue
+            mi = p.get("material")
+            prims.append({"material": mats[mi]["name"] if mi is not None and mi < len(mats) else None,
+                          "count": doc["accessors"][attrs["POSITION"]]["count"],
+                          "uv1": _flip_v(_read_accessor(doc, bin_chunk, path, attrs["TEXCOORD_1"]))})
+    if not prims and not any(m["tex_coord"] or m["unlit"] for m in mats):
+        return None
+    return {"materials": {m["name"]: m for m in mats}, "prims": prims}
+
+
+def _flip_v(uv: np.ndarray) -> np.ndarray:
+    """glTF V points down; trimesh (and so the IR) flips it on load — match that for TEXCOORD_1."""
+    uv = uv.copy()
+    uv[:, 1] = 1.0 - uv[:, 1]
+    return uv
+
+
+def _assign_uv1(scene, gl: dict) -> dict:
+    """Pair trimesh's geometries with glTF primitives (same material + vertex count, file order)."""
+    queue: dict[tuple, list] = {}
+    for p in gl["prims"]:
+        queue.setdefault((p["material"], p["count"]), []).append(p["uv1"])
+    out = {}
+    for name, geom in scene.geometry.items():
+        mat = getattr(getattr(getattr(geom, "visual", None), "material", None), "name", None)
+        q = queue.get((mat, len(getattr(geom, "vertices", []))))
+        if q:
+            out[name] = q.pop(0)
+    return out
+
+
+def _active_uv_set(mat, uv0, uv1, mixed: set):
+    """(uvs, uvs_alt): the set the material's textures sample becomes Mesh.uvs; the other is kept."""
+    if mat is None or not mat.tex_coord or uv1 is None:
+        return uv0, uv1
+    sets = set(mat.tex_coord.values())
+    want = mat.tex_coord.get("base_color_tex", min(sets))
+    if len(sets) > 1:
+        mixed.add(mat.name)
+    return (uv1, uv0) if want == 1 else (uv0, uv1)
+
+
+def _read_gltf(path: Path) -> tuple[dict, bytes | None]:
+    data = path.read_bytes()
+    if data[:4] != b"glTF":
+        return json.loads(data), None
+    off, doc, bin_chunk = 12, None, None
+    while off + 8 <= len(data):
+        length, kind = struct.unpack_from("<I4s", data, off)
+        chunk = data[off + 8 : off + 8 + length]
+        if kind == b"JSON":
+            doc = json.loads(chunk)
+        elif kind == b"BIN\x00":
+            bin_chunk = chunk
+        off += 8 + length
+    return doc, bin_chunk
+
+
+def _buffer_bytes(doc: dict, bin_chunk: bytes | None, path: Path, i: int) -> bytes:
+    import base64
+
+    buf = doc["buffers"][i]
+    uri = buf.get("uri")
+    if uri is None:
+        return bin_chunk or b""
+    if uri.startswith("data:"):
+        return base64.b64decode(uri.split(",", 1)[1])
+    from urllib.parse import unquote
+
+    return (path.parent / unquote(uri)).read_bytes()
+
+
+_COMPONENTS = {5126: ("<f4", 4), 5121: ("<u1", 1), 5123: ("<u2", 2)}
+
+
+def _read_accessor(doc: dict, bin_chunk: bytes | None, path: Path, idx: int) -> np.ndarray:
+    """A VEC2 accessor (float, or normalized unsigned byte/short) as (count, 2) float32."""
+    acc = doc["accessors"][idx]
+    dtype, size = _COMPONENTS[acc["componentType"]]
+    count = acc["count"]
+    view = doc["bufferViews"][acc["bufferView"]]
+    raw = _buffer_bytes(doc, bin_chunk, path, view["buffer"])
+    start = view.get("byteOffset", 0) + acc.get("byteOffset", 0)
+    stride = view.get("byteStride") or 2 * size
+    rows = np.lib.stride_tricks.as_strided(
+        np.frombuffer(raw, dtype=np.uint8, count=len(raw) - start, offset=start),
+        shape=(count, 2 * size), strides=(stride, 1))
+    out = np.ascontiguousarray(rows).view(dtype).reshape(count, 2).astype(np.float32)
+    if acc["componentType"] != 5126:  # normalized integers
+        out /= float(np.iinfo(dtype).max)
+    return out
 
 
 def read_gltf_json(path: Path) -> dict:

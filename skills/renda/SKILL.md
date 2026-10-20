@@ -54,6 +54,18 @@ A job returns `status`, `outputs[]` (`name`, `url`, `contentType`, `bytes`), `bi
   unless the error looks transient (network, timeout).
 - Still running after the wait window: `renda_get_job {id, wait: true}`.
 
+### Long jobs from a shell with a command timeout
+
+Bakes, splats and long videos can take minutes. Two safe patterns with the CLI:
+
+- **Submit, then reattach:** `renda splat model.glb --no-wait --json` returns the job at once
+  (`id` + `next`), then `renda jobs <id> --wait -o renders --json` waits and downloads. Run the
+  second command again if it times out; it never resubmits.
+- **Wait in one go:** without `--no-wait`, the CLI prints the job id and resume command on stderr
+  within a second of submitting (NDJSON in `--json` mode: `{"status":"submitted","id":…,"next":[…]}`,
+  then `{"status":"progress",…,"liveCostUsd":…}` lines), while stdout stays one final JSON result.
+  If your command gets killed, run the `next` command instead of rendering again.
+
 ## Engine choice (short version)
 
 Leave `render.engine: "auto"` unless there's a reason. Auto uses Blender for `.blend` and
