@@ -53,6 +53,9 @@ class Material:
     tex_uv: dict = field(default_factory=dict)
     tex_colorspace: dict = field(default_factory=dict)
     normal_strength: float = 1.0
+    # glTF texCoord per texture field (e.g. {"base_color_tex": 1}) as authored. Loaders pick each mesh's
+    # active UV set from this (Mesh.uvs is the set the textures sample), so engines can ignore it.
+    tex_coord: dict = field(default_factory=dict)
 
     TEX_FIELDS = (
         "base_color_tex", "metallic_roughness_tex", "roughness_tex", "metallic_tex",
@@ -66,7 +69,8 @@ class Mesh:
     points: np.ndarray  # (N,3) float32
     indices: np.ndarray  # (M,3) int32 triangles
     normals: np.ndarray | None = None  # (N,3)
-    uvs: np.ndarray | None = None  # (N,2)
+    uvs: np.ndarray | None = None  # (N,2) the UV set the material's textures sample
+    uvs_alt: np.ndarray | None = None  # (N,2) the file's other UV set (e.g. glTF TEXCOORD_0 when textures use 1)
     colors: np.ndarray | None = None  # (N,3|4) linear RGB(A) vertex colours
     transform: Mat4 = field(default_factory=identity)
     material: str | None = None
@@ -78,6 +82,8 @@ class Mesh:
             self.normals = np.asarray(self.normals, dtype=np.float32).reshape(-1, 3)
         if self.uvs is not None:
             self.uvs = np.asarray(self.uvs, dtype=np.float32).reshape(-1, 2)
+        if self.uvs_alt is not None:
+            self.uvs_alt = np.asarray(self.uvs_alt, dtype=np.float32).reshape(-1, 2)
         self.transform = np.asarray(self.transform, dtype=np.float64).reshape(4, 4)
 
     def world_points(self) -> np.ndarray:

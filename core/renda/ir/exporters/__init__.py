@@ -62,6 +62,12 @@ def _trimesh_scene(stage: Stage, pbr: bool = True):
             rgba = np.ones((len(mesh.colors), 4), dtype=np.float32)
             rgba[:, : mesh.colors.shape[1]] = np.clip(mesh.colors[:, :4], 0, 1)
             tm.vertex_attributes["COLOR_0"] = rgba
+        if mesh.uvs_alt is not None and len(mesh.uvs_alt) == len(mesh.points):
+            # the file's other UV set (e.g. the original TEXCOORD_0 of a baked GLB) as TEXCOORD_1, in glTF's
+            # V-down convention (trimesh only flips the main uv set); renamed from "_TEXCOORD_1" after export
+            alt = np.asarray(mesh.uvs_alt, dtype=np.float32).copy()
+            alt[:, 1] = 1.0 - alt[:, 1]
+            tm.vertex_attributes["TEXCOORD_1"] = alt
         scene.add_geometry(tm, node_name=f"{mesh.name}_{i}", geom_name=f"{mesh.name}_{i}", transform=mesh.transform)
     return scene
 
@@ -70,35 +76,50 @@ def to_gltf(stage: Stage, out: str | Path) -> Path:
     """Write .glb (or .gltf). Lights/cameras are not written (engines get them from the job)."""
     out = Path(out)
     scene = _trimesh_scene(stage, pbr=True)
+    unlit = {name for name, m in stage.materials.items() if m.unlit}
     if out.suffix.lower() == ".gltf":
         scene.export(str(out), file_type="gltf")
         data = json.loads(out.read_text())
-        if _fix_color_attribute(data):
+        if _fix_gltf(data, unlit):
             out.write_text(json.dumps(data))
     else:
-        out.write_bytes(_patch_glb(scene.export(file_type="glb")))
+        out.write_bytes(_patch_glb(scene.export(file_type="glb"), unlit))
     return out
 
 
-def _fix_color_attribute(gltf: dict) -> bool:
-    """Rename trimesh's "_COLOR_0" custom attribute to the standard COLOR_0. Returns True if changed."""
+def _fix_gltf(gltf: dict, unlit: set[str] = frozenset()) -> bool:
+    """trimesh writes custom attributes as "_COLOR_0"/"_TEXCOORD_1": rename them to the standard names, and
+    mark unlit materials with KHR_materials_unlit (trimesh drops it). Returns True if changed."""
     changed = False
     for m in gltf.get("meshes", []):
         for prim in m.get("primitives", []):
             attrs = prim.get("attributes", {})
-            if "_COLOR_0" in attrs and "COLOR_0" not in attrs:
-                attrs["COLOR_0"] = attrs.pop("_COLOR_0")
+            for std in ("COLOR_0", "TEXCOORD_1"):
+                if "_" + std in attrs and std not in attrs:
+                    attrs[std] = attrs.pop("_" + std)
+                    changed = True
+    if unlit:
+        for mat in gltf.get("materials", []):
+            if mat.get("name") in unlit:
+                mat.setdefault("extensions", {})["KHR_materials_unlit"] = {}
                 changed = True
+        if changed and any("KHR_materials_unlit" in (m.get("extensions") or {}) for m in gltf.get("materials", [])):
+            used = gltf.setdefault("extensionsUsed", [])
+            if "KHR_materials_unlit" not in used:
+                used.append("KHR_materials_unlit")
     return changed
 
 
-def _patch_glb(glb: bytes) -> bytes:
-    """Apply _fix_color_attribute to a GLB's JSON chunk (re-padded to 4 bytes)."""
+_fix_color_attribute = _fix_gltf  # back-compat name
+
+
+def _patch_glb(glb: bytes, unlit: set[str] = frozenset()) -> bytes:
+    """Apply _fix_gltf to a GLB's JSON chunk (re-padded to 4 bytes)."""
     import struct
 
     json_len = struct.unpack_from("<I", glb, 12)[0]
     data = json.loads(glb[20:20 + json_len])
-    if not _fix_color_attribute(data):
+    if not _fix_gltf(data, unlit):
         return glb
     js = json.dumps(data, separators=(",", ":")).encode()
     js += b" " * (-len(js) % 4)

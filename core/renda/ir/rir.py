@@ -59,6 +59,8 @@ def write_rir(stage: Stage, out_dir: str | Path) -> Path:
             arrays["normals"] = m.normals
         if m.uvs is not None:
             arrays["uvs"] = m.uvs
+        if m.uvs_alt is not None:
+            arrays["uvs_alt"] = m.uvs_alt
         if m.colors is not None:
             arrays["colors"] = np.asarray(m.colors, dtype=np.float32)
         np.savez_compressed(out / rel, **arrays)
@@ -140,6 +142,7 @@ def read_rir(path: str | Path) -> Stage:
             name=md["name"], points=arr["points"], indices=arr["indices"],
             normals=arr["normals"] if "normals" in arr else None,
             uvs=arr["uvs"] if "uvs" in arr else None,
+            uvs_alt=arr["uvs_alt"] if "uvs_alt" in arr else None,
             colors=arr["colors"] if "colors" in arr else None,
             transform=np.array(md["transform"]), material=md.get("material"),
         ))
