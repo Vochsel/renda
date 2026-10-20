@@ -94,6 +94,17 @@ export const JOB_WALL = JOBS.map((j) => ({
   } as Partial<Record<SeriesId, number>>,
 }));
 
+/**
+ * 100 stills submitted at once: Renda runs each in its own container, up to the L4 container cap (50), so two
+ * waves of the measured cold wall time; this Mac renders them one after another at its measured warm time. Computed.
+ */
+export const PARALLEL = (() => {
+  const n = 100;
+  const cap = 50;
+  const still = JOBS[0];
+  return { n, cap, rendaSeconds: Math.ceil(n / cap) * still.renda.wallSeconds, localSeconds: n * still.localSeconds };
+})();
+
 /** Monthly cost of rendering N Cycles stills (the GLB still above). */
 export const VOLUME = (() => {
   const still = JOBS[0];

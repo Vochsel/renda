@@ -15,6 +15,7 @@ import {
   SETS,
   SOURCES,
   SPLAT_DIY,
+  PARALLEL,
   VOLUME,
   type Basis,
 } from "@/lib/benchmarks";
@@ -25,8 +26,16 @@ export const metadata: Metadata = {
     "Renda against doing it yourself: the same render jobs on your own machine, an on-demand cloud GPU VM and render farms. Measured runs and published prices, with every assumption stated.",
 };
 
+const SETUP_STEPS = [
+  { name: "Renda", steps: ["npx @rendahq/cli render model.step (or one MCP call)", "Image back in ~40 s — any of 15+ formats, 6 engines"] },
+  { name: "Your own machine", steps: ["Install Blender (and a GPU that can run it)", "Find importers for STEP/IGES, USDZ, splats", "Script the camera, lights, output", "Keep the machine free while it renders"] },
+  { name: "Cloud GPU VM", steps: ["Provision an L4 instance + drivers", "Install Blender and importers (or bake an image)", "Upload the scene, run a script", "Download output, remember to shut it down"] },
+  { name: "Render farm", steps: ["Create an account and top up", "Install the farm's uploader/plugin", "Package and upload the project", "Wait in the queue, download frames"] },
+];
+
 const TOC: TocItem[] = [
   { id: "summary", label: "Summary" },
+  { id: "setup", label: "Steps to first render" },
   { id: "cost", label: "Cost per job" },
   { id: "volume", label: "Monthly cost" },
   { id: "time", label: "Time per job" },
@@ -133,19 +142,48 @@ export default function BenchmarksPage() {
         <PageToc items={TOC} />
         <div className="min-w-0">
           <header id="summary" className="scroll-mt-20 pt-20 pb-10 sm:pt-28">
-            <h1 className="text-4xl font-semibold tracking-tight">Benchmarks</h1>
+            <p className="text-muted-foreground mb-3 font-mono text-xs tracking-wide uppercase">Benchmarks</p>
+            <h1 className="max-w-2xl text-4xl font-semibold tracking-tight text-balance">Faster to a finished render. Nothing to install.</h1>
             <p className="text-muted-foreground mt-4 max-w-2xl text-pretty">
-              The same jobs on Renda, on your own machine, on an on-demand cloud GPU and on render farms. Renda and local numbers are{" "}
+              The same jobs on Renda, on your own machine, on an on-demand cloud GPU and on render farms. No GPU, drivers, Blender or
+              importers on your side — one command or one MCP call, from a laptop, a CI runner or an agent. Renda and local numbers are{" "}
               <BasisTag basis="measured" /> runs; VM and farm numbers are <BasisTag basis="computed" /> from published prices, with every
-              assumption written next to them. Where doing it yourself wins, we say so.
+              assumption written next to them.
             </p>
             <div className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <StatTile label="Cycles still vs an AWS L4 VM started for it" value={`${times(stillRenda, stillVm)} cheaper`} note={`${usd(stillRenda)} vs ${usd(stillVm)} (VM computed)`} />
-              <StatTile label="Mesh → splat vs a DIY pipeline" value={`≥${times(sp.renda.costUsd, sp.diy.costUsd)} cheaper`} note={`${usd(sp.renda.costUsd)} in ${sp.renda.wallMinutes} min vs ≥${usd(sp.diy.costUsd)} in ≥${Math.round(sp.diy.wallMinutes)} min`} />
-              <StatTile label="Setup" value="One command" note="vs installing Blender, drivers, importers and a job runner" />
-              <StatTile label="Where DIY wins" value={`>${Math.round(VOLUME.crossover / 1000)}k stills/mo`} note="steady load on one always-on VM you run yourself; small stills on a laptop you own" />
+              <StatTile
+                label="First image vs starting a cloud GPU VM"
+                value={`${times(JOBS[0].renda.wallSeconds, JOB_WALL[0].values.vm!)} faster`}
+                note={`${secs(JOBS[0].renda.wallSeconds)} submit → image vs ~${secs(JOB_WALL[0].values.vm!)} (VM boot estimate + render)`}
+              />
+              <StatTile
+                label="Mesh → Gaussian splat"
+                value={`≥${times(sp.renda.wallMinutes, sp.diy.wallMinutes)} faster`}
+                note={`${sp.renda.wallMinutes} min, exact camera poses, no COLMAP — vs ≥${Math.round(sp.diy.wallMinutes)} min DIY`}
+              />
+              <StatTile
+                label={`${PARALLEL.n} stills at once`}
+                value={`~${(PARALLEL.rendaSeconds / 60).toFixed(1)} min`}
+                note={`fanned out across GPUs (computed) vs ~${Math.round(PARALLEL.localSeconds / 60)} min one after another on this Mac`}
+              />
+              <StatTile label="Cost of a still vs that VM" value={`${times(stillRenda, stillVm)} cheaper`} note={`${usd(stillRenda)} vs ${usd(stillVm)} — billed per second, nothing idle`} />
             </div>
           </header>
+
+          <Section id="setup" title="Steps to a first render" intro="What it takes to go from a .glb, .blend or .step on disk to an image.">
+            <div className="grid gap-6 text-sm sm:grid-cols-2 lg:grid-cols-4">
+              {SETUP_STEPS.map((o) => (
+                <div key={o.name}>
+                  <p className="font-medium">{o.name}</p>
+                  <ol className="text-muted-foreground mt-2 list-decimal space-y-1 pl-4 text-[13px]">
+                    {o.steps.map((st) => (
+                      <li key={st}>{st}</li>
+                    ))}
+                  </ol>
+                </div>
+              ))}
+            </div>
+          </Section>
 
           <Section
             id="cost"
@@ -220,8 +258,9 @@ export default function BenchmarksPage() {
               rows={JOBS.map((j, i) => [j.label, secs(j.renda.wallSeconds), secs(j.localSeconds), secs(JOB_WALL[i].values.vm!), secs(j.renda.billedSeconds)])}
             />
             <p className="text-muted-foreground mt-3 text-[11px]">
-              Honest read: a warm laptop beats any cloud for a small still. Renda pulls ahead on long jobs (the turntable), on many jobs in
-              parallel, and when the machine you&apos;re on can&apos;t render at all — a server, a CI runner or an agent sandbox.
+              Renda is faster on long jobs (the turntable, unsplit, still beats an M1 Pro), on many jobs at once, and anywhere that
+              can&apos;t render at all — a server, a CI runner, an agent sandbox, a phone. For a single small still on a laptop with Blender
+              already open, rendering locally is quicker.
             </p>
           </Section>
 
