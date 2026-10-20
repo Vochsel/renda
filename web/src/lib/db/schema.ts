@@ -98,6 +98,12 @@ export type JobOutput = {
   placeholder?: string;
 };
 
+/** Live metering snapshot: latest heartbeat per running container (chunk). Not billing — see usage_events. */
+export type JobLive = {
+  updatedAt: number;
+  chunks: Record<string, { hardware: string; elapsed: number; at: number; final?: boolean }>;
+};
+
 export const jobs = pgTable("jobs", {
   id: id("job"),
   orgId: text("org_id").notNull().references(() => orgs.id, { onDelete: "cascade" }),
@@ -119,6 +125,7 @@ export const jobs = pgTable("jobs", {
   secondsGpuL4: doublePrecision("seconds_gpu_l4").notNull().default(0),
   secondsGpuL40s: doublePrecision("seconds_gpu_l40s").notNull().default(0),
   costUsd: doublePrecision("cost_usd").notNull().default(0),
+  live: jsonb("live").$type<JobLive>(),
   cached: boolean("cached").notNull().default(false),
   cacheKey: text("cache_key"),
   modalCallId: text("modal_call_id"),

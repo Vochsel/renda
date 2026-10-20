@@ -54,6 +54,10 @@ class Stopwatch:
         self.total += self.clock() - (self._t or self.clock())
         self._t = None
 
+    def elapsed(self) -> float:
+        """Active seconds so far, including the span in progress (for live metering)."""
+        return self.total + (self.clock() - self._t if self._t is not None else 0.0)
+
     @contextlib.contextmanager
     def paused(self):
         """Exclude a span (e.g. blocking on another billed container) from the active total."""
@@ -160,6 +164,7 @@ def run_scene_job(job: JobRequest, deps: Deps) -> dict[str, Any]:
     active = Stopwatch(deps.clock)
     ph = Phases(deps.clock)
     t_start = deps.clock()
+    meter = deps.events.start_meter("orchestrate", hw.Hardware.CPU.value, active.elapsed)
     billable = True
     cache: AssetCache | None = None
     try:
@@ -284,6 +289,7 @@ def run_scene_job(job: JobRequest, deps: Deps) -> dict[str, Any]:
         ev.failed(f"{type(exc).__name__}: {exc}")
         return {"status": "failed", "error": str(exc)}
     finally:
+        meter.stop()
         # Orchestrator active time (plan, finalize) on a 0.25-core container; skip on cache hits.
         if billable and _billed(active.total, cache) > 0:
             ev.usage(hw.Hardware.CPU.value, _billed(active.total, cache), "orchestrate")
@@ -307,6 +313,7 @@ def _plain(cfg: Any) -> Any:
 def run_chunk(task: ChunkTask, deps: Deps, started: float | None = None) -> ChunkResult:
     """Render one chunk of frames and upload them. Bills its own wall time from `started`."""
     started = deps.clock() if started is None else started
+    meter = deps.events.start_meter(task.chunk, dispatch.runner_hardware(task.runner).value, lambda: deps.clock() - started)
     cache: AssetCache | None = None
     ph = Phases(deps.clock)
     try:
@@ -372,12 +379,14 @@ def run_chunk(task: ChunkTask, deps: Deps, started: float | None = None) -> Chun
         return ChunkResult(task.chunk, task.frames, objects, [str(w) for w in get(result, "warnings") or []],
                            timings=ph.seconds, encoded=encoded)
     finally:
+        meter.stop()
         deps.events.usage(dispatch.runner_hardware(task.runner).value, _billed(deps.clock() - started, cache), task.chunk)
 
 
 def run_train(task: "dispatch.TrainTask", deps: Deps, started: float | None = None) -> dict[str, Any]:
     """Splat-bake refinement: train on the Volume views, upload the splat (+ dataset), clean up."""
     started = deps.clock() if started is None else started
+    meter = deps.events.start_meter("train", task.hardware, lambda: deps.clock() - started)
     cache: AssetCache | None = None
     try:
         cache = _asset_cache(deps, task.package, task.inputs)
@@ -401,11 +410,13 @@ def run_train(task: "dispatch.TrainTask", deps: Deps, started: float | None = No
             deps.on_new_asset()
         return {"outputs": outputs, "warnings": [str(w) for w in get(result, "warnings") or []]}
     finally:
+        meter.stop()
         deps.events.usage(task.hardware, _billed(deps.clock() - started, cache), "train")
 
 
 def run_encode(task: EncodeTask, deps: Deps, started: float | None = None) -> dict[str, Any]:
     started = deps.clock() if started is None else started
+    meter = deps.events.start_meter("encode", hw.Hardware.CPU.value, lambda: deps.clock() - started)
     try:
         work = Path(tempfile.mkdtemp(prefix="encode-", dir=_ensure(deps.work_root)))
         def download(key: str) -> Path:
@@ -430,6 +441,7 @@ def run_encode(task: EncodeTask, deps: Deps, started: float | None = None) -> di
         shutil.rmtree(work, ignore_errors=True)
         return result
     finally:
+        meter.stop()
         deps.events.usage(hw.Hardware.CPU.value, deps.clock() - started, "encode")
 
 
@@ -482,6 +494,7 @@ def _subprocess_runner(cmd: list[str], cwd: Path, timeout: int) -> subprocess.Co
 
 def run_hyperframes_job(job: JobRequest, deps: Deps, run: Runner = _subprocess_runner, timeout: int = 2 * 60 * 60, started: float | None = None) -> dict[str, Any]:
     started = deps.clock() if started is None else started
+    meter = deps.events.start_meter("hyperframes", hw.Hardware.CPU.value, lambda: deps.clock() - started)
     cache: AssetCache | None = None
     ev = deps.events
     try:
@@ -521,4 +534,5 @@ def run_hyperframes_job(job: JobRequest, deps: Deps, run: Runner = _subprocess_r
         ev.failed(f"{type(exc).__name__}: {exc}")
         return {"status": "failed", "error": str(exc)}
     finally:
+        meter.stop()
         ev.usage(hw.Hardware.CPU.value, _billed(deps.clock() - started, cache), "hyperframes")

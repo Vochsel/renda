@@ -12,6 +12,7 @@ import { ensureVerifiedAssets } from "./assets";
 import { assertWithinTrialLimits } from "./trials";
 import { outputPrefix, presignGet } from "./r2";
 import { HARDWARE, type Hardware } from "./pricing";
+import { liveCost, METER_WRITE_INTERVAL_MS, type LiveCost } from "./live";
 
 const { jobs, usageEvents } = schema;
 type JobRow = typeof jobs.$inferSelect;
@@ -39,6 +40,8 @@ export type Job = {
   /** Layer files the submitted package was flattened from (layered submissions only). */
   layers?: string[];
   outputs: { name: string; url: string; contentType: string; bytes: number }[];
+  /** While running: billed so far + running containers, at list price (the final bill can be lower). */
+  live?: LiveCost;
 };
 
 export async function serializeJob(j: JobRow): Promise<Job> {
@@ -65,6 +68,7 @@ export async function serializeJob(j: JobRow): Promise<Job> {
     estimate: j.estimate ?? undefined,
     layers: j.source?.layers,
     outputs,
+    live: TERMINAL.has(j.status) ? undefined : liveCost(j.live, j, Date.now()),
   };
 }
 
@@ -205,6 +209,13 @@ export async function getJobsByIds(orgId: string, ids: string[]): Promise<JobRow
   return db().select().from(jobs).where(and(eq(jobs.orgId, orgId), inArray(jobs.id, unique)));
 }
 
+/** Jobs still running (queued → encoding), newest first — for the dashboard's live "Active jobs" strip. */
+export async function listActiveJobs(orgId: string, limit = 20) {
+  return db().select().from(jobs)
+    .where(and(eq(jobs.orgId, orgId), inArray(jobs.status, ["queued", "planning", "rendering", "encoding"])))
+    .orderBy(desc(jobs.createdAt)).limit(limit);
+}
+
 export async function cancelJob(orgId: string, id: string): Promise<JobRow> {
   const job = await getJob(orgId, id);
   if (TERMINAL.has(job.status)) throw new ApiError("conflict", `Job is already ${job.status}.`);
@@ -279,7 +290,8 @@ export type WorkerEvent =
   | { jobId: string; type: "usage"; hardware: Hardware; seconds: number; chunk: number | string }
   | { jobId: string; type: "warning"; message: string }
   | { jobId: string; type: "done"; outputs: WorkerOutput[]; cached?: boolean }
-  | { jobId: string; type: "failed"; error: string };
+  | { jobId: string; type: "failed"; error: string }
+  | { jobId: string; type: "meter"; chunk: number | string; hardware: Hardware; elapsedSeconds: number; at?: number };
 
 const SECONDS_COLUMN: Record<Hardware, "secondsCpu" | "secondsGpuL4" | "secondsGpuL40s"> = {
   cpu: "secondsCpu",
@@ -292,6 +304,8 @@ export async function applyWorkerEvent(ev: WorkerEvent) {
   if (!job) throw new ApiError("not_found", `No job ${ev.jobId}.`);
 
   switch (ev.type) {
+    case "meter":
+      return applyMeter(job, ev);
     case "usage": {
       // Usage is always recorded, even for canceled jobs: the compute was spent.
       if (!HARDWARE.includes(ev.hardware) || !(ev.seconds >= 0)) throw new ApiError("invalid_request", "bad usage event");
@@ -308,6 +322,7 @@ export async function applyWorkerEvent(ev: WorkerEvent) {
         [col]: sql`${jobs[col]} + ${ev.seconds}`,
         costUsd: sql`${jobs.costUsd} + ${split.costUsd}`,
       }).where(eq(jobs.id, job.id));
+      await markChunkFinal(job.id, chunk, ev.hardware, ev.seconds);
       await reportMeter(job.orgId, job.id, chunk, ev.hardware, split.billedSeconds).catch((e) => console.error("stripe meter", e));
       return { ok: true, ...split };
     }
@@ -338,4 +353,49 @@ export async function applyWorkerEvent(ev: WorkerEvent) {
       await db().update(jobs).set({ status: "failed", error: ev.error, finishedAt: new Date() }).where(eq(jobs.id, job.id));
       return { ok: true };
   }
+}
+
+/**
+ * Live metering heartbeat (never billing). One atomic jsonb merge per accepted event; at most one write per job
+ * every METER_WRITE_INTERVAL_MS, except a chunk's first heartbeat. Ignored once the job is finished or the
+ * chunk has been billed.
+ */
+async function applyMeter(job: JobRow, ev: Extract<WorkerEvent, { type: "meter" }>) {
+  if (TERMINAL.has(job.status)) return { ignored: true };
+  if (!HARDWARE.includes(ev.hardware) || !(ev.elapsedSeconds >= 0) || ev.elapsedSeconds > 86_400) {
+    throw new ApiError("invalid_request", "bad meter event");
+  }
+  const chunk = String(ev.chunk).slice(0, 64);
+  const now = Date.now();
+  const entry = JSON.stringify({ hardware: ev.hardware, elapsed: ev.elapsedSeconds, at: now });
+  const updated = await db()
+    .update(jobs)
+    .set({
+      live: sql`jsonb_build_object(
+        'updatedAt', ${now}::bigint,
+        'chunks', coalesce(${jobs.live}->'chunks', '{}'::jsonb) || jsonb_build_object(${chunk}::text, ${entry}::jsonb))`,
+    })
+    .where(and(
+      eq(jobs.id, job.id),
+      sql`${jobs.status} not in ('succeeded', 'failed', 'canceled')`,
+      sql`coalesce((${jobs.live}->'chunks'->${chunk}::text->>'final')::boolean, false) = false`,
+      sql`(${jobs.live} is null
+           or not (coalesce(${jobs.live}->'chunks', '{}'::jsonb) ? ${chunk}::text)
+           or coalesce((${jobs.live}->>'updatedAt')::bigint, 0) <= ${now - METER_WRITE_INTERVAL_MS}::bigint)`,
+    ))
+    .returning({ id: jobs.id });
+  return updated.length ? { ok: true } : { throttled: true };
+}
+
+/** A billed chunk leaves the live set: its seconds are in the job's billed columns from here on. */
+async function markChunkFinal(jobId: string, chunk: string, hardware: Hardware, seconds: number) {
+  const entry = JSON.stringify({ hardware, elapsed: seconds, at: Date.now(), final: true });
+  await db()
+    .update(jobs)
+    .set({
+      live: sql`jsonb_build_object(
+        'updatedAt', coalesce((${jobs.live}->>'updatedAt')::bigint, 0),
+        'chunks', coalesce(${jobs.live}->'chunks', '{}'::jsonb) || jsonb_build_object(${chunk}::text, ${entry}::jsonb))`,
+    })
+    .where(eq(jobs.id, jobId));
 }

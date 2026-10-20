@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { AutoRefresh } from "@/components/auto-refresh";
+import { LiveCost } from "@/components/live-cost";
 import { Code } from "@/components/code";
 import { StatusBadge } from "@/components/status-badge";
 import { cancelJobAction } from "./actions";
@@ -61,7 +62,7 @@ export default async function JobPage({ params }: PageProps<"/dashboard/jobs/[id
         <Meta label="Engine" value={job.engine ?? "—"} />
         <Meta label="Hardware" value={job.hardware ?? "—"} />
         <Meta label="Render time" value={job.billedSeconds ? fmtDuration(job.billedSeconds) : "—"} />
-        <Meta label="Cost" value={job.cached ? "$0 (cached)" : fmtUsd(job.costUsd)}
+        <Meta label="Cost" value={job.cached ? "$0 (cached)" : <LiveCost job={job} />}
           sub={est?.estCostUsd ? `est. ${fmtUsd(est.estCostUsd[0])}–${fmtUsd(est.estCostUsd[1])}` : undefined} />
       </div>
 
@@ -96,7 +97,7 @@ export default async function JobPage({ params }: PageProps<"/dashboard/jobs/[id
   );
 }
 
-function Meta({ label, value, sub }: { label: string; value: string; sub?: string }) {
+function Meta({ label, value, sub }: { label: string; value: React.ReactNode; sub?: string }) {
   return (
     <div className="border-border rounded-lg border p-3">
       <div className="text-muted-foreground text-xs">{label}</div>

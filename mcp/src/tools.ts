@@ -3,7 +3,7 @@ import { basename, join, resolve } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { RendaPackage, LayerError, flattenPackage, formatFromPath, isLayered, safeParsePackage, type FlattenResult, type RendaPackageInput } from "@rendahq/spec";
-import { type TrialResponse, RendaApiError, TERMINAL_STATUSES, type HyperframesPackage, type Job, type RendaClient } from "./client.js";
+import { type TrialResponse, RendaApiError, TERMINAL_STATUSES, type HyperframesPackage, type Job, type RendaClient, liveCostLabel } from "./client.js";
 import { PACKAGE_GUIDE } from "./docs.js";
 import { hyperframesQuality, resolveVideoVariables, type ResolvedVariables } from "./video.js";
 import { isLocalUri, packageDir, uploadBytes, uploadFile, uploadLocalPaths, zipDirectory } from "./local.js";
@@ -131,6 +131,7 @@ function summarizeJob(job: Job) {
   return {
     id: job.id, status: job.status, progress: job.progress, engine: job.engine, hardware: job.hardware,
     billedSeconds: job.billedSeconds, costUsd: job.costUsd, cached: job.cached,
+    ...(job.live ? { costSoFar: liveCostLabel(job), live: job.live } : {}),
     warnings: job.warnings, error: job.error, outputs: job.outputs,
   };
 }
@@ -184,7 +185,7 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
         if (token === undefined || !extra?.sendNotification) return;
         await extra.sendNotification({
           method: "notifications/progress",
-          params: { progressToken: token, progress: job.progress ?? 0, total: 1, message: `${job.status}${job.engine ? ` (${job.engine})` : ""}` },
+          params: { progressToken: token, progress: job.progress ?? 0, total: 1, message: `${job.status}${job.engine ? ` (${job.engine})` : ""}${job.live ? ` · ${liveCostLabel(job)}` : ""}` },
         }).catch(() => {});
       },
     });

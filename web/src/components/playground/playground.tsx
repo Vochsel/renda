@@ -1,5 +1,7 @@
 "use client";
 
+import { LiveCost } from "@/components/live-cost";
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { safeParsePackage } from "@rendahq/spec";
 import type { ActionResult, QueueJob } from "@/app/dashboard/playground/actions";
@@ -780,7 +782,7 @@ function QueuePanel({ rows, selected, onSelect, onCancel, onRetry, onCancelAll, 
                 {j ? <StatusBadge status={j.status} /> : <span className="text-muted-foreground font-mono text-[11px]">{status}</span>}
                 {/* Cost slot: billed so far. Live running cost (LiveCost) drops in here. */}
                 <span className="text-muted-foreground hidden w-16 text-right font-mono text-[11px] sm:inline" data-slot="cost">
-                  {j ? usd(j.costUsd) : r.estimate ? `≤${usd(r.estimate.estCostUsd[1])}` : ""}
+                  {j ? <LiveCost job={j} suffix={false} /> : r.estimate ? `≤${usd(r.estimate.estCostUsd[1])}` : ""}
                 </span>
                 <span className="text-muted-foreground hidden w-12 text-right font-mono text-[11px] sm:inline">{eta}</span>
                 <span className="flex w-14 justify-end gap-2 text-[11px]">

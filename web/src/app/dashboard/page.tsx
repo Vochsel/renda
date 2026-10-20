@@ -2,7 +2,8 @@ import Link from "next/link";
 import { requireAccount } from "@/lib/auth";
 import { getBilling } from "@/lib/accounts";
 import { monthRange, usageSummary } from "@/lib/billing";
-import { listJobs } from "@/lib/jobs";
+import { listActiveJobs, listJobs, TERMINAL } from "@/lib/jobs";
+import { liveCostProps, snapshotNow } from "@/lib/live";
 import { listOutputs } from "@/lib/outputs";
 import { fmtAgo, fmtMinutes, fmtUsd } from "@/lib/format";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,21 +12,40 @@ import { Code } from "@/components/code";
 import { SpendChart } from "@/components/spend-chart";
 import { StatusBadge } from "@/components/status-badge";
 import { RecentStrip } from "@/components/gallery/recent-strip";
+import { ActiveJobs } from "@/components/active-jobs";
+import { AutoRefresh } from "@/components/auto-refresh";
+import { LiveCost } from "@/components/live-cost";
 
 export default async function Overview() {
   const { org } = await requireAccount();
   const range = monthRange();
-  const [usage, billing, recent, renders] = await Promise.all([
+  const [usage, billing, recent, renders, running] = await Promise.all([
     usageSummary(org.id, range.from, range.to),
     getBilling(org.id),
     listJobs(org.id, { limit: 8 }),
     listOutputs(org.id, { limit: 10 }),
+    listActiveJobs(org.id),
   ]);
+  const now = snapshotNow();
+  const active = running.map((j) => ({
+    id: j.id, name: j.name, status: j.status, progress: j.progress, engine: j.engine, hardware: j.hardware,
+    live: liveCostProps(j, now).live!,
+  }));
   const totalSeconds = usage.seconds.cpu + usage.seconds.gpu;
 
   return (
     <div className="space-y-6">
+      <AutoRefresh active={active.length > 0} ms={3000} />
       <h1 className="text-xl font-semibold">Overview</h1>
+      {active.length > 0 && (
+        <Card>
+          <CardHeader className="flex-row items-center justify-between">
+            <CardTitle className="text-sm">Active jobs</CardTitle>
+            <Link href="/dashboard/jobs" className="text-muted-foreground text-sm hover:underline">All jobs</Link>
+          </CardHeader>
+          <CardContent><ActiveJobs jobs={active} /></CardContent>
+        </Card>
+      )}
       <div className="grid gap-4 sm:grid-cols-3">
         <Stat label="Render time this month" value={fmtMinutes(totalSeconds)} sub={`${fmtMinutes(usage.seconds.gpu)} GPU · ${fmtMinutes(usage.seconds.cpu)} CPU`} />
         <Stat label="Spend this month" value={fmtUsd(usage.costUsd)} sub={`${usage.minutesBilled} billed minutes`} />
@@ -60,7 +80,9 @@ export default async function Overview() {
                     <TableCell><Link href={`/dashboard/jobs/${j.id}`} className="font-mono text-xs hover:underline">{j.name ?? j.id}</Link></TableCell>
                     <TableCell><StatusBadge status={j.status} /></TableCell>
                     <TableCell className="text-muted-foreground font-mono text-xs">{j.engine}</TableCell>
-                    <TableCell className="text-right font-mono text-xs">{j.cached ? "cached" : fmtUsd(j.costUsd)}</TableCell>
+                    <TableCell className="text-right text-xs">
+                      {TERMINAL.has(j.status) ? <span className="font-mono">{j.cached ? "cached" : fmtUsd(j.costUsd)}</span> : <LiveCost job={liveCostProps(j, now)} suffix={false} />}
+                    </TableCell>
                     <TableCell className="text-muted-foreground text-right text-xs">{fmtAgo(j.createdAt)}</TableCell>
                   </TableRow>
                 ))}

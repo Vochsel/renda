@@ -7,6 +7,8 @@ import { Progress } from "@/components/ui/progress";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { AutoRefresh } from "@/components/auto-refresh";
 import { StatusBadge } from "@/components/status-badge";
+import { LiveCost } from "@/components/live-cost";
+import { liveCostProps } from "@/lib/live";
 
 export default async function JobsPage() {
   const { org } = await requireAccount();
@@ -44,7 +46,13 @@ export default async function JobsPage() {
                       <TableCell className="text-muted-foreground font-mono text-xs">{j.engine}</TableCell>
                       <TableCell className="text-muted-foreground font-mono text-xs">{j.hardware}</TableCell>
                       <TableCell className="text-right font-mono text-xs">{secs ? fmtDuration(secs) : "—"}</TableCell>
-                      <TableCell className="text-right font-mono text-xs">{j.cached ? "cached" : fmtUsd(j.costUsd)}</TableCell>
+                      <TableCell className="text-right text-xs">
+                        {TERMINAL.has(j.status) ? (
+                          <span className="font-mono">{j.cached ? "cached" : fmtUsd(j.costUsd)}</span>
+                        ) : (
+                          <LiveCost job={liveCostProps(j)} suffix={false} />
+                        )}
+                      </TableCell>
                       <TableCell className="text-muted-foreground text-right text-xs">{fmtAgo(j.createdAt)}</TableCell>
                     </TableRow>
                   );

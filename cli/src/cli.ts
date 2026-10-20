@@ -5,7 +5,7 @@ import { createInterface } from "node:readline/promises";
 import {
   RendaApiError, RendaClient, TERMINAL_STATUSES, clearCredentials, credentialsPath, loadCredentials, saveCredentials,
   starterPackage, uploadBytes, uploadLocalPaths, validatePackage, zipDirectory, type Credentials, type Job,
-  hyperframesQuality, parseVarFlags, resolveVideoVariables,
+  hyperframesQuality, parseVarFlags, resolveVideoVariables, liveCostLabel,
 } from "@rendahq/mcp";
 import { parseTextureFlag } from "@rendahq/spec";
 import { flattenFile } from "@rendahq/spec/node";
@@ -572,7 +572,7 @@ async function waitJob(ctx: Ctx, client: RendaClient, job: Job): Promise<Job> {
   return client.waitForJob(job.id, {
     intervalMs: ctx.deps.pollMs ?? 2000,
     onProgress: (j) => {
-      const line = `${j.status} ${Math.round((j.progress ?? 0) * 100)}%${j.engine ? ` · ${j.engine}` : ""}${j.hardware ? ` · ${j.hardware}` : ""}`;
+      const line = `${j.status} ${Math.round((j.progress ?? 0) * 100)}%${j.engine ? ` · ${j.engine}` : ""}${j.hardware ? ` · ${j.hardware}` : ""}${j.live ? ` · ${liveCostLabel(j)}` : ""}`;
       if (line !== last) ctx.out.info(line);
       last = line;
     },
