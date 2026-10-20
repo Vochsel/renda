@@ -235,7 +235,7 @@ class Engine(Protocol):
 | GET | `/me` | → `{user, org, balance:{freeSecondsLeft}, billing:{hasPaymentMethod}}` |
 | POST | `/uploads` | `{filename, size, sha256, contentType?}` → `{assetUri:"asset://<sha>", uploadUrl?, exists}` |
 | POST | `/estimate` | `{package}` → `{hardware, estSeconds:[lo,hi], estCostUsd:[lo,hi], warnings}` |
-| POST | `/jobs` | `{package, kind?:"scene"|"hyperframes", priority?:"economy"|"standard"|"rush", idempotencyKey?}` → `Job` |
+| POST | `/jobs` | `{package, kind?:"scene"|"hyperframes", priority?:"economy"|"standard"|"rush", fast?: boolean (= rush), idempotencyKey?}` → `Job` |
 | GET | `/jobs` / `/jobs/:id` | → `Job[]` / `Job` |
 | POST | `/jobs/:id/cancel` | → `Job` |
 | GET | `/usage` | `?from&to` → `{seconds:{cpu,gpu}, minutesBilled, costUsd, byDay[]}` |
@@ -297,6 +297,7 @@ these from `jobs.outputs`; `worker/scripts/backfill_thumbs.py` fills them in for
 ## 5. Cost optimisation (the worker's job)
 
 1. **Right-size hardware**: planner estimates cost per class from engine/res/samples/frames and picks the cheapest that meets the priority's latency target. Stills with Mitsuba/LLVM or Workbench go to CPU; Cycles/Eevee go to L4; only big `rush` jobs get L40S.
+   **Fast mode** (`rush`, alias `fast: true` / `--fast`) trades a little more money for wall time: stills ≥ ~4 MP in Cycles/Eevee/Mitsuba split into padded tiles (32 px overlap so per-tile denoising leaves no seams; same camera, samples and seed) rendered in parallel and stitched losslessly by the coordinator; splat bakes fan views out and refine on an L40S.
 2. **Result cache**: `sha256(canonical package + asset hashes + engine versions)` → previous outputs, billed $0.
 3. **Asset cache**: content-addressed Modal Volume; assets downloaded once per region. `.blend → .rir` extraction cached by hash.
 4. **Cold start**: slim pre-baked images, Modal memory snapshots, `scaledown_window` tuned, Cycles/OptiX kernel cache on a Volume.

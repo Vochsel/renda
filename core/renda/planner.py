@@ -90,6 +90,11 @@ class RenderPlan:
     est_wall_seconds: tuple[float, float] = (0.0, 0.0)
     splats: bool = False  # the scene has Gaussian splats (the worker routes these to the splat-capable image)
     splat_bake: dict | None = None  # output.format "splat": resolved splatbake.BakeSettings (frames = training views)
+    # Rush stills split into image tiles rendered in parallel: one [x0, y0, x1, y1] render box (with overlap) per
+    # chunk, stitched back by the worker. `active_tile` is set on the per-chunk copy a render container receives.
+    tiles: list[list[int]] | None = None
+    tile_overlap: int = 0
+    active_tile: int | None = None
 
     def to_json(self) -> dict:
         d = asdict(self)
@@ -200,7 +205,9 @@ def choose_hardware(engine: str, pkg: RendaPackage, priority: str, samples: int,
         candidates = ["gpu-l4", "gpu-l40s"]
     if engine == "threejs" and req != "gpu" and not splats:
         return "cpu"  # SwiftShader is fine for raster previews and far cheaper
-    if priority != "rush" and "gpu-l40s" in candidates and len(candidates) > 1:
+    # L40S only for big rush animations: measured (2026-10-20) it buys little wall time on short frames, where
+    # container start + scene load dominate, at ~2× the price
+    if (priority != "rush" or n_frames <= 200) and "gpu-l40s" in candidates and len(candidates) > 1:
         candidates.remove("gpu-l40s")
 
     # cheapest class whose total time meets the priority's latency target
@@ -242,6 +249,59 @@ def wall_seconds(chunks: list[list[int]], load_s: float, frame_s: float, extra: 
     """Wall time with every chunk running in parallel: one load + the longest chunk + serial extras."""
     longest = max((len(c) for c in chunks), default=1)
     return load_s + longest * frame_s + extra
+
+
+# Tiled stills (rush): engines that can render a sub-rectangle of the frame with identical sampling.
+TILE_ENGINES = {"blender-cycles", "blender-eevee", "mitsuba"}
+TILE_MIN_PIXELS = 4_000_000  # below ~4 MP a still is fast enough that tile overheads don't pay
+TILE_MAX = 8
+TILE_WORK_PER_LOAD = 3.0  # each tile renders ≥ 3× its container load: start-up dominates smaller tiles (measured)
+TILE_MIN_FRAME_SECONDS = 60.0
+TILE_OVERLAP = 32  # px of context on every inner edge so per-tile denoising leaves no seams
+_SCREEN_SPACE_POST = ("vignette", "chromaticAberration", "lensDistortion", "bloom", "filmGrain", "sharpen")
+
+
+def _tileable(pkg: RendaPackage, engine: str, n_frames: int) -> bool:
+    if n_frames != 1 or engine not in TILE_ENGINES or pkg.output.is_video or pkg.output.is_model or pkg.output.is_splat:
+        return False
+    if pkg.output.format == "exr" or [p for p in pkg.output.passes if p != "beauty"]:
+        return False  # tiles are stitched as 8/16-bit images; passes would need their own stitch
+    w, h = pkg.render.resolution
+    if w * h < TILE_MIN_PIXELS:
+        return False
+    post = pkg.post
+    if post is not None and any(getattr(post, k, None) for k in _SCREEN_SPACE_POST):
+        return False  # screen-space effects need the whole frame
+    return True
+
+
+def tile_count(frame_s: float, load_s: float, priority: str) -> int:
+    """Tiles for a rush still: split while each tile renders ≥ TILE_WORK_PER_LOAD × its container load."""
+    if priority != "rush" or frame_s < TILE_MIN_FRAME_SECONDS:
+        return 1  # measured: below about a minute per frame, tile container starts eat the gain
+    n = math.floor(frame_s / max(TILE_WORK_PER_LOAD * load_s, 1e-3))
+    return int(min(max(n, 1), TILE_MAX))
+
+
+def tile_grid(width: int, height: int, n: int, overlap: int = TILE_OVERLAP) -> list[list[int]]:
+    """Split a frame into ~n near-square tiles; each box is padded by `overlap` px inside the frame."""
+    cols = max(1, min(n, round(math.sqrt(n * width / height))))
+    rows = max(1, n // cols)  # never more boxes than n
+    boxes = []
+    for r in range(rows):
+        for c in range(cols):
+            x0, x1 = width * c // cols, width * (c + 1) // cols
+            y0, y1 = height * r // rows, height * (r + 1) // rows
+            boxes.append([max(0, x0 - overlap), max(0, y0 - overlap), min(width, x1 + overlap), min(height, y1 + overlap)])
+    return boxes
+
+
+def tile_owned(box: list[int], width: int, height: int, overlap: int) -> list[int]:
+    """The part of a padded tile box that the tile contributes to the stitched frame (overlap trimmed on
+    inner edges only)."""
+    x0, y0, x1, y1 = box
+    return [x0 + (overlap if x0 > 0 else 0), y0 + (overlap if y0 > 0 else 0),
+            x1 - (overlap if x1 < width else 0), y1 - (overlap if y1 < height else 0)]
 
 
 def plan(
@@ -311,6 +371,18 @@ def plan(
     # one chunk encodes in its own container; several need a separate encode container (start + download)
     encode_wall = encode_s + (5.0 if pkg.output.is_video and len(chunks) > 1 else 0.0)
     wall = wall_seconds(chunks, load_s, frame_s, encode_wall)
+    tiles = None
+    if _tileable(pkg, engine, len(frames)) and tile_count(frame_s, load_s, priority) > 1:
+        w, h = pkg.render.resolution
+        tiles = tile_grid(w, h, tile_count(frame_s, load_s, priority))
+        n = len(tiles)
+        tiled_px = sum((b[2] - b[0]) * (b[3] - b[1]) for b in tiles)
+        tile_s = frame_s * tiled_px / (w * h) / n  # each tile renders its share (+ overlap) of the frame
+        chunks = [[1] for _ in tiles]
+        stitch_s = 2.0 + 0.4 * w * h / 2.07e6  # download tiles + stitch + upload in the coordinator
+        total = n * load_s + n * tile_s
+        wall = load_s + tile_s + stitch_s
+        warnings.append(f"fast mode: {n} tiles rendered in parallel and stitched")
 
     key = ""
     if asset_hashes is not None or asset_paths:
@@ -327,6 +399,7 @@ def plan(
         scene_format=fmt, samples=samples, priority=priority,
         est_load_seconds=round(load_s, 2), est_frame_seconds=round(frame_s, 3), splats=has_splats,
         est_wall_seconds=(round(wall * 0.6, 1), round(wall * 1.8, 1)),
+        tiles=tiles, tile_overlap=TILE_OVERLAP if tiles else 0,
     )
 
 
@@ -461,6 +534,10 @@ def _plan_splat_bake(pkg: RendaPackage, asset_paths, fmt: str, priority: str, av
     hardware = choose_hardware(engine, vpkg, priority, samples, complexity, len(frames), warnings, prices)
     load_s = LOAD_SECONDS[engine] + (6.0 if fmt in ("blend", "fbx", "abc") and not engine.startswith("blender") else 0.0)
     frame_s = frame_seconds(engine, hardware, vpkg, samples, complexity)
+    if priority == "rush" and settings.train_hardware == "gpu-l4":
+        # fast mode: refine on an L40S (~2.5× the L4's training throughput at ~2.1× its price)
+        settings.train_hardware = "gpu-l40s"
+        warnings.append("fast mode: views fanned out across containers, refinement on an L40S")
     # inside the trainer the views render on the training GPU
     train_hw = settings.train_hardware
     frame_s_single = frame_seconds(engine, train_hw, vpkg, samples, complexity) if engine != "threejs" else frame_s

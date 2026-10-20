@@ -231,6 +231,8 @@ def run_scene_job(job: JobRequest, deps: Deps) -> dict[str, Any]:
         t_fin = deps.clock()
         with active:
             objects = [o for r in sorted(results, key=lambda r: r.chunk) for o in r.objects]
+            if get(plan, "tiles") and not dispatch.is_splat_training(plan):
+                objects = [_stitch_tiles(job, plan, objects, deps)]
             if dispatch.is_splat_training(plan):
                 _check_cancel(deps)
                 ev.status("encoding", progress=0.9)  # "training" in the UI's terms; keeps the status enum stable
@@ -458,6 +460,56 @@ def _parallel(fn: Callable[[Any], Any], items: Sequence[Any], workers: int = 16)
 
     with ThreadPoolExecutor(max_workers=min(workers, len(items))) as pool:
         return list(pool.map(fn, items))
+
+
+def _stitch_tiles(job: JobRequest, plan: Any, objects: list[dict[str, Any]], deps: Deps) -> dict[str, Any]:
+    """Fast-mode still: download each tile, paste the region it owns into the full frame, upload the result
+    as the job's single output and drop the tile objects."""
+    from PIL import Image
+
+    tiles = get(plan, "tiles")
+    overlap = int(get(plan, "tile_overlap", 0) or 0)
+    width, height = (get(get(job.package, "render") or {}, "resolution") or [1920, 1080])
+    by_tile: dict[int, dict[str, Any]] = {}
+    for o in objects:
+        parts = o["key"].split("/tiles/")
+        if len(parts) == 2 and o.get("pass", "beauty") == "beauty":
+            by_tile[int(parts[1].split("/")[0])] = o
+    work = Path(tempfile.mkdtemp(prefix="stitch-", dir=_ensure(deps.work_root)))
+    try:
+        def fetch(i: int) -> Path:
+            dest = work / f"tile{i:02d}{Path(by_tile[i]['key']).suffix}"
+            deps.storage.get_file(by_tile[i]["key"], dest)
+            return dest
+
+        paths = dict(zip(sorted(by_tile), _parallel(fetch, sorted(by_tile))))
+        first = Image.open(paths[min(paths)])
+        canvas = Image.new(first.mode, (int(width), int(height)))
+        for i, box in enumerate(tiles):
+            own = dispatch.tile_owned(box, int(width), int(height), overlap)
+            img = Image.open(paths[i])
+            canvas.paste(img.crop((own[0] - box[0], own[1] - box[1], own[2] - box[0], own[3] - box[1])), (own[0], own[1]))
+        name = Path(by_tile[min(by_tile)]["key"]).name
+        out = work / name
+        fmt = out.suffix.lower()
+        if fmt in (".jpg", ".jpeg"):
+            canvas.convert("RGB").save(out, quality=95)
+        elif fmt == ".webp":
+            canvas.save(out, quality=95)
+        else:
+            canvas.save(out, compress_level=4)
+        key = job.outputPrefix + name
+        ctype = content_type(out)
+        obj = {"key": key, "contentType": ctype, "bytes": deps.storage.put_file(out, key, ctype)}
+        media.attach(obj, out, deps.storage)
+        if hasattr(deps.storage, "delete_many"):  # tiles live under work/, which has no lifecycle rule
+            try:
+                deps.storage.delete_many([o["key"] for o in objects if "/tiles/" in o["key"]])
+            except Exception:  # noqa: BLE001 — cleanup must never fail a finished render
+                log.warning("couldn't delete tile objects for %s", job.jobId)
+        return obj
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
 
 def _ensure(p: Path) -> Path:

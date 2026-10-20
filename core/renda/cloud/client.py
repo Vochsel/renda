@@ -165,8 +165,8 @@ class RendaClient:
         return out
 
     # jobs
-    def estimate(self, package: dict) -> dict:
-        return self.request("POST", "/estimate", {"package": package})
+    def estimate(self, package: dict, priority: str = "standard") -> dict:
+        return self.request("POST", "/estimate", {"package": package, "priority": priority})
 
     def create_job(self, package: dict, kind: str = "scene", priority: str = "standard", idempotency_key: str | None = None) -> dict:
         body = {"package": package, "kind": kind, "priority": priority}

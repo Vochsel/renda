@@ -194,3 +194,15 @@ def test_layer_errors_name_the_layer_and_field(tmp_path):
     assert code == 1
     assert data["reason"] == "layer_fetch" and data["error"]["field"] == "extends[0]"
     assert data["error"]["layer"].endswith("shot.renda.json")
+
+
+def test_estimate_fast_prints_fast_vs_standard(tmp_path):
+    import trimesh
+
+    from renda.cli import app
+
+    f = tmp_path / "m.glb"
+    trimesh.creation.box().export(f)
+    r = runner.invoke(app, ["estimate", str(f), "--local", "--res", "3840x2160", "--quality", "final", "--engine", "mitsuba", "--fast"])
+    assert r.exit_code == 0, r.output
+    assert "fast (--fast)" in r.output and "standard:" in r.output

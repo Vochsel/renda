@@ -77,12 +77,20 @@ class R2Storage:
         # Server-side copy: no bytes flow through the worker.
         self.s3.copy_object(Bucket=self.bucket, Key=dst_key, CopySource={"Bucket": self.bucket, "Key": src_key})
 
+    def delete_many(self, keys: list[str]) -> None:
+        for i in range(0, len(keys), 1000):
+            self.s3.delete_objects(Bucket=self.bucket, Delete={"Objects": [{"Key": k} for k in keys[i:i + 1000]], "Quiet": True})
+
 
 class MemoryStorage:
     """In-memory Storage for tests and local dry runs."""
 
     def __init__(self) -> None:
         self.objects: dict[str, tuple[bytes, str]] = {}
+
+    def delete_many(self, keys: list[str]) -> None:
+        for k in keys:
+            self.objects.pop(k, None)
 
     def put_file(self, path: Path, key: str, content_type_: str | None = None) -> int:
         data = Path(path).read_bytes()

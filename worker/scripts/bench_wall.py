@@ -29,6 +29,18 @@ BENCH = {
     "turntable-24": {"scene": {"root": "testdata/scenes/scene.glb"}, "render": {"engine": "blender-eevee", "resolution": [640, 640]},
                      "animation": {"frames": [1, 24], "fps": 24, "turntable": {"revolutions": 1}}, "output": {"format": "mp4"}},
     "gsplat-still": {"scene": {"root": "testdata/scenes/splats/garden.spz"}, "render": {"engine": "gsplat", "resolution": [960, 720]}},
+    # fast mode (compare --priority standard vs rush)
+    "still-4k": {"scene": {"root": "testdata/scenes/scene.glb"},
+                 "render": {"engine": "blender-cycles", "quality": "final", "resolution": [3840, 2160]}},
+    "turntable-120": {"scene": {"root": "testdata/scenes/scene.glb"},
+                      "render": {"engine": "blender-cycles", "quality": "draft", "resolution": [1280, 720]},
+                      "animation": {"frames": [1, 120], "fps": 30, "turntable": {"revolutions": 1}}, "output": {"format": "mp4"}},
+    "splat-table": {"scene": {"root": "testdata/scenes/scene.glb"},
+                    "output": {"format": "splat", "splatFormat": "spz", "splatBake": {"preset": "standard"}}},
+    # gitignored download (testdata/showcase-public/fetch.py --only porsche); path via RENDA_PORSCHE
+    "splat-porsche": {"scene": {"root": os.environ.get("RENDA_PORSCHE", "testdata/showcase-public/assets/porsche.glb")},
+                      "environment": {"hdri": "studio", "intensity": 1.3, "rotationDeg": 35},
+                      "output": {"format": "splat", "splatFormat": "spz", "splatBake": {"preset": "standard"}}},
 }
 
 
@@ -43,6 +55,9 @@ def main() -> None:
     ap.add_argument("--tag", default="w")
     ap.add_argument("--only", nargs="*")
     ap.add_argument("--repeat", type=int, default=1)
+    ap.add_argument("--priority", default="standard", choices=["economy", "standard", "rush"])
+    ap.add_argument("--sink", help="bench_sink.py endpoint URL: report billed seconds per hardware from the job's usage events")
+    ap.add_argument("--sink-dict", default="renda-bench-sink-events")
     args = ap.parse_args()
     assert args.app != "renda-worker", "never benchmark production"
     env = _env()
@@ -66,17 +81,32 @@ def main() -> None:
             pkg["scene"]["root"] = "scene"
             pkg.setdefault("render", {})["seed"] = int(time.time()) % 100000 + rep  # defeat the result cache
             job_id = f"bench_{args.tag}_{name}_{uuid.uuid4().hex[:6]}"
-            body = {"jobId": job_id, "package": pkg, "priority": "standard",
+            body = {"jobId": job_id, "package": pkg, "priority": args.priority,
                     "inputs": {uri: s3.generate_presigned_url("get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=3600)},
-                    "outputPrefix": f"outputs/bench-{args.tag}/{job_id}/", "callbackUrl": "https://renda.vochsel.com/api/v1/internal/worker/events"}
+                    "outputPrefix": f"outputs/bench-{args.tag}/{job_id}/", "callbackUrl": args.sink or "https://renda.vochsel.com/api/v1/internal/worker/events"}
             t = time.time()
             res = orchestrate.remote(body)
             wall = round(time.time() - t, 1)
-            row = {"bench": name, "wall_s": wall, "status": res.get("status"), "engine": res.get("engine"),
-                   "timings": res.get("timings"), "error": res.get("error")}
+            row = {"bench": name, "priority": args.priority, "wall_s": wall, "status": res.get("status"),
+                   "engine": res.get("engine"), "timings": res.get("timings"), "error": res.get("error")}
+            if args.sink:
+                time.sleep(3)  # background status events drain after the return
+                d = modal.Dict.from_name(args.sink_dict)
+                evs = [v for k, v in d.items() if k.startswith(job_id + "|")]
+                billed: dict[str, float] = {}
+                seen = set()
+                for e in evs:
+                    if e.get("type") == "usage" and (e.get("chunk"), e.get("hardware")) not in seen:
+                        seen.add((e.get("chunk"), e.get("hardware")))
+                        billed[e["hardware"]] = round(billed.get(e["hardware"], 0) + float(e["seconds"]), 1)
+                price = {"cpu": 0.015, "gpu-l4": 0.035, "gpu-l40s": 0.075}
+                row["billed_s"] = billed
+                row["cost_usd"] = round(sum(v / 60 * price.get(k, 0.035) for k, v in billed.items()), 4)
+                row["notes"] = [e.get("message", "")[:200] for e in evs if e.get("type") == "warning"
+                                and any(k in e.get("message", "") for k in ("PSNR", "tiles", "fast mode"))]
             rows.append(row)
             print(json.dumps(row), flush=True)
-    print("SUMMARY", json.dumps([{k: r[k] for k in ("bench", "wall_s", "status")} for r in rows]))
+    print("SUMMARY", json.dumps([{k: r.get(k) for k in ("bench", "priority", "wall_s", "status", "billed_s", "cost_usd")} for r in rows]))
 
 
 if __name__ == "__main__":
