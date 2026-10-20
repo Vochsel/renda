@@ -39,16 +39,24 @@ SPLAT_SECONDS_PER_M: dict[str, float] = {"cpu": 150.0, "gpu-l4": 0.18, "gpu-l40s
 DEFAULT_SPLATS = 1_000_000
 
 # Engine start + scene load (seconds); .blend/.fbx/.abc via IR add an extraction pass.
+# Calibrated 2026-10-20 from production usage (20th-percentile billed seconds of single-frame chunks,
+# where load dominates): Eevee 5.5, Workbench 6.6, Mitsuba GPU 4.1 / CPU 5.9, three.js 5.0, Cycles CPU 5.2.
 LOAD_SECONDS: dict[str, float] = {
-    "blender-cycles": 8.0, "blender-eevee": 7.0, "blender-workbench": 5.0, "mitsuba": 4.0, "threejs": 3.0,
+    "blender-cycles": 7.0, "blender-eevee": 5.5, "blender-workbench": 6.0, "mitsuba": 4.5, "threejs": 5.0,
     "gsplat": 6.0,  # torch + CUDA init + file load
 }
 GPU_ONLY = {"blender-eevee", "blender-workbench", "gsplat"}
 MIN_FRAME_SECONDS = {"threejs": 0.15, "blender-workbench": 0.2, "blender-eevee": 0.5, "gsplat": 0.05}
 
-# Chunk overhead targets: share of a chunk spent loading the scene
-OVERHEAD_TARGET = {"economy": 0.05, "standard": 0.10, "rush": 0.25}
+# Fan-out economics. Each extra container costs its load overhead o (start + scene load, billed);
+# N containers on W seconds of work: cost ≈ N·o + W, wall ≈ o + W/N.
+#   economy  — fewest containers: one, unless a container would exceed ECONOMY_CHUNK_SECONDS of work
+#   standard — split only while load stays ≤ 10% of each chunk (chunk work ≥ 9·o)
+#   rush     — as wide as possible while load stays ≤ 50% of each chunk (chunk work ≥ o)
+# Shared with web/src/lib/estimate.ts via spec/fixtures/estimator/fanout.json.
+OVERHEAD_TARGET = {"economy": 0.05, "standard": 0.10, "rush": 0.5}
 MAX_CONTAINERS = {"economy": 10, "standard": 50, "rush": 50}
+ECONOMY_CHUNK_SECONDS = 1800.0
 
 # Light baking (output.format "glb" + output.bake): samples per texel by quality, per baker.
 BAKE_SAMPLES: dict[str, dict[str, int]] = {
@@ -75,18 +83,21 @@ class RenderPlan:
     priority: str = "standard"
     est_load_seconds: float = 0.0
     est_frame_seconds: float = 0.0
+    est_wall_seconds: tuple[float, float] = (0.0, 0.0)
     splats: bool = False  # the scene has Gaussian splats (the worker routes these to the splat-capable image)
     splat_bake: dict | None = None  # output.format "splat": resolved splatbake.BakeSettings (frames = training views)
 
     def to_json(self) -> dict:
         d = asdict(self)
         d["est_seconds"] = list(self.est_seconds)
+        d["est_wall_seconds"] = list(self.est_wall_seconds)
         return d
 
     @classmethod
     def from_json(cls, d: dict) -> "RenderPlan":
         d = dict(d)
         d["est_seconds"] = tuple(d.get("est_seconds", (0, 0)))
+        d["est_wall_seconds"] = tuple(d.get("est_wall_seconds", (0, 0)))
         return cls(**d)
 
 
@@ -198,11 +209,30 @@ def choose_hardware(engine: str, pkg: RendaPackage, priority: str, samples: int,
     return best
 
 
+def fanout_count(n_frames: int, load_s: float, frame_s: float, priority: str) -> int:
+    """How many containers to split `n_frames` over (see the fan-out economics above)."""
+    if n_frames <= 1:
+        return 1
+    work = n_frames * max(frame_s, 1e-3)
+    if priority == "economy":
+        n = math.ceil(work / ECONOMY_CHUNK_SECONDS)
+    else:
+        target = OVERHEAD_TARGET[priority]
+        min_chunk_work = load_s * (1 - target) / target
+        n = math.floor(work / max(min_chunk_work, 1e-3))
+    return int(min(max(n, 1), MAX_CONTAINERS[priority], n_frames))
+
+
 def chunk_frames(frames: list[int], load_s: float, frame_s: float, priority: str) -> list[list[int]]:
-    target = OVERHEAD_TARGET[priority]
-    per = max(1, math.ceil(load_s * (1 - target) / (target * max(frame_s, 1e-3))))
-    per = max(per, math.ceil(len(frames) / MAX_CONTAINERS[priority]))
+    n = fanout_count(len(frames), load_s, frame_s, priority)
+    per = math.ceil(len(frames) / n)
     return [frames[i : i + per] for i in range(0, len(frames), per)]
+
+
+def wall_seconds(chunks: list[list[int]], load_s: float, frame_s: float, extra: float = 0.0) -> float:
+    """Wall time with every chunk running in parallel: one load + the longest chunk + serial extras."""
+    longest = max((len(c) for c in chunks), default=1)
+    return load_s + longest * frame_s + extra
 
 
 def plan(
@@ -269,6 +299,7 @@ def plan(
     chunks = chunk_frames(frames, load_s, frame_s, priority)
     encode_s = 0.05 * len(frames) * (pkg.render.resolution[0] * pkg.render.resolution[1] / 2.07e6) if pkg.output.is_video else 0.0
     total = len(chunks) * load_s + len(frames) * frame_s + encode_s
+    wall = wall_seconds(chunks, load_s, frame_s, encode_s + (5.0 if pkg.output.is_video else 0.0))
 
     key = ""
     if asset_hashes is not None or asset_paths:
@@ -284,6 +315,7 @@ def plan(
         est_seconds=(round(total * 0.6, 1), round(total * 1.8, 1)), warnings=warnings, cache_key=key,
         scene_format=fmt, samples=samples, priority=priority,
         est_load_seconds=round(load_s, 2), est_frame_seconds=round(frame_s, 3), splats=has_splats,
+        est_wall_seconds=(round(wall * 0.6, 1), round(wall * 1.8, 1)),
     )
 
 
@@ -342,10 +374,16 @@ def _plan_model(pkg, asset_paths, fmt, priority, available, triangles, asset_has
     )
 
 
-# Splat-bake refinement: seconds per 1000 steps at 768² with ~500k Gaussians (gsplat MCMC, measured-ish),
-# scaled by view resolution; plus a fixed start (torch/CUDA init, scene + view loading, export).
-TRAIN_SECONDS_PER_K_STEPS: dict[str, float] = {"gpu-l4": 22.0, "gpu-l40s": 10.0, "cpu": 0.0}
-TRAIN_START_SECONDS = 25.0
+# Splat-bake refinement: seconds per 1000 steps at 768² with ~450k Gaussians (gsplat MCMC; production
+# 2026-10-20: 7k steps ≈ 190–230 s on an L4 → ~30 s/1k incl. eval), scaled by view resolution, plus a fixed
+# start (torch/CUDA init, scene build, view decode, geometry targets, export). Training usually stops early
+# on the PSNR plateau, so `steps` is an upper bound.
+TRAIN_SECONDS_PER_K_STEPS: dict[str, float] = {"gpu-l4": 30.0, "gpu-l40s": 12.0, "cpu": 0.0}
+TRAIN_START_SECONDS = 15.0
+# Fan the training views out to parallel containers only when rendering them inside the trainer would add
+# more than this much wall time; economy never fans out, rush fans out past 20 s of view rendering.
+SINGLE_CONTAINER_MAX_VIEW_SECONDS = {"economy": math.inf, "standard": 240.0, "rush": 20.0}
+TRAINER_ENGINES = {"blender-cycles", "blender-eevee", "blender-workbench", "mitsuba"}  # in the splat image
 
 
 def train_seconds(settings: dict) -> float:
@@ -358,8 +396,9 @@ def train_seconds(settings: dict) -> float:
 
 def _plan_splat_bake(pkg: RendaPackage, asset_paths, fmt: str, priority: str, available, triangles,
                      asset_hashes, engine_versions, prices) -> RenderPlan:
-    """output.format "splat": frames are the training views (rendered in parallel chunks), then one
-    refinement job; preset fast is a single CPU chunk running the direct conversion."""
+    """output.format "splat": the training views (frames), rendered either inside the training container
+    (small jobs: no extra container overheads or Volume round trip) or fanned out to parallel chunks that
+    stream into a trainer that starts as soon as the first views land; preset fast is one CPU chunk."""
     from . import splatbake
 
     warnings: list[str] = []
@@ -370,6 +409,8 @@ def _plan_splat_bake(pkg: RendaPackage, asset_paths, fmt: str, priority: str, av
     if ignored:
         warnings.append(f"splat bake: {', '.join(ignored)} ignored — training views are sharp pinhole renders "
                         "(lens/blur/screen-space effects would bake in as view-inconsistent noise)")
+    if settings.cameras and settings.preset == "fast" and not settings.views:
+        warnings.append("splat bake: preset fast converts the mesh directly; splatBake.cameras need preset standard or high")
     key = ""
     if asset_hashes is not None or asset_paths:
         from .cache import cache_key, sha256_file
@@ -384,14 +425,20 @@ def _plan_splat_bake(pkg: RendaPackage, asset_paths, fmt: str, priority: str, av
         return RenderPlan(engine=splatbake.FAST_ENGINE, hardware="cpu", frames=[1], chunks=[[1]],
                           est_seconds=(round(est * 0.6, 1), round(est * 1.8, 1)), warnings=warnings, cache_key=key,
                           scene_format=fmt, priority=priority, est_load_seconds=load_s, est_frame_seconds=est,
-                          splat_bake=settings.to_json())
+                          est_wall_seconds=(round(est * 0.6, 1), round(est * 1.8, 1)), splat_bake=settings.to_json())
 
     vpkg = splatbake.view_package(pkg, settings)
-    if vpkg.render.engine == "auto":
-        cands = [e for e in choose_engine(fmt, vpkg.render.quality, available) if e != "gsplat"]
-        if not cands:
-            raise RuntimeError(f"no mesh engine available for .{fmt} here; render with --cloud")
-        engine = cands[0]
+    if settings.view_engine_auto:
+        # Cycles or Eevee is decided from the scene's materials once it's loaded (both run in the Blender
+        # image): plan, route and estimate as Cycles, the conservative choice.
+        if available is None or "blender-cycles" in available:
+            engine = "blender-cycles"
+        else:
+            cands = [e for e in choose_engine(fmt, vpkg.render.quality, available) if e != "gsplat"]
+            if not cands:
+                raise RuntimeError(f"no mesh engine available for .{fmt} here; render with --cloud")
+            engine = cands[0]
+            settings.view_engine_auto = False
     else:
         engine = vpkg.render.engine
     settings.engine = engine
@@ -403,16 +450,58 @@ def _plan_splat_bake(pkg: RendaPackage, asset_paths, fmt: str, priority: str, av
     hardware = choose_hardware(engine, vpkg, priority, samples, complexity, len(frames), warnings, prices)
     load_s = LOAD_SECONDS[engine] + (6.0 if fmt in ("blend", "fbx", "abc") and not engine.startswith("blender") else 0.0)
     frame_s = frame_seconds(engine, hardware, vpkg, samples, complexity)
-    chunks = chunk_frames(frames, load_s, frame_s, priority)
+    # inside the trainer the views render on the training GPU
+    train_hw = settings.train_hardware
+    frame_s_single = frame_seconds(engine, train_hw, vpkg, samples, complexity) if engine != "threejs" else frame_s
+    if settings.fan_out is True:
+        single = False
+    elif settings.fan_out is False:
+        single = True
+    else:
+        single = len(frames) * frame_s_single <= SINGLE_CONTAINER_MAX_VIEW_SECONDS[priority] and settings.preset != "high"
+    if single and engine not in TRAINER_ENGINES:
+        if settings.fan_out is False:
+            warnings.append(f"splat bake: {engine} views can't render inside the training container; fanning out")
+        single = False
+    settings.single_container = single
+    settings.stream = not single
     data = settings.to_json()
-    render_s = len(chunks) * load_s + len(frames) * frame_s
-    total = render_s + train_seconds(data)
+    t_train = train_seconds(data)
+    if single:
+        chunks = [frames]
+        # views render on the training GPU, sharing its one scene load
+        frame_s = frame_s_single
+        view_s = len(frames) * frame_s
+        total = view_s + t_train
+        wall = view_s + t_train
+        hardware = train_hw
+    else:
+        view_s = len(frames) * frame_s
+        # an explicit fanOut asks for parallelism: split as wide as rush would
+        chunks = chunk_frames(frames, load_s, frame_s, "rush" if settings.fan_out is True else priority)
+        total = len(chunks) * load_s + view_s + t_train
+        # the trainer starts once the first views land, so rendering overlaps training's start
+        wall = wall_seconds(chunks, load_s, frame_s) + t_train * 0.9
     return RenderPlan(
         engine=engine, hardware=hardware, frames=frames, chunks=chunks,
         est_seconds=(round(total * 0.6, 1), round(total * 1.8, 1)), warnings=warnings, cache_key=key,
         scene_format=fmt, samples=samples, priority=priority, est_load_seconds=round(load_s, 2),
         est_frame_seconds=round(frame_s, 3), splat_bake=data,
+        est_wall_seconds=(round(wall * 0.6, 1), round(wall * 1.8, 1)),
     )
+
+
+def priority_estimates(pkg: RendaPackage, asset_paths: dict[str, Path] | None, prices: dict[str, float] | None = None,
+                       **kw) -> dict[str, dict]:
+    """Cost and wall-time ranges for each priority, so callers can trade money for latency."""
+    out = {}
+    for pr in ("economy", "standard", "rush"):
+        p = plan(pkg, asset_paths, pr, prices=prices, **kw)
+        single = bool((p.splat_bake or {}).get("single_container"))
+        out[pr] = {"hardware": p.hardware, "containers": 1 if single else len(p.chunks),
+                   "estCostUsd": list(estimate_cost(p, prices)), "estWallSeconds": list(p.est_wall_seconds),
+                   "estSeconds": list(p.est_seconds)}
+    return out
 
 
 def estimate_cost(plan: RenderPlan, prices: dict[str, float] | None = None) -> tuple[float, float]:
@@ -421,6 +510,8 @@ def estimate_cost(plan: RenderPlan, prices: dict[str, float] | None = None) -> t
     prices = prices or DEFAULT_PRICES
     p = prices.get(plan.hardware, DEFAULT_PRICES.get(plan.hardware, 0.06))
     lo, hi = plan.est_seconds
+    if plan.splat_bake and plan.splat_bake.get("views") and plan.splat_bake.get("single_container"):
+        return (round(lo / 60 * p, 4), round(hi / 60 * p, 4))
     if plan.splat_bake and plan.splat_bake.get("views"):
         t = train_seconds(plan.splat_bake)
         pt = prices.get(plan.splat_bake["train_hardware"], DEFAULT_PRICES["gpu-l4"])

@@ -41,7 +41,7 @@ def test_presets_and_overrides():
     fast = splatbake.resolve_settings(_pkg(splatBake={"preset": "fast"}))
     assert fast.direct and fast.train_hardware == "cpu"
     std = splatbake.resolve_settings(_pkg())
-    assert (std.views, std.steps, std.sh_degree, std.train_hardware, std.splat_format) == (96, 7000, 2, "gpu-l4", "ply")
+    assert (std.views, std.steps, std.sh_degree, std.train_hardware, std.splat_format) == (96, 6000, splatbake.SH_AUTO, "gpu-l4", "spz")
     high = splatbake.resolve_settings(_pkg(splatFormat="spz", splatBake={"preset": "high", "views": 120, "steps": 9000}))
     assert (high.views, high.steps, high.train_hardware, high.splat_format) == (120, 9000, "gpu-l40s", "spz")
 
@@ -117,8 +117,20 @@ def test_planner_fast_and_standard():
     fast = plan(_pkg(splatBake={"preset": "fast"}), {str(GLB): GLB})
     assert (fast.engine, fast.hardware, fast.chunks) == (splatbake.FAST_ENGINE, "cpu", [[1]])
     std = plan(_pkg(), {str(GLB): GLB})
-    assert std.frames == list(range(1, 97)) and len(std.chunks) > 1 and std.splat_bake["views"] == 96
+    assert std.frames == list(range(1, 97)) and std.splat_bake["views"] == 96
     assert std.engine != "gsplat" and std.hardware.startswith("gpu")
+    # ~96 cheap views: rendering them in the training container beats 5 extra container start-ups
+    assert std.splat_bake["single_container"] and std.chunks == [std.frames] and not std.splat_bake["stream"]
+    # rush fans the views out and streams them into the trainer; so does an explicit fanOut
+    rush = plan(_pkg(), {str(GLB): GLB}, "rush")
+    assert not rush.splat_bake["single_container"] and rush.splat_bake["stream"] and len(rush.chunks) > 1
+    forced = plan(_pkg(splatBake={"fanOut": True}), {str(GLB): GLB})
+    assert not forced.splat_bake["single_container"] and len(forced.chunks) > 1
+    assert plan(_pkg(splatBake={"preset": "high"}), {str(GLB): GLB}).splat_bake["single_container"] is False
+    # three.js views can't render in the trainer image
+    tj = plan(_pkg(splatBake={"engine": "threejs", "fanOut": False}), {str(GLB): GLB})
+    assert not tj.splat_bake["single_container"] and any("fanning out" in w for w in tj.warnings)
+    assert std.est_wall_seconds[0] > 0 and rush.est_wall_seconds[0] < std.est_wall_seconds[0]
 
 
 def test_direct_bake_end_to_end(tmp_path):
@@ -168,3 +180,80 @@ def test_override_cameras_win_over_package_lens():
     with override_cameras(rig):
         cams = resolve_cameras(pkg, Stage(), [1])
     assert cams[1] is rig[1] and cams[1].fov_y_deg == 40.0
+
+
+def test_explicit_and_orbit_cameras():
+    from renda.scene import build_stage
+
+    cams = [{"position": [3 * np.cos(a), 1.5, 3 * np.sin(a)], "target": [0, 0.5, 0], "fovDeg": 35}
+            for a in np.linspace(0, 2 * np.pi, 12, endpoint=False)]
+    pkg = _pkg(splatBake={"cameras": cams})
+    st = splatbake.resolve_settings(pkg)
+    assert st.views == 12 and st.cameras
+    stage, _ = build_stage(pkg, {str(GLB): GLB})
+    rig = splatbake.bake_rig(stage, st)
+    assert len(rig) == 12 and np.allclose(rig[1].position, cams[0]["position"]) and rig[1].fov_y_deg == 35
+    orbit = splatbake.resolve_settings(_pkg(splatBake={"coverage": "orbit", "views": 24}))
+    ring = splatbake.camera_rig(stage, orbit)
+    up = stage.up_vector() / np.linalg.norm(stage.up_vector())
+    lo, hi = stage.bounds()
+    c = (lo + hi) / 2
+    elev = [np.degrees(np.arcsin(((cam.position - c) / np.linalg.norm(cam.position - c)) @ up)) for cam in ring]
+    assert len(ring) == 24 and np.allclose(elev, 20, atol=0.5)
+
+
+def test_coverage_rig_spreads_closeups_and_respects_band():
+    from renda.scene import build_stage
+
+    pkg = _pkg(splatBake={"coverage": "hemisphere"})
+    stage, _ = build_stage(pkg, {str(GLB): GLB})
+    st = splatbake.resolve_settings(pkg)
+    rig = splatbake.bake_rig(stage, st)
+    assert len(rig) == 96
+    lo, hi = stage.bounds()
+    up = stage.up_vector() / np.linalg.norm(stage.up_vector())
+    radius = np.linalg.norm(hi - lo) / 2
+    close = [c for c in rig.values() if np.linalg.norm(c.position - c.target) < radius * 2]
+    assert len(close) >= 30  # ~45% close-ups
+    targets = np.array([c.target for c in close])
+    # farthest-point sampled: no two close-up targets nearly coincide
+    d = np.linalg.norm(targets[:, None] - targets[None], axis=-1) + np.eye(len(targets)) * 1e9
+    assert d.min() > radius * 0.01
+    # hemisphere: no view from below the targets' horizon
+    for c in rig.values():
+        v = (c.position - c.target) / np.linalg.norm(c.position - c.target)
+        assert v @ up > np.sin(np.radians(5)) - 1e-3
+    # deterministic across containers
+    assert all(np.allclose(a.position, b.position) for a, b in zip(rig.values(), splatbake.bake_rig(stage, st).values()))
+
+
+def test_adapt_to_scene_picks_engine_and_sh():
+    from renda.scene import build_stage
+
+    pkg = _pkg()
+    stage, _ = build_stage(pkg, {str(GLB): GLB})
+    st = splatbake.resolve_settings(pkg)
+    st.engine = "blender-cycles"
+    glossy_st, notes = splatbake.adapt_to_scene(st, stage)
+    assert splatbake.glossy_fraction(stage) > splatbake.GLOSSY_SCENE  # the gold knot
+    assert glossy_st.engine == "blender-cycles" and glossy_st.sh_degree == 2 and notes
+    hi = splatbake.resolve_settings(_pkg(splatBake={"preset": "high"}))
+    hi.engine = "blender-cycles"
+    assert splatbake.adapt_to_scene(hi, stage)[0].sh_degree == 3
+    for m in stage.materials.values():
+        m.metallic, m.roughness, m.transmission, m.emission_strength = 0.0, 0.8, 0.0, 0.0
+    diffuse_st, _ = splatbake.adapt_to_scene(st, stage)
+    assert diffuse_st.engine == "blender-eevee" and diffuse_st.sh_degree == 1
+    pinned = splatbake.resolve_settings(_pkg(splatBake={"engine": "mitsuba", "shDegree": 2}))
+    pinned.engine = "mitsuba"
+    same, _ = splatbake.adapt_to_scene(pinned, stage)
+    assert same.engine == "mitsuba" and same.sh_degree == 2
+
+
+def test_view_package_uses_cheap_denoised_views():
+    st = splatbake.resolve_settings(_pkg())
+    v = splatbake.view_package(_pkg(), st)
+    assert v.render.quality == "draft" and v.render.denoise
+    final = load_package({"scene": {"root": str(GLB)}, "render": {"quality": "final"}, "output": {"format": "splat"}})
+    keep = splatbake.view_package(final, st)
+    assert keep.render.quality == "final"

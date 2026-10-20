@@ -55,8 +55,29 @@ const SPLAT_LAYER_SECONDS = 0.15;
 
 // STEP/IGES add an OpenCASCADE tessellation pass (cached per file + tolerance).
 const LOAD_SECONDS: Record<string, number> = { blend: 12, fbx: 15, abc: 15, usd: 8, splat: 8, step: 10, iges: 8, default: 5 };
-const MAX_CONTAINERS = 50;
-const TARGET_CHUNK_SECONDS = 90;
+
+/**
+ * Fan-out economics (mirrors core/renda/planner.py fanout_count; shared fixture
+ * spec/fixtures/estimator/fanout.json). Each extra container costs its load overhead o:
+ * N containers on W seconds of work cost ≈ N·o + W and take ≈ o + W/N.
+ *   economy: fewest containers (one, unless a container would exceed 30 min of work)
+ *   standard: split only while load stays ≤ 10% of each chunk; rush: while it stays ≤ 50%.
+ */
+const OVERHEAD_TARGET: Record<Priority, number> = { economy: 0.05, standard: 0.1, rush: 0.5 };
+const MAX_CONTAINERS: Record<Priority, number> = { economy: 10, standard: 50, rush: 50 };
+const ECONOMY_CHUNK_SECONDS = 1800;
+
+export function fanoutCount(frames: number, loadSeconds: number, frameSeconds: number, priority: Priority): number {
+  if (frames <= 1) return 1;
+  const work = frames * Math.max(frameSeconds, 1e-3);
+  let n: number;
+  if (priority === "economy") n = Math.ceil(work / ECONOMY_CHUNK_SECONDS);
+  else {
+    const t = OVERHEAD_TARGET[priority];
+    n = Math.floor(work / Math.max((loadSeconds * (1 - t)) / t, 1e-3));
+  }
+  return Math.min(Math.max(n, 1), MAX_CONTAINERS[priority], frames);
+}
 
 export type Estimate = {
   engine: ConcreteEngine | "export";
@@ -148,18 +169,24 @@ function effectsFactor(pkg: RendaPackage, engine: string): number {
 /** Splat bake presets (mirror core/renda/splatbake PRESETS). views 0 = direct mesh → Gaussians on CPU. */
 const SPLAT_PRESETS = {
   fast: { views: 0, resolution: 0, steps: 0, train: "cpu" as Hardware },
-  standard: { views: 96, resolution: 768, steps: 7000, train: "gpu-l4" as Hardware },
-  high: { views: 200, resolution: 1024, steps: 30000, train: "gpu-l40s" as Hardware },
+  standard: { views: 96, resolution: 768, steps: 6000, train: "gpu-l4" as Hardware },
+  high: { views: 200, resolution: 1024, steps: 15000, train: "gpu-l40s" as Hardware },
 };
-const TRAIN_SECONDS_PER_K_STEPS: Partial<Record<Hardware, number>> = { "gpu-l4": 22, "gpu-l40s": 10 };
+// gsplat MCMC refinement, production 2026-10-20 (~30 s per 1k steps at 768² on an L4); steps are an upper bound.
+const TRAIN_SECONDS_PER_K_STEPS: Partial<Record<Hardware, number>> = { "gpu-l4": 30, "gpu-l40s": 12 };
+const TRAIN_START_SECONDS = 15;
+// Render the views inside the training container unless that adds more wall time than this.
+const SINGLE_CONTAINER_MAX_VIEW_SECONDS: Record<Priority, number> = { economy: Infinity, standard: 240, rush: 20 };
+const TRAINER_ENGINES = new Set<ConcreteEngine>(["blender-cycles", "blender-eevee", "blender-workbench", "mitsuba"]);
 
-/** output.format "splat": render N square views in parallel, then one refinement job (or a CPU conversion). */
-export function estimateSplatBake(pkg: RendaPackage): Estimate {
+/** output.format "splat": views rendered in the training container (small jobs) or fanned out and streamed. */
+export function estimateSplatBake(pkg: RendaPackage, priority: Priority = "standard"): Estimate {
   const sb: Partial<NonNullable<RendaPackage["output"]["splatBake"]>> = pkg.output.splatBake ?? {};
   const p = SPLAT_PRESETS[sb.preset ?? "standard"];
-  const views = sb.views ?? p.views;
+  const explicit = typeof sb.views === "number" ? sb.views : undefined;
+  const views = sb.cameras?.length ?? explicit ?? p.views;
   const lo = 0.6, hi = 1.8;
-  if (sb.preset === "fast" && !sb.views) {
+  if (sb.preset === "fast" && !sb.cameras && explicit === undefined) {
     const total = 12;
     return { engine: "blender-cycles", hardware: "cpu", frames: 1, samples: 0, chunks: 1,
       estSeconds: [round1(total * lo), round1(total * hi)], estWallSeconds: [round1(total * lo), round1(total * hi)],
@@ -168,32 +195,55 @@ export function estimateSplatBake(pkg: RendaPackage): Estimate {
   }
   const res = sb.resolution ?? p.resolution;
   const steps = sb.steps ?? p.steps;
+  // auto → Cycles or Eevee from the materials; estimate as Cycles (conservative)
   const viewEngine = (sb.engine && sb.engine !== "auto" ? sb.engine : "blender-cycles") as ConcreteEngine;
   const engine: ConcreteEngine = viewEngine === "gsplat" ? "blender-cycles" : viewEngine;
-  const hw: Hardware = FRAME_COST[engine]["gpu-l4"] ? "gpu-l4" : "cpu";
-  const c = FRAME_COST[engine][hw]!;
-  const samples = pkg.render.samples ?? PRESET_SAMPLES[engine][pkg.render.quality];
-  const perView = c.fixed + c.perMpSample * (res * res / 1e6) * samples;
+  const train: Hardware = p.train === "cpu" ? "gpu-l4" : p.train;
+  // training views are draft + denoised unless the package asks for final quality / explicit samples
+  const quality = pkg.render.quality === "final" ? "final" : "draft";
+  const samples = pkg.render.samples ?? PRESET_SAMPLES[engine][quality];
+  const perViewOn = (hw: Hardware) => {
+    const c = FRAME_COST[engine][hw] ?? FRAME_COST[engine]["gpu-l4"] ?? FRAME_COST[engine].cpu!;
+    return c.fixed + c.perMpSample * ((res * res) / 1e6) * samples;
+  };
   const load = LOAD_SECONDS[rootFormat(pkg) ?? "default"] ?? LOAD_SECONDS.default;
-  const chunks = Math.min(MAX_CONTAINERS, views, Math.max(1, Math.ceil(perView * views / TARGET_CHUNK_SECONDS)));
-  const renderSeconds = perView * views + chunks * load;
-  const train = p.train === "cpu" ? "gpu-l4" : p.train;
-  const trainSeconds = 25 + (steps / 1000) * (TRAIN_SECONDS_PER_K_STEPS[train] ?? 22) * Math.max((res / 768) ** 2, 0.25);
-  const total = renderSeconds + trainSeconds;
-  const cost = costUsd(hw, renderSeconds) + costUsd(train, trainSeconds);
-  const wall = perView * views / chunks + load + trainSeconds;
+  const trainSeconds = TRAIN_START_SECONDS + (steps / 1000) * (TRAIN_SECONDS_PER_K_STEPS[train] ?? 30) * Math.max((res / 768) ** 2, 0.25);
+  const singleView = perViewOn(train) * views;
+  let single = sb.fanOut === false ? true : sb.fanOut === true ? false
+    : singleView <= SINGLE_CONTAINER_MAX_VIEW_SECONDS[priority] && sb.preset !== "high";
+  const warnings: string[] = [];
+  if (single && !TRAINER_ENGINES.has(engine)) {
+    if (sb.fanOut === false) warnings.push(`splat bake: ${engine} views can't render inside the training container; fanning out`);
+    single = false;
+  }
+  let hw: Hardware, chunks: number, cost: number, total: number, wall: number;
+  if (single) {
+    hw = train; chunks = 1;
+    total = singleView + trainSeconds;
+    wall = total;
+    cost = costUsd(train, total);
+  } else {
+    hw = priority === "rush" && FRAME_COST[engine]["gpu-l40s"] ? "gpu-l40s" : FRAME_COST[engine]["gpu-l4"] ? "gpu-l4" : "cpu";
+    const perView = perViewOn(hw);
+    chunks = fanoutCount(views, load, perView, sb.fanOut === true ? "rush" : priority);
+    const renderSeconds = perView * views + chunks * load;
+    total = renderSeconds + trainSeconds;
+    cost = costUsd(hw, renderSeconds) + costUsd(train, trainSeconds);
+    wall = load + Math.ceil(views / chunks) * perView + trainSeconds * 0.9; // the trainer streams views in
+  }
+  warnings.push(`splat bake: ${views} ${engine} views at ${res}px ${single ? "in the training container" : `over ${chunks} containers, streamed`}, then ≤${steps} gsplat refinement steps on ${train}`);
   return {
     engine, hardware: hw, frames: views, samples, chunks,
     estSeconds: [round1(total * lo), round1(total * hi)],
     estWallSeconds: [round1(wall * lo), round1(wall * hi)],
     estCostUsd: [round4(cost * lo), round4(cost * hi)],
-    warnings: [`splat bake: ${views} ${engine} views at ${res}px, then ${steps} gsplat refinement steps on ${train}`],
+    warnings,
   };
 }
 
 export function estimateScene(pkg: RendaPackage, priority: Priority = "standard"): Estimate {
   if (pkg.output.format === "glb") return estimateModel(pkg, priority);
-  if (pkg.output.format === "splat") return estimateSplatBake(pkg);
+  if (pkg.output.format === "splat") return estimateSplatBake(pkg, priority);
   const warnings: string[] = [];
   const fmt = rootFormat(pkg);
   const engine = resolveEngine(pkg, fmt);
@@ -226,10 +276,10 @@ export function estimateScene(pkg: RendaPackage, priority: Priority = "standard"
     const perFrame = (c.fixed + c.perMpSample * mp * samples) * passes * effectsFactor(pkg, engine) + splatLayer
       + (pkg.post ? 0.35 * mp / 2.07 : 0); // shared post stage
     const renderSeconds = perFrame * frames;
-    const chunks = Math.min(MAX_CONTAINERS, frames, Math.max(1, Math.ceil(renderSeconds / TARGET_CHUNK_SECONDS)));
+    const chunks = fanoutCount(frames, load, perFrame, priority);
     const encode = isVideo ? 3 + frames * mp * 0.02 : 0;
     const total = renderSeconds + chunks * load + encode;
-    const wall = renderSeconds / chunks + load + encode;
+    const wall = Math.ceil(frames / chunks) * perFrame + load + encode;
     return { hw, total, wall, chunks, cost: costUsd(hw, total) };
   });
 
@@ -276,4 +326,14 @@ export function estimateHyperframes(pkg: HyperframesPackage) {
 
 function round1(n: number) {
   return Math.round(n * 10) / 10;
+}
+
+/** Cost and wall-time ranges for every priority, so callers can trade money for latency. */
+export function estimatePriorities(pkg: RendaPackage): Record<Priority, Pick<Estimate, "hardware" | "chunks" | "estCostUsd" | "estWallSeconds">> {
+  const out = {} as Record<Priority, Pick<Estimate, "hardware" | "chunks" | "estCostUsd" | "estWallSeconds">>;
+  for (const pr of ["economy", "standard", "rush"] as Priority[]) {
+    const e = estimateScene(pkg, pr);
+    out[pr] = { hardware: e.hardware, chunks: e.chunks, estCostUsd: e.estCostUsd, estWallSeconds: e.estWallSeconds };
+  }
+  return out;
 }

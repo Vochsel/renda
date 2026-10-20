@@ -86,6 +86,11 @@ class Deps:
     run_chunks: Callable[[str, list[ChunkTask]], Iterable[ChunkResult]] | None = None
     run_encode: Callable[[EncodeTask], dict[str, Any]] | None = None
     run_train: Callable[["dispatch.TrainTask"], dict[str, Any]] | None = None
+    # streaming splat bakes: start training while chunks still render; spawn → handle, join(handle) → result
+    spawn_train: Callable[["dispatch.TrainTask"], Any] | None = None
+    join_train: Callable[[Any], dict[str, Any]] | None = None
+    # re-read the shared Volume (new views from other containers)
+    refresh_volume: Callable[[], None] | None = None
     download: Callable[[str, Path], None] | None = None
     # Fetcher for user-supplied https:// URLs; None → the SSRF-safe default in assets.py.
     download_untrusted: Callable[[str, Path], None] | None = None
@@ -165,8 +170,13 @@ def run_scene_job(job: JobRequest, deps: Deps) -> dict[str, Any]:
             out_format = str(get(output_cfg, "format", "png"))
             tasks = dispatch.build_tasks(job, plan, dispatch.scene_formats(asset_paths), out_format, deps.asset_root)
             total_frames = sum(len(t.frames) for t in tasks)
-            runner = tasks[0].runner
-            ev.status("rendering", progress=0.05, engine=get(plan, "engine"), hardware=dispatch.runner_hardware(runner).value)
+            hw_now = dispatch.runner_hardware(tasks[0].runner).value if tasks else \
+                str(get(get(plan, "splat_bake"), "train_hardware", get(plan, "hardware")))
+            ev.status("rendering", progress=0.05, engine=get(plan, "engine"), hardware=hw_now)
+            train_handle = None
+            if dispatch.is_streaming(plan) and deps.spawn_train and deps.join_train:
+                # the trainer waits for the first views on the shared Volume, then trains while chunks render
+                train_handle = deps.spawn_train(dispatch.build_train_task(job, plan, deps.asset_root))
 
         # Wait on chunks — not billed to the user (each chunk bills itself).
         results: list[ChunkResult] = []
@@ -186,9 +196,13 @@ def run_scene_job(job: JobRequest, deps: Deps) -> dict[str, Any]:
             if dispatch.is_splat_training(plan):
                 _check_cancel(deps)
                 ev.status("encoding", progress=0.9)  # "training" in the UI's terms; keeps the status enum stable
-                assert deps.run_train is not None
                 with active.paused():  # the training container bills its own time
-                    trained = deps.run_train(dispatch.build_train_task(job, plan, deps.asset_root))
+                    if train_handle is not None:
+                        _mark_views_complete(deps, job.jobId)
+                        trained = deps.join_train(train_handle)
+                    else:
+                        assert deps.run_train is not None
+                        trained = deps.run_train(dispatch.build_train_task(job, plan, deps.asset_root))
                 for w in trained.get("warnings", []):
                     ev.warning(w)
                 outputs = trained["outputs"]
@@ -232,6 +246,15 @@ def run_scene_job(job: JobRequest, deps: Deps) -> dict[str, Any]:
         # Orchestrator active time (plan, finalize) on a 0.25-core container; skip on cache hits.
         if billable and _billed(active.total, cache) > 0:
             ev.usage(hw.Hardware.CPU.value, _billed(active.total, cache), "orchestrate")
+
+
+def _mark_views_complete(deps: Deps, job_id: str) -> None:
+    """Tell a streaming trainer that every view chunk has finished (it stops waiting for more)."""
+    d = Path(dispatch.bake_views_dir(deps.asset_root, job_id))
+    d.mkdir(parents=True, exist_ok=True)
+    (d / ".complete").write_text("1")
+    if deps.on_new_asset:
+        deps.on_new_asset()  # Volume commit, so the training container sees the marker
 
 
 def _plain(cfg: Any) -> Any:
@@ -291,7 +314,8 @@ def run_train(task: "dispatch.TrainTask", deps: Deps, started: float | None = No
         asset_paths = deps.core.resolve(pkg, work, cache.fetch)
         out_dir = work / "out"
         out_dir.mkdir()
-        result = deps.core.train_splat(task.plan, pkg, asset_paths, Path(task.views_dir), out_dir)
+        result = deps.core.train_splat(task.plan, pkg, asset_paths, Path(task.views_dir), out_dir,
+                                       refresh=deps.refresh_volume)
 
         def upload(f: Path) -> dict[str, Any]:
             key = task.output_prefix + f.name

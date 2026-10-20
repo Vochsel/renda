@@ -323,17 +323,26 @@ class VideoSettings(_M):
     crf: int = Field(default=18, ge=0, le=51)
 
 
+class SplatBakeCamera(_M):
+    position: Vec3
+    target: Vec3
+    up: Vec3 | None = None
+    fovDeg: float = Field(default=40.0, gt=1, lt=170)
+
+
 class SplatBake(_M):
     """Bake the scene into a 3D Gaussian splat (`output.format: "splat"`)."""
 
     preset: Literal["fast", "standard", "high"] = "standard"
-    views: int | None = Field(default=None, ge=8, le=1000)
+    views: Literal["auto"] | Annotated[int, Field(ge=8, le=1000)] | None = None
+    cameras: Annotated[list[SplatBakeCamera], Field(min_length=8, max_length=1000)] | None = None
     resolution: int | None = Field(default=None, ge=128, le=2048)
     steps: int | None = Field(default=None, ge=0, le=100000)
     shDegree: int | None = Field(default=None, ge=0, le=3)
     maxGaussians: int | None = Field(default=None, ge=1000, le=10_000_000)
     engine: EngineName = "auto"
-    coverage: Literal["auto", "sphere", "hemisphere"] = "auto"
+    coverage: Literal["auto", "sphere", "hemisphere", "orbit"] = "auto"
+    fanOut: Literal["auto"] | bool = "auto"
     dataset: bool = False
 
 

@@ -536,16 +536,27 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
   server.registerTool("renda_bake_splat", {
     title: "Bake a 3D scene into a Gaussian splat",
     description: "Turn any mesh scene (glTF/GLB, .blend, USD, FBX, OBJ, STL…, with its lights/HDRI/materials) into a 3D Gaussian splat "
-      + "(.ply/.spz/.splat). preset fast: mesh → Gaussians directly (albedo only, seconds, CPU). standard (default): ~96 views rendered in "
-      + "parallel (Cycles by default) + gsplat refinement, so lighting, shadows and reflections are baked in (a few minutes, ~$0.2–0.5). "
-      + "high: 200 views, 30k steps, SH degree 3 on an L40S. dataset=true also returns the views + an exact COLMAP model as a zip. "
+      + "(.spz by default; .ply/.splat). preset fast: mesh → Gaussians directly (albedo only, seconds, CPU, ~$0.003). standard (default): "
+      + "~96 views placed by surface coverage, rendered with any engine (auto: Eevee for diffuse scenes, Cycles for glossy/glass) and "
+      + "refined with gsplat so lighting, shadows and reflections are baked in (a few minutes, ~$0.1–0.2). Small bakes render the views "
+      + "inside the training GPU; rush/high fan out and stream. high: 200 views at 1024px on an L40S. Pass `cameras` to use your own "
+      + "training views. dataset=true also returns the views + an exact COLMAP model as a zip. "
       + "Check the cost first with renda_estimate on the same arguments if unsure. "
       + (local ? "Local file paths are uploaded automatically." : "Use https:// or asset:// URIs."),
     inputSchema: {
       ...RenderSource,
       preset: z.enum(["fast", "standard", "high"]).optional(),
-      splatFormat: z.enum(["ply", "spz", "splat"]).optional().describe("Output file type (default ply; spz is ~10x smaller)."),
+      splatFormat: z.enum(["ply", "spz", "splat"]).optional().describe("Output file type (default spz, ~10x smaller than ply)."),
       views: z.number().int().min(8).max(1000).optional(),
+      cameras: z.array(z.object({
+        position: z.tuple([z.number(), z.number(), z.number()]),
+        target: z.tuple([z.number(), z.number(), z.number()]),
+        up: z.tuple([z.number(), z.number(), z.number()]).optional(),
+        fovDeg: z.number().optional(),
+      })).min(8).max(1000).optional().describe("Explicit training cameras (scene units/axes) instead of the automatic rig."),
+      coverage: z.enum(["auto", "sphere", "hemisphere", "orbit"]).optional(),
+      fanOut: z.union([z.literal("auto"), z.boolean()]).optional()
+        .describe("true: render views in parallel containers; false: inside the training GPU; auto (default) picks by cost/latency."),
       steps: z.number().int().min(0).max(100000).optional(),
       shDegree: z.number().int().min(0).max(3).optional(),
       engine: z.enum(["auto", "blender-cycles", "blender-eevee", "blender-workbench", "mitsuba", "threejs"]).optional()
@@ -559,8 +570,10 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
     const trial = local && !client.apiKey ? await startTrial() : undefined;
     const r = await resolvePackage(args, (pkg) => {
       const sb: Record<string, unknown> = { ...(pkg.output?.splatBake ?? {}) };
-      for (const k of ["preset", "views", "steps", "shDegree", "engine", "dataset"] as const) if (args[k] !== undefined) sb[k] = args[k];
-      pkg.output = { format: "splat", splatFormat: args.splatFormat ?? pkg.output?.splatFormat ?? "ply", splatBake: sb };
+      for (const k of ["preset", "views", "cameras", "coverage", "fanOut", "steps", "shDegree", "engine", "dataset"] as const) {
+        if (args[k] !== undefined) sb[k] = args[k];
+      }
+      pkg.output = { format: "splat", splatFormat: args.splatFormat ?? pkg.output?.splatFormat ?? "spz", splatBake: sb };
       delete pkg.animation;
     });
     if ("issues" in r) return fail(`Invalid package: ${JSON.stringify(r.issues, null, 2)}`, "Fix the issues (see `fix`) and retry.");

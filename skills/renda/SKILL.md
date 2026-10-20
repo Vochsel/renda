@@ -90,10 +90,13 @@ cheapest but direct light only. Splats can't be baked. Output is one `.glb` in `
 `renda splat model.glb` (CLI) or the `renda_bake_splat` tool turns meshes into a splat file:
 - `--preset fast`: direct mesh → Gaussians in seconds, albedo only (no lighting). Good for a quick
   splat of a textured asset or as a placeholder.
-- `standard` (default): renders ~96 views around the object (cameras fitted automatically) and refines
-  with gsplat, so the scene's lighting, shadows and reflections are baked in. A few minutes, roughly
-  $0.2–0.5; run `renda estimate` with the same flags first if the scene is large.
-- `high`: 200 views, 30k steps, full view-dependent colour on an L40S, for hero assets.
+- `standard` (default): ~96 views placed by surface coverage, rendered with any engine (`--engine`;
+  auto = Eevee for diffuse scenes, Cycles for glossy/glass) and refined with gsplat, so the scene's lighting,
+  shadows and reflections are baked in. A few minutes, roughly $0.1–0.2; `renda estimate` prints cost and
+  wall time per `--priority` (economy/standard renders views inside the training GPU; rush fans out).
+- `high`: 200 views at 1024px on an L40S, for hero assets.
+- Your own cameras: pass `splatBake.cameras: [{position, target, fovDeg}]` in a package (or `cameras` on
+  the MCP tool); `--coverage orbit` gives one ring. Output defaults to `.spz` (compact, widely supported).
 - `--dataset` also returns the rendered views with an exact COLMAP model (poses are known, no SfM),
   for training in other tools. The job warnings report held-out PSNR/SSIM: above ~30 dB looks clean.
 

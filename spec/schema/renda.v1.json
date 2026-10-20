@@ -2009,7 +2009,7 @@
           ]
         },
         "splatFormat": {
-          "description": "File type for format \"splat\" (default ply).",
+          "description": "File type for format \"splat\" (default spz: compressed, widely supported).",
           "type": "string",
           "enum": [
             "ply",
@@ -2033,12 +2033,101 @@
             },
             "views": {
               "default": null,
-              "description": "Rendered training views (preset default when null).",
+              "description": "Rendered training views: \"auto\"/null = preset default, or a count. Ignored when `cameras` is given.",
               "anyOf": [
                 {
-                  "type": "integer",
-                  "minimum": 8,
-                  "maximum": 1000
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "const": "auto"
+                    },
+                    {
+                      "type": "integer",
+                      "minimum": 8,
+                      "maximum": 1000
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "cameras": {
+              "default": null,
+              "description": "Explicit training cameras (scene units, the file's axes); replaces the automatic rig.",
+              "anyOf": [
+                {
+                  "minItems": 8,
+                  "maxItems": 1000,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "position": {
+                        "type": "array",
+                        "prefixItems": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "number"
+                          }
+                        ],
+                        "items": false,
+                        "minItems": 3,
+                        "maxItems": 3
+                      },
+                      "target": {
+                        "type": "array",
+                        "prefixItems": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "number"
+                          }
+                        ],
+                        "items": false,
+                        "minItems": 3,
+                        "maxItems": 3
+                      },
+                      "up": {
+                        "type": "array",
+                        "prefixItems": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "number"
+                          }
+                        ],
+                        "items": false,
+                        "minItems": 3,
+                        "maxItems": 3
+                      },
+                      "fovDeg": {
+                        "default": 40,
+                        "type": "number",
+                        "exclusiveMinimum": 1,
+                        "exclusiveMaximum": 170
+                      }
+                    },
+                    "required": [
+                      "position",
+                      "target"
+                    ],
+                    "additionalProperties": false
+                  }
                 },
                 {
                   "type": "null"
@@ -2061,7 +2150,7 @@
             },
             "steps": {
               "default": null,
-              "description": "Refinement iterations.",
+              "description": "Refinement iterations (an upper bound: training stops early on a quality plateau).",
               "anyOf": [
                 {
                   "type": "integer",
@@ -2075,7 +2164,7 @@
             },
             "shDegree": {
               "default": null,
-              "description": "Spherical-harmonic degree (view-dependent colour).",
+              "description": "Spherical-harmonic degree (view-dependent colour); default: 2 for glossy scenes (3 with preset high), 1 otherwise.",
               "anyOf": [
                 {
                   "type": "integer",
@@ -2102,7 +2191,7 @@
             },
             "engine": {
               "default": "auto",
-              "description": "Engine that renders the training views (not gsplat).",
+              "description": "Engine that renders the training views (not gsplat). auto: Eevee for diffuse scenes, Cycles when glossy/glass/emissive.",
               "type": "string",
               "enum": [
                 "auto",
@@ -2116,11 +2205,26 @@
             },
             "coverage": {
               "default": "auto",
+              "description": "auto: framing shell + close-ups placed by surface coverage and detail; sphere/hemisphere: elevation band; orbit: one ring.",
               "type": "string",
               "enum": [
                 "auto",
                 "sphere",
-                "hemisphere"
+                "hemisphere",
+                "orbit"
+              ]
+            },
+            "fanOut": {
+              "default": "auto",
+              "description": "Render views in parallel containers (true), inside the training container (false), or let the planner decide.",
+              "anyOf": [
+                {
+                  "type": "string",
+                  "const": "auto"
+                },
+                {
+                  "type": "boolean"
+                }
               ]
             },
             "dataset": {

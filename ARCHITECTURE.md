@@ -313,27 +313,54 @@ these from `jobs.outputs`; `worker/scripts/backfill_thumbs.py` fills them in for
 ## 6b. Splat bakes (mesh scene → Gaussian splat)
 
 `output.format: "splat"` (CLI `renda splat`, MCP `renda_bake_splat`) turns any mesh scene into a 3D
-Gaussian splat (`splatFormat` ply/spz/splat). Code: `core/renda/splatbake/`.
+Gaussian splat (`splatFormat` spz by default, or ply/splat). Code: `core/renda/splatbake/`. Any mesh engine
+renders the training views (Cycles, Eevee, Workbench, Mitsuba, three.js) with the full package (HDRI,
+lights, material + texture overrides, layering); lens/blur/screen-space post are dropped for the views.
 
 1. **Mesh → Gaussians** (Mesh2Splat-style, EA SEED 2025): area-weighted surface samples, flat discs
    oriented along the surface, base colour from textures. Preset `fast` stops here (CPU, seconds, albedo only).
-2. **Training views**: a rig fitted to the bounds (Fibonacci shell framing the bounding sphere + ~30%
-   close-ups aimed at surface points; `coverage` auto/sphere/hemisphere), rendered as transparent PNGs by
-   any mesh engine through the normal chunk fan-out. The rig is deterministic, so chunks and the trainer
-   agree on poses without passing them around; engines receive it via `ir.camera.override_cameras`.
-   Views go to the assets Volume (`bakes/<job>/views/`), not R2.
+2. **Training views**: a far Fibonacci shell framing the bounds (~55%) plus close-ups (~45%) placed by
+   surface coverage: farthest-point sampling over surface samples (position + normal), weighted towards
+   detailed regions (normals vary within a voxel) and glossy materials, each looking at the surface along
+   its normal. `coverage` auto/sphere/hemisphere set the elevation band, `orbit` is one ring, and
+   `splatBake.cameras` replaces the rig with explicit cameras. The rig is deterministic, so every
+   container agrees on poses; engines receive it via `ir.camera.override_cameras`. `engine: auto` picks
+   Eevee for diffuse scenes and Cycles when ≥3% of the surface is glossy/glass/emissive (decided from the
+   loaded materials; planned and estimated as Cycles). Views are draft quality + denoised at exactly the
+   training resolution.
+   **Where they render**: small jobs render the views inside the training container (one GPU, one scene
+   load, no Volume round trip). Above ~240 s of view rendering (standard), past ~20 s (rush), for preset
+   `high` or with `fanOut: true` they fan out to parallel chunks on the assets Volume
+   (`bakes/<job>/views/`), and the trainer is spawned up front: it starts as soon as 16 views have landed
+   and keeps adding views until the orchestrator writes `.complete`.
 3. **Exact COLMAP model**: PINHOLE intrinsics + OpenCV-convention poses straight from the rig (no SfM),
    points3D from the surface samples; returned with the views when `dataset: true`.
-4. **Refinement** (`splatbake/train.py`, splat image, L4 standard / L40S high): gsplat with MCMC
-   densification capped at `maxGaussians`, antialiased rasterisation, 0.8·L1 + 0.2·(1−SSIM) on random
-   backgrounds + alpha loss, depth and normal losses against the frozen mesh-surface Gaussians (geometry
-   from the source mesh, independent of the view engine), progressive SH, early stop on held-out PSNR.
-   Every 8th view is held out; PSNR/SSIM are reported as a job warning.
+4. **Refinement** (`splatbake/train.py`, splat image, L4 standard / L40S high): positions start exact
+   (from the mesh) and stay frozen for the first 1k steps while colour/opacity/shape fit; then gsplat MCMC
+   densification capped at `maxGaussians`, antialiased rasterisation, half resolution for the first 15% of
+   steps, 0.8·L1 + 0.2·(1−SSIM) on random backgrounds + alpha loss, depth and normal losses against the
+   frozen mesh-surface Gaussians, a surfel term keeping Gaussians flat on the surface, progressive SH
+   (glossy scenes: degree 2, or 3 for `high`; otherwise 1), and early stop on the held-out PSNR plateau (`steps` is an
+   upper bound: 6k standard, 15k high). Gaussians below 1% opacity are pruned before export. Every 8th
+   view is held out; PSNR/SSIM and a per-phase timing line are reported as job warnings.
 
-Worker flow: orchestrate → view chunks (`local_dir` on the Volume) → `train_splat_{l4,l40s}` (usage chunk
-`train`) → splat (+ dataset zip) uploaded to R2 → views deleted. Measured on Modal (2026-10-19), testdata
-table scene, standard: 96 Cycles views in 5 parallel L4 chunks (~90 GPU-s), 7k steps in 235 s, holdout
-PSNR 34.5 dB / SSIM 0.980, $0.24 total.
+Worker flow: orchestrate → either `train_splat_{l4,l40s}` alone (views rendered inside it), or the trainer
+spawned up front + view chunks writing to the Volume (`local_dir`) → `.complete` marker → splat (+ dataset
+zip) uploaded to R2 → views deleted. Usage chunk `train` covers views + training in single-container mode.
+
+Measured on Modal (2026-10-20, isolated app, production code path):
+
+| Bake | Billed | Cost | Wall | Holdout PSNR / SSIM | .spz |
+|---|---|---|---|---|---|
+| table, standard — before (5 view chunks + 7k steps, SH 2) | 315 s | $0.18 | ~6 min | 35.2 / 0.982 | 10.3 MB |
+| table, standard — now (views in trainer, Cycles auto, SH 2, 6k steps) | 237 s | $0.136 | 4.1 min | 36.9 / 0.986 | 8.5 MB |
+| table, Eevee views (forced) | 251 s | $0.125 | — | 33.6 / 0.979 | 7.8 MB |
+| table, Mitsuba views | 344 s | $0.177 | 6.3 min | 35.5 / 0.983 | 11.3 MB |
+| Canon camera, standard — now | 214 s | $0.124 | 4.0 min | 28.1 / 0.941 | 7.8 MB |
+| Canon camera, high (200 views streamed into an L40S, 14.5k steps, SH 3) | 939 s | $0.99 | 12.9 min | 32.2 / 0.969 | 50 MB |
+
+Holdout PSNR now includes the coverage rig's close-ups (harder views than the old far shell), so it is not
+directly comparable across rigs; the before camera bake scored 30.1 dB on the old rig's holdout set.
 
 ## 7. Agent-first onboarding
 

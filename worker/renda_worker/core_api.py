@@ -17,7 +17,8 @@ class Core(Protocol):
     def plan(self, pkg: Any, asset_paths: Mapping[str, Path], priority: str) -> Any: ...
     def render_frames(self, plan: Any, pkg: Any, asset_paths: Mapping[str, Path], out_dir: Path, frames: Sequence[int]) -> Any: ...
     def encode(self, frame_files: Sequence[Path], fps: float, output_cfg: Any, out_path: Path) -> Path: ...
-    def train_splat(self, plan: Any, pkg: Any, asset_paths: Mapping[str, Path], views_dir: Path, out_dir: Path) -> Any: ...
+    def train_splat(self, plan: Any, pkg: Any, asset_paths: Mapping[str, Path], views_dir: Path, out_dir: Path,
+                    refresh: Any = None) -> Any: ...
 
 
 class RendaCore:
@@ -47,11 +48,12 @@ class RendaCore:
         cache_dir = derived if derived.parent.exists() else None
         return render.render_frames(plan, pkg, asset_paths, out_dir, list(frames), cache_dir=cache_dir)
 
-    def train_splat(self, plan, pkg, asset_paths, views_dir, out_dir):
+    def train_splat(self, plan, pkg, asset_paths, views_dir, out_dir, refresh=None):
         from renda.splatbake.train import train_bake
 
         derived = Path(os.environ.get("RENDA_DERIVED_DIR", "/assets/derived"))
-        return train_bake(plan, pkg, asset_paths, views_dir, out_dir, cache_dir=derived if derived.parent.exists() else None)
+        return train_bake(plan, pkg, asset_paths, views_dir, out_dir,
+                          cache_dir=derived if derived.parent.exists() else None, refresh=refresh)
 
     def encode(self, frame_files, fps, output_cfg, out_path):
         from renda import spec, video

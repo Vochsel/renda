@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import time
 from pathlib import Path
 
@@ -199,9 +201,12 @@ class MitsubaEngine(Engine):
         n_sub = len(subs[frames[0]])
         spp_sub = max(1, round(spp / n_sub))  # same total samples, spread over the shutter
         thin_lens = first.focus_distance is not None and first.ortho_height is None
+        # one sensor serves every frame of the chunk: clip planes must cover all of them (splat-bake rigs mix
+        # far framing shots with close-ups; only the transform and field of view change per frame)
+        all_cams = [c for s in subs.values() for c in s]
         sensor: dict = {
             "type": "thinlens" if thin_lens else "perspective" if first.ortho_height is None else "orthographic",
-            "near_clip": float(max(first.near, 1e-4)), "far_clip": float(first.far),
+            "near_clip": float(max(min(c.near for c in all_cams), 1e-4)), "far_clip": float(max(c.far for c in all_cams)),
             "to_world": mi.ScalarTransform4f().look_at(origin=first.position.tolist(), target=first.target.tolist(), up=first.up.tolist()),
             "film": {"type": "hdrfilm", "width": width, "height": height, "pixel_format": "rgba",
                      "rfilter": _rfilter(pkg, for_oidn=use_oidn), "sample_border": True},
@@ -251,6 +256,10 @@ class MitsubaEngine(Engine):
             for i, sub in enumerate(subs[f]):
                 if first.ortho_height is None:
                     params["camera.to_world"] = mi.Transform4f().look_at(origin=sub.position.tolist(), target=sub.target.tolist(), up=sub.up.tolist())
+                    if abs(sub.fov_y_deg - first.fov_y_deg) > 1e-6 and "camera.x_fov" in params:
+                        # sensors keep x_fov internally; convert from our vertical fov
+                        half = math.radians(sub.fov_y_deg) / 2
+                        params["camera.x_fov"] = math.degrees(2 * math.atan(math.tan(half) * width / height))
                     params.update()
                 mi.render(mi_scene, params, seed=(pkg.render.seed + f) * 64 + i, spp=spp_sub)
                 bmp = mi_scene.sensors()[0].film().bitmap(raw=False)

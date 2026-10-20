@@ -110,6 +110,18 @@ def is_splat_training(plan: Any) -> bool:
     return bool(sb and get(sb, "views"))
 
 
+def is_single_container(plan: Any) -> bool:
+    """Splat bake whose views render inside the training container (no chunk fan-out)."""
+    sb = get(plan, "splat_bake")
+    return bool(is_splat_training(plan) and get(sb, "single_container"))
+
+
+def is_streaming(plan: Any) -> bool:
+    """Fanned-out splat bake whose trainer starts as soon as the first views land."""
+    sb = get(plan, "splat_bake")
+    return bool(is_splat_training(plan) and not get(sb, "single_container") and get(sb, "stream"))
+
+
 def bake_views_dir(asset_root: Path | str, job_id: str) -> str:
     return str(Path(asset_root) / "bakes" / job_id / "views")
 
@@ -121,6 +133,8 @@ def build_tasks(job: Any, plan: Any, scene_formats: Sequence[str], output_format
     runner = runner_for(engine, hardware, scene_formats, splats=bool(get(plan, "splats", False)))
     video = is_video(output_format)
     training = is_splat_training(plan)
+    if is_single_container(plan):
+        return []  # the training container renders the views itself
     local_dir = bake_views_dir(asset_root or "/assets", job.jobId) if training else None
     prefix = f"work/{job.jobId}/frames/" if video else job.outputPrefix
     return [

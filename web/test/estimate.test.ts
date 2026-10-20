@@ -10,9 +10,10 @@ describe("estimate", () => {
     const std = estimateScene(parsePackage({ scene: { root: "x.glb" }, output: { format: "splat" } }));
     expect(std.frames).toBe(96);
     expect(std.hardware).toBe("gpu-l4");
-    // measured on Modal (2026-10-19): ~$0.24 for the testdata table scene
-    expect(std.estCostUsd[0]).toBeLessThan(0.24);
-    expect(std.estCostUsd[1]).toBeGreaterThan(0.24);
+    // views render inside the trainer (no extra containers); ≤4k steps with early stop
+    expect(std.chunks).toBe(1);
+    expect(std.estCostUsd[0]).toBeLessThan(0.12);
+    expect(std.estCostUsd[1]).toBeGreaterThan(0.12);
   });
   it("draft still defaults to eevee on GPU and is cheap", () => {
     const e = estimateScene(parsePackage({ scene: { root: "asset://" + "a".repeat(64) }, render: { quality: "draft", resolution: [1280, 720] } }));

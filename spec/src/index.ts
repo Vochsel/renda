@@ -276,16 +276,29 @@ export const Bake = z.strictObject({
 /** `output.format: "splat"` bakes the scene into a 3D Gaussian splat (see `splatBake`). */
 export const SplatFormat = z.enum(["ply", "spz", "splat"]);
 
+const SplatBakeCamera = z.strictObject({
+  position: Vec3,
+  target: Vec3,
+  up: Vec3.optional(),
+  fovDeg: z.number().gt(1).lt(170).default(40),
+});
+
 export const SplatBake = z.strictObject({
   preset: z.enum(["fast", "standard", "high"]).default("standard")
     .describe("fast: mesh → Gaussians directly (albedo, seconds). standard/high: + rendered views and gsplat refinement (lighting baked in)."),
-  views: z.number().int().min(8).max(1000).nullable().default(null).describe("Rendered training views (preset default when null)."),
+  views: z.union([z.literal("auto"), z.number().int().min(8).max(1000)]).nullable().default(null)
+    .describe('Rendered training views: "auto"/null = preset default, or a count. Ignored when `cameras` is given.'),
+  cameras: z.array(SplatBakeCamera).min(8).max(1000).nullable().default(null)
+    .describe("Explicit training cameras (scene units, the file's axes); replaces the automatic rig."),
   resolution: z.number().int().min(128).max(2048).nullable().default(null).describe("Square view resolution in px."),
-  steps: z.number().int().min(0).max(100000).nullable().default(null).describe("Refinement iterations."),
-  shDegree: z.number().int().min(0).max(3).nullable().default(null).describe("Spherical-harmonic degree (view-dependent colour)."),
+  steps: z.number().int().min(0).max(100000).nullable().default(null).describe("Refinement iterations (an upper bound: training stops early on a quality plateau)."),
+  shDegree: z.number().int().min(0).max(3).nullable().default(null).describe("Spherical-harmonic degree (view-dependent colour); default: 2 for glossy scenes (3 with preset high), 1 otherwise."),
   maxGaussians: z.number().int().min(1000).max(10_000_000).nullable().default(null),
-  engine: Engine.default("auto").describe("Engine that renders the training views (not gsplat)."),
-  coverage: z.enum(["auto", "sphere", "hemisphere"]).default("auto"),
+  engine: Engine.default("auto").describe("Engine that renders the training views (not gsplat). auto: Eevee for diffuse scenes, Cycles when glossy/glass/emissive."),
+  coverage: z.enum(["auto", "sphere", "hemisphere", "orbit"]).default("auto")
+    .describe("auto: framing shell + close-ups placed by surface coverage and detail; sphere/hemisphere: elevation band; orbit: one ring."),
+  fanOut: z.union([z.literal("auto"), z.boolean()]).default("auto")
+    .describe("Render views in parallel containers (true), inside the training container (false), or let the planner decide."),
   dataset: z.boolean().default(false).describe("Also return the views + exact COLMAP sparse model as a zip."),
 });
 
@@ -300,7 +313,7 @@ export const Output = z.strictObject({
   keepFrames: z.boolean().default(false).describe("Also return individual frames for video outputs."),
   bake: Bake.nullable().optional()
     .describe('Bake lighting into textures (needs format "glb"). Omit/null with format "glb" = plain conversion to GLB.'),
-  splatFormat: SplatFormat.optional().describe('File type for format "splat" (default ply).'),
+  splatFormat: SplatFormat.optional().describe('File type for format "splat" (default spz: compressed, widely supported).'),
   splatBake: SplatBake.optional().describe('Settings for format "splat".'),
 });
 

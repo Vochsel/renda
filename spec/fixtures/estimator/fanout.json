@@ -1,0 +1,75 @@
+{
+  "_doc": "Fan-out rule shared by core/renda/planner.py (fanout_count) and web/src/lib/estimate.ts (fanoutCount).",
+  "cases": [
+    {
+      "frames": 1,
+      "loadSeconds": 7.0,
+      "frameSeconds": 2.0,
+      "priority": "standard",
+      "containers": 1
+    },
+    {
+      "frames": 48,
+      "loadSeconds": 7.0,
+      "frameSeconds": 0.5,
+      "priority": "standard",
+      "containers": 1
+    },
+    {
+      "frames": 240,
+      "loadSeconds": 7.0,
+      "frameSeconds": 4.0,
+      "priority": "standard",
+      "containers": 15
+    },
+    {
+      "frames": 240,
+      "loadSeconds": 7.0,
+      "frameSeconds": 4.0,
+      "priority": "rush",
+      "containers": 50
+    },
+    {
+      "frames": 240,
+      "loadSeconds": 7.0,
+      "frameSeconds": 4.0,
+      "priority": "economy",
+      "containers": 1
+    },
+    {
+      "frames": 96,
+      "loadSeconds": 5.5,
+      "frameSeconds": 0.3,
+      "priority": "rush",
+      "containers": 5
+    },
+    {
+      "frames": 96,
+      "loadSeconds": 5.5,
+      "frameSeconds": 0.3,
+      "priority": "standard",
+      "containers": 1
+    },
+    {
+      "frames": 2000,
+      "loadSeconds": 7.0,
+      "frameSeconds": 3.0,
+      "priority": "economy",
+      "containers": 4
+    },
+    {
+      "frames": 5000,
+      "loadSeconds": 4.5,
+      "frameSeconds": 1.0,
+      "priority": "standard",
+      "containers": 50
+    },
+    {
+      "frames": 10,
+      "loadSeconds": 6.0,
+      "frameSeconds": 30.0,
+      "priority": "rush",
+      "containers": 10
+    }
+  ]
+}

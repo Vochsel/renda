@@ -335,8 +335,11 @@ def splat(
     input: Annotated[Path, typer.Argument(help="Scene file or .renda.json package (meshes of any format)")],
     output: Annotated[Path, typer.Option("-o", "--output", help="Output directory")] = Path("renders"),
     preset: Annotated[str, typer.Option(help="fast (mesh → Gaussians, seconds) | standard | high (rendered views + gsplat refinement)")] = "standard",
-    fmt: Annotated[str, typer.Option("--format", help="ply|spz|splat")] = "ply",
+    fmt: Annotated[str, typer.Option("--format", help="spz|ply|splat")] = "spz",
     views: Annotated[Optional[int], typer.Option(help="Training views (preset default when omitted)")] = None,
+    coverage: Annotated[Optional[str], typer.Option(help="auto|sphere|hemisphere|orbit camera placement")] = None,
+    fan_out: Annotated[Optional[bool], typer.Option("--fan-out/--no-fan-out",
+                                                    help="Render views in parallel containers / inside the trainer (default: auto)")] = None,
     steps: Annotated[Optional[int], typer.Option(help="Refinement steps")] = None,
     sh_degree: Annotated[Optional[int], typer.Option("--sh-degree", help="0-3 view-dependent colour")] = None,
     engine: Annotated[Optional[str], typer.Option(help="Engine for the training views (auto|blender-cycles|blender-eevee|mitsuba|threejs)")] = None,
@@ -352,7 +355,8 @@ def splat(
     o = raw.setdefault("output", {})
     o.update({"format": "splat", "splatFormat": fmt})
     sb = {"preset": preset, "dataset": dataset}
-    for k, v in (("views", views), ("steps", steps), ("shDegree", sh_degree), ("engine", engine)):
+    for k, v in (("views", views), ("steps", steps), ("shDegree", sh_degree), ("engine", engine), ("coverage", coverage),
+                 ("fanOut", fan_out)):
         if v is not None:
             sb[k] = v
     o["splatBake"] = {**o.get("splatBake", {}), **sb}
@@ -730,7 +734,7 @@ def estimate(
 ):
     """Estimate cloud render time and cost (takes the same overrides as `render`)."""
     from .assets import local_files
-    from .planner import estimate_cost, plan
+    from .planner import estimate_cost, plan, priority_estimates
     from .spec import load_package
 
     raw, base = load_input(input)
@@ -765,14 +769,22 @@ def estimate(
             pass
         p = plan(pkg, files, priority, triangles=tris)
         lo, hi = estimate_cost(p)
+        single = bool((p.splat_bake or {}).get("single_container"))
         data = {"source": "local", "engine": p.engine, "hardware": p.hardware, "frames": len(p.frames),
-                "containers": len(p.chunks), "estSeconds": list(p.est_seconds), "estCostUsd": [lo, hi], "warnings": p.warnings}
+                "containers": 1 if single else len(p.chunks), "estSeconds": list(p.est_seconds),
+                "estWallSeconds": list(p.est_wall_seconds), "estCostUsd": [lo, hi], "warnings": p.warnings,
+                "priorities": priority_estimates(pkg, files, triangles=tris)}
 
     def human():
         s = data.get("estSeconds", [0, 0])
         c = data.get("estCostUsd", [0, 0])
         out.print(f"{data.get('engine', '?')} on {data.get('hardware', '?')}: ~{s[0]:.0f}–{s[1]:.0f}s, ${c[0]:.4f}–${c[1]:.4f}"
                   f" [dim]({data['source']} estimate)[/]")
+        for pr, e in (data.get("priorities") or {}).items():
+            w, pc = e.get("estWallSeconds", [0, 0]), e.get("estCostUsd", [0, 0])
+            n = e.get("containers", e.get("chunks", 1))
+            out.print(f"  [dim]--priority {pr:<8}[/] ${pc[0]:.4f}–${pc[1]:.4f}, wall ~{w[0]:.0f}–{w[1]:.0f}s "
+                      f"on {e.get('hardware', '?')} × {n}")
         for w in data.get("warnings", []):
             console.print(f"[yellow]warning[/]: {w}")
 

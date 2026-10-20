@@ -45,8 +45,10 @@ Composing scenes: a package can \`"extends": ["./studio.renda.json", "https://�
 Lens and look, in the package: camera.lens {focalLengthMm, fStop (turns on depth of field), focusTarget, apertureBlades}, render.antialias {filter, filterWidth}, render.motionBlur {shutter} (needs an animation), post {exposure, tonemap: agx|filmic|aces|neutral|standard, contrast, saturation, temperature, vignette, chromaticAberration, lensDistortion, bloom, filmGrain, sharpen}. Same controls on every engine: native in Blender, emulated where an engine lacks them (warnings say so); post effects are one shared stage, identical across engines. Emulated motion blur (workbench, threejs, gsplat) costs subframes × the frame time.
 Bake any mesh scene into a Gaussian splat (output.format "splat"):
     renda splat model.glb --preset fast                  # mesh → Gaussians directly, seconds, albedo only
-    renda splat scene.blend --format spz                 # standard: ~96 views (Cycles) + gsplat refinement, lighting baked, a few minutes, ~$0.2–0.5
-    renda splat model.glb --preset high --dataset        # 200 views, 30k steps, SH3 on L40S; --dataset also returns views + exact COLMAP model (zip)
+    renda splat scene.blend                              # standard: ~96 coverage-placed views (Eevee/Cycles auto) + gsplat, lighting baked, ~$0.1–0.2, .spz
+    renda splat model.glb --engine mitsuba               # any engine renders the views; splatBake.cameras = your own training cameras
+    renda splat model.glb --preset high --dataset        # 200 views at 1024px on L40S; --dataset also returns views + exact COLMAP model (zip)
+    renda estimate model.glb --format splat              # cost + wall time per priority (economy/standard: views in the trainer; rush: fanned out)
 Poses come from the scene itself (no structure-from-motion), so the COLMAP model is exact. Holdout PSNR/SSIM is reported in the job warnings.
 Identical re-renders are cached and free. Local paths are uploaded automatically (deduped by sha256).
 
