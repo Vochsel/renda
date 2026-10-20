@@ -4,13 +4,38 @@
   "description": "Render 3D files and scenes in the cloud from your terminal or agent. One command sets up MCP + skills.",
   "license": "Apache-2.0",
   "type": "module",
-  "bin": { "renda": "./dist/bin.js", "rendahq": "./dist/bin.js" },
+  "bin": {
+    "renda": "./dist/bin.js",
+    "rendahq": "./dist/bin.js"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
-  "files": ["dist", "skills", "README.md"],
-  "engines": { "node": ">=20" },
-  "keywords": ["3d", "rendering", "blender", "usd", "gltf", "threejs", "mcp", "agents", "cli"],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "3d",
+    "rendering",
+    "blender",
+    "usd",
+    "gltf",
+    "threejs",
+    "mcp",
+    "agents",
+    "cli"
+  ],
   "scripts": {
     "build": "tsc -p . && node scripts/bundle-skills.mjs",
     "test": "vitest run"
@@ -19,5 +44,21 @@
     "@rendahq/mcp": "workspace:*",
     "@rendahq/spec": "workspace:*"
   },
-  "devDependencies": { "@types/node": "^24.0.0", "typescript": "^5.9.0", "vitest": "^3.2.0" }
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Vochsel/renda.git",
+    "directory": "cli"
+  },
+  "homepage": "https://renda.vochsel.com",
+  "bugs": {
+    "url": "https://github.com/Vochsel/renda/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
 }

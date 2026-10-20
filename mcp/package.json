@@ -26,7 +26,8 @@
   "files": [
     "README.md",
     "dist",
-    "server.json"
+    "server.json",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsc -p .",
@@ -46,8 +47,22 @@
   "mcpName": "io.github.vochsel/renda",
   "repository": {
     "type": "git",
-    "url": "https://github.com/vochsel/renda",
+    "url": "git+https://github.com/Vochsel/renda.git",
     "directory": "mcp"
   },
-  "homepage": "https://renda.vochsel.com"
+  "homepage": "https://renda.vochsel.com",
+  "bugs": {
+    "url": "https://github.com/Vochsel/renda/issues"
+  },
+  "keywords": [
+    "renda",
+    "mcp",
+    "model-context-protocol",
+    "3d",
+    "rendering",
+    "agents"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
 }

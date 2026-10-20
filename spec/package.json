@@ -7,15 +7,51 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
-    "./node": { "types": "./dist/node.d.ts", "default": "./dist/node.js" },
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "default": "./dist/node.js"
+    },
     "./schema.json": "./schema/renda.v1.json"
   },
-  "files": ["dist", "schema"],
+  "files": [
+    "dist",
+    "schema",
+    "LICENSE",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc -p . && node scripts/gen-schema.mjs",
     "test": "node --test test/*.test.mjs"
   },
-  "dependencies": { "zod": "^4.1.0" },
-  "devDependencies": { "typescript": "^5.9.0", "@types/node": "^24.0.0" }
+  "dependencies": {
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0",
+    "@types/node": "^24.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Vochsel/renda.git",
+    "directory": "spec"
+  },
+  "homepage": "https://renda.vochsel.com",
+  "bugs": {
+    "url": "https://github.com/Vochsel/renda/issues"
+  },
+  "keywords": [
+    "renda",
+    "3d",
+    "rendering",
+    "schema",
+    "zod",
+    "json-schema"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
 }
