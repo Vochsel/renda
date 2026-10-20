@@ -2,45 +2,54 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { SiteHeader } from "@/components/site-header";
 import { PageToc, type TocItem } from "@/components/page-toc";
-import { Columns, DataTable, DotSeries, Dumbbell, Legend, RangeChart, StatTile, StripPlot, VIZ_STYLE } from "@/components/benchmarks/charts";
+import { DataTable, Legend, LineChart, MultiDot, StatTile, VIZ_STYLE, type SeriesSpec } from "@/components/benchmarks/charts";
 import { CompareSlider, CompareTabs } from "@/components/benchmarks/compare";
 import {
-  BILLING_FIXES,
-  COLD_START,
-  ESTIMATES,
-  OPTIMISATION,
+  ASSUMPTIONS,
+  HOURLY,
+  JOB_COSTS,
+  JOB_WALL,
+  JOBS,
+  LOCAL_MACHINE,
   PAIRS,
   SETS,
-  SPLAT_PROGRESSION,
-  SPLAT_VARIANTS,
-  type Source,
+  SOURCES,
+  SPLAT_DIY,
+  VOLUME,
+  type Basis,
 } from "@/lib/benchmarks";
 
 export const metadata: Metadata = {
   title: "Benchmarks",
-  description: "Measured render cost, time and quality on Renda: before/after optimisation, cold starts, splat bakes and side-by-side renders.",
+  description:
+    "Renda against doing it yourself: the same render jobs on your own machine, an on-demand cloud GPU VM and render farms. Measured runs and published prices, with every assumption stated.",
 };
 
 const TOC: TocItem[] = [
   { id: "summary", label: "Summary" },
-  { id: "compare", label: "Side by side" },
-  { id: "optimisation", label: "Render cost" },
-  { id: "billing", label: "Billing fixes" },
+  { id: "cost", label: "Cost per job" },
+  { id: "volume", label: "Monthly cost" },
+  { id: "time", label: "Time per job" },
   { id: "splat", label: "Mesh → splat" },
-  { id: "cold-start", label: "Cold start" },
-  { id: "estimates", label: "Estimates" },
+  { id: "options", label: "Options compared" },
+  { id: "quality", label: "Side by side" },
+  { id: "sources", label: "Sources" },
 ];
 
-const sec = (v: number) => (v >= 100 ? v.toFixed(0) : v.toFixed(1)).replace(/\.0$/, "");
-const usd = (v: number) => (v === 0 ? "$0" : v < 0.1 ? `$${v.toFixed(3)}` : `$${v.toFixed(2)}`);
+const S: Record<string, SeriesSpec> = {
+  renda: { id: "renda", label: "Renda (measured)", color: "var(--viz-s1)", shape: "circle" },
+  vm: { id: "vm", label: "AWS L4 VM per job (computed)", color: "var(--viz-s2)", shape: "square" },
+  farm: { id: "farm", label: "Render farm, 4090 node (computed)", color: "var(--viz-s3)", shape: "diamond" },
+  local: { id: "local", label: `This Mac (measured)`, color: "var(--viz-s4)", shape: "triangle" },
+  always: { id: "always", label: "AWS L4 VM always on (computed)", color: "var(--viz-s4)", shape: "triangle", dashed: true },
+};
 
-function SourceTag({ source, date }: { source: Source; date?: string }) {
-  return (
-    <span className="text-muted-foreground font-mono text-[11px]">
-      {source === "production" ? "production jobs" : "isolated benchmark app"}
-      {date ? ` · ${date}` : ""}
-    </span>
-  );
+const usd = (v: number) => (v < 0.01 ? `$${v.toFixed(4)}` : v < 1 ? `$${v.toFixed(3)}` : `$${v.toFixed(2)}`);
+const secs = (v: number) => (v >= 60 ? `${(v / 60).toFixed(1)} min` : `${v.toFixed(1)} s`);
+const times = (a: number, b: number) => `${(b / a).toFixed(1)}×`;
+
+function BasisTag({ basis }: { basis: Basis }) {
+  return <span className="border-border text-muted-foreground rounded border px-1 py-px font-mono text-[10px]">{basis}</span>;
 }
 
 function Section({ id, title, intro, children }: { id: string; title: string; intro?: React.ReactNode; children: React.ReactNode }) {
@@ -53,14 +62,68 @@ function Section({ id, title, intro, children }: { id: string; title: string; in
   );
 }
 
+function Cite({ k }: { k: keyof typeof SOURCES }) {
+  return (
+    <a href={SOURCES[k].url} className="underline underline-offset-2" rel="noreferrer">
+      source
+    </a>
+  );
+}
+
+const OPTIONS: { name: string; price: string; billing: string; setup: string; idle: string; agents: string; wins: string }[] = [
+  {
+    name: "Renda",
+    price: `$${HOURLY.renda.toFixed(2)} per L4-hour ($0.035/min); CPU $0.90/h`,
+    billing: "Per second, no minimum; cached re-renders free",
+    setup: "One command (npx / uvx); 30 free minutes",
+    idle: "None",
+    agents: "CLI, MCP, REST, skills",
+    wins: "Bursty or unpredictable volume; agents; many formats/engines without installing them",
+  },
+  {
+    name: "Your own machine",
+    price: "$0 marginal (you already own it)",
+    billing: "—",
+    setup: "Install Blender / Mitsuba, drivers, importers; write scripts",
+    idle: "None",
+    agents: "Whatever you build",
+    wins: "Small stills while you iterate: no upload, no cold start",
+  },
+  {
+    name: "AWS / GCP L4 VM",
+    price: `$${HOURLY.aws.toFixed(2)}/h (AWS g6.xlarge) · $${HOURLY.gcp.toFixed(2)}/h (GCP g2-standard-4)`,
+    billing: "Per second, 60 s minimum",
+    setup: "GPU quota, image with drivers + Blender, job runner, storage",
+    idle: "Billed while running, busy or not",
+    agents: "Whatever you build",
+    wins: `Steady load above ~${Math.round(VOLUME.crossover / 1000)}k stills a month on one always-busy VM`,
+  },
+  {
+    name: "Render farms (RebusFarm, Ranch, GarageFarm)",
+    price: `GPU ≈ $${HOURLY.farm.toFixed(2)} per RTX 4090-hour (RebusFarm, 0.53 ¢/OB-h)`,
+    billing: "Per OctaneBench-hour or GHz-hour; prepaid credits",
+    setup: "Account + top-up, desktop plugin, upload the project",
+    idle: "None",
+    agents: "Plugin / web UI",
+    wins: "Long animations on many GPUs at once; managed support",
+  },
+  {
+    name: "SheepIt",
+    price: "Free",
+    billing: "Points earned by rendering for others",
+    setup: "Account + client; Blender only",
+    idle: "Your machine renders others' frames",
+    agents: "No",
+    wins: "Hobby projects where waiting in a queue is fine",
+  },
+];
+
 export default function BenchmarksPage() {
-  const opt = OPTIMISATION;
-  const sum = (a: { before: number; after: number }[], k: "before" | "after") => a.reduce((n, r) => n + r[k], 0);
-  const optBefore = sum(opt.billedSeconds, "before");
-  const optAfter = sum(opt.billedSeconds, "after");
-  const first = SPLAT_PROGRESSION[0];
-  const now = SPLAT_PROGRESSION[1];
-  const blenderMedian = 6.5;
+  const still = JOB_COSTS[0];
+  const stillVm = still.values.vm!;
+  const stillFarm = still.values.farm!;
+  const stillRenda = still.values.renda!;
+  const sp = SPLAT_DIY;
 
   return (
     <>
@@ -72,20 +135,169 @@ export default function BenchmarksPage() {
           <header id="summary" className="scroll-mt-20 pt-20 pb-10 sm:pt-28">
             <h1 className="text-4xl font-semibold tracking-tight">Benchmarks</h1>
             <p className="text-muted-foreground mt-4 max-w-2xl text-pretty">
-              Measured runs, not projections. Cost is list price for the seconds billed on each hardware class (CPU $0.015, L4 $0.035, L40S
-              $0.075 per minute). Each chart says whether it came from production jobs or from an isolated benchmark copy of the same worker.
+              The same jobs on Renda, on your own machine, on an on-demand cloud GPU and on render farms. Renda and local numbers are{" "}
+              <BasisTag basis="measured" /> runs; VM and farm numbers are <BasisTag basis="computed" /> from published prices, with every
+              assumption written next to them. Where doing it yourself wins, we say so.
             </p>
             <div className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <StatTile label="Turntable, 24 frames" value="12.5 s billed" delta="−91% from 133 s" note="production" />
-              <StatTile label="Benchmark set, billed time" value={`${sec(optAfter)} s`} delta={`−${Math.round((1 - optAfter / optBefore) * 100)}% from ${sec(optBefore)} s`} note="9 jobs, isolated" />
-              <StatTile label="Mesh → splat, standard" value={usd(now.costUsd)} delta={`−${Math.round((1 - now.costUsd / first.costUsd) * 100)}% from ${usd(first.costUsd)}`} note={`PSNR ${first.psnr} → ${now.psnr} dB`} />
-              <StatTile label="Blender on L4, median cold start" value={`${blenderMedian} s`} note="not billed to you; 0.1 s when warm" />
+              <StatTile label="Cycles still vs an AWS L4 VM started for it" value={`${times(stillRenda, stillVm)} cheaper`} note={`${usd(stillRenda)} vs ${usd(stillVm)} (VM computed)`} />
+              <StatTile label="Mesh → splat vs a DIY pipeline" value={`≥${times(sp.renda.costUsd, sp.diy.costUsd)} cheaper`} note={`${usd(sp.renda.costUsd)} in ${sp.renda.wallMinutes} min vs ≥${usd(sp.diy.costUsd)} in ≥${Math.round(sp.diy.wallMinutes)} min`} />
+              <StatTile label="Setup" value="One command" note="vs installing Blender, drivers, importers and a job runner" />
+              <StatTile label="Where DIY wins" value={`>${Math.round(VOLUME.crossover / 1000)}k stills/mo`} note="steady load on one always-on VM you run yourself; small stills on a laptop you own" />
             </div>
           </header>
 
-          <Section id="compare" title="Side by side" intro="Drag the sliders (or focus the handle and use the arrow keys). Production renders made for this page.">
+          <Section
+            id="cost"
+            title="Cost per job"
+            intro={
+              <>
+                Log scale; lower is better. Renda is what each job was billed. The VM is an AWS g6.xlarge (one L4, $
+                {ASSUMPTIONS.awsL4PerHour}/h) launched for the job: ~{ASSUMPTIONS.vmBootSeconds} s to boot a pre-baked image (estimate) plus the same
+                render time, with the 60 s minimum. The farm is one RTX 4090 at RebusFarm&apos;s GPU rate, assuming it renders{" "}
+                {ASSUMPTIONS.farmSpeedupVsL4}× faster than an L4 (our assumption). Your own machine is $0 per job, so it isn&apos;t on the log axis.
+              </>
+            }
+          >
+            <Legend series={[S.renda, S.vm, S.farm]} />
+            <div className="mt-4">
+              <MultiDot rows={JOB_COSTS} series={[S.renda, S.vm, S.farm]} fmt="usd" ariaLabel="Cost per job on Renda, a per-job AWS L4 VM and a render farm, log scale" />
+            </div>
+            <DataTable
+              head={["Job", "Renda (measured)", "AWS L4 VM per job (computed)", "Farm, 4090 (computed)", "This Mac"]}
+              rows={JOB_COSTS.map((r) => [r.label, usd(r.values.renda!), usd(r.values.vm!), usd(r.values.farm!), "$0 marginal"])}
+            />
+            <p className="text-muted-foreground mt-3 text-[11px]">
+              The farm row is close to Renda for small jobs ({usd(stillFarm)} vs {usd(stillRenda)} for the Cycles still) — and it depends heavily on the
+              3× speed assumption. Farms add an upload step and prepaid credits; Renda adds nothing to install.
+            </p>
+          </Section>
+
+          <Section
+            id="volume"
+            title="Monthly cost by volume"
+            intro={
+              <>
+                N Cycles stills a month, log–log. Per-job options scale with volume; an always-on VM is flat at{" "}
+                {usd(VOLUME.alwaysOn)}/month ({ASSUMPTIONS.hoursPerMonth} h) whether it&apos;s busy or not. If you can keep one busy, it becomes
+                cheaper than Renda above about {VOLUME.crossover.toLocaleString("en-US")} stills a month — and you run the queue, retries, storage
+                and upgrades. Past one VM&apos;s capacity you need more of them.
+              </>
+            }
+          >
+            <Legend series={[S.renda, S.vm, S.farm, S.always]} />
+            <div className="mt-4">
+              <LineChart
+                series={[S.renda, S.vm, S.farm, S.always]}
+                data={VOLUME.series}
+                marker={{ x: VOLUME.crossover, label: "always-on VM cheaper from here →" }}
+                ariaLabel="Monthly cost against stills per month for Renda, per-job VM, render farm and an always-on VM, log-log"
+              />
+            </div>
+            <DataTable
+              head={["Stills / month", ...VOLUME.series.map((s) => s.label)]}
+              rows={VOLUME.series[0].points.map((p, i) => [p.x.toLocaleString("en-US"), ...VOLUME.series.map((s) => usd(s.points[i].y))])}
+            />
+          </Section>
+
+          <Section
+            id="time"
+            title="Time per job"
+            intro={
+              <>
+                Submit to finished output. Renda is a cold container on the isolated benchmark app (most of a small job&apos;s wall time is container
+                start, which isn&apos;t billed). This Mac is {LOCAL_MACHINE}, with Blender already warm. The per-job VM is the boot estimate plus the
+                same render time.
+              </>
+            }
+          >
+            <Legend series={[S.renda, S.local, S.vm]} />
+            <div className="mt-4">
+              <MultiDot rows={JOB_WALL} series={[S.renda, S.local, S.vm]} fmt="sec" ariaLabel="Wall time per job on Renda, this Mac and a per-job VM, log scale" />
+            </div>
+            <DataTable
+              head={["Job", "Renda wall (measured)", "This Mac (measured)", "VM per job (computed)", "Renda billed"]}
+              rows={JOBS.map((j, i) => [j.label, secs(j.renda.wallSeconds), secs(j.localSeconds), secs(JOB_WALL[i].values.vm!), secs(j.renda.billedSeconds)])}
+            />
+            <p className="text-muted-foreground mt-3 text-[11px]">
+              Honest read: a warm laptop beats any cloud for a small still. Renda pulls ahead on long jobs (the turntable), on many jobs in
+              parallel, and when the machine you&apos;re on can&apos;t render at all — a server, a CI runner or an agent sandbox.
+            </p>
+          </Section>
+
+          <Section
+            id="splat"
+            title="Mesh → Gaussian splat"
+            intro={
+              <>
+                Renda&apos;s standard bake of the table scene, <BasisTag basis="measured" />: {usd(sp.renda.costUsd)}, {sp.renda.wallMinutes} min,
+                hold-out PSNR {sp.renda.psnr} dB. The usual DIY route renders views, recovers the camera poses with COLMAP, then trains — below on
+                an AWS L4 VM. Renda skips structure-from-motion entirely because it knows the exact camera poses.
+              </>
+            }
+          >
+            <div className="grid gap-3 sm:grid-cols-2">
+              <StatTile label="Renda, standard bake (measured)" value={`${usd(sp.renda.costUsd)} · ${sp.renda.wallMinutes} min`} note={`${sp.renda.billedSeconds} s billed · PSNR ${sp.renda.psnr} dB`} />
+              <StatTile label="DIY on an AWS L4 (computed, lower bound)" value={`≥${usd(sp.diy.costUsd)} · ≥${Math.round(sp.diy.wallMinutes)} min`} note="published timings, so not the same scene" />
+            </div>
+            <div className="mt-6 overflow-x-auto">
+              <table className="w-full border-collapse text-[12px]">
+                <thead>
+                  <tr className="text-muted-foreground border-border border-b text-left">
+                    <th className="py-1.5 pr-4 font-normal">DIY step</th>
+                    <th className="py-1.5 pr-4 font-normal">Time</th>
+                    <th className="py-1.5 pr-4 font-normal">Basis</th>
+                    <th className="py-1.5 pr-4 font-normal">Note</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sp.steps.map((s) => (
+                    <tr key={s.label} className="border-border/60 border-b">
+                      <td className="py-1.5 pr-4">{s.label}</td>
+                      <td className="py-1.5 pr-4 font-mono tabular-nums">{secs(s.seconds)}</td>
+                      <td className="py-1.5 pr-4"><BasisTag basis={s.basis} /></td>
+                      <td className="text-muted-foreground py-1.5 pr-4">{s.note}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="text-muted-foreground mt-3 text-[11px]">
+              Training time is the gsplat paper&apos;s A100 average (<Cite k="gsplat" />); COLMAP is from the CuSfM paper (<Cite k="colmap" />). Both come
+              from other scenes, and an L4 trains slower than an A100, so the DIY figure is a floor, not an estimate of your job.
+            </p>
+          </Section>
+
+          <Section id="options" title="Options compared" intro="Prices checked 2026-10-20. Farm prices come from published rate cards as reported in 2026; check the vendor before budgeting.">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[720px] border-collapse text-[12px]">
+                <thead>
+                  <tr className="text-muted-foreground border-border border-b text-left align-bottom">
+                    {["", "Price", "Billing", "Setup", "Idle cost", "Agent access", "Best for"].map((h) => (
+                      <th key={h} className="py-1.5 pr-4 font-normal">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {OPTIONS.map((o) => (
+                    <tr key={o.name} className="border-border/60 border-b align-top">
+                      <td className="py-2 pr-4 font-medium">{o.name}</td>
+                      <td className="py-2 pr-4">{o.price}</td>
+                      <td className="text-muted-foreground py-2 pr-4">{o.billing}</td>
+                      <td className="text-muted-foreground py-2 pr-4">{o.setup}</td>
+                      <td className="text-muted-foreground py-2 pr-4">{o.idle}</td>
+                      <td className="text-muted-foreground py-2 pr-4">{o.agents}</td>
+                      <td className="py-2 pr-4">{o.wins}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Section>
+
+          <Section id="quality" title="Side by side" intro="What the knobs do, on production renders made for this page. Drag the sliders (or focus the handle and use the arrow keys).">
             <div className="grid gap-x-8 gap-y-12 sm:grid-cols-2">
-              {PAIRS.slice(0, 2).map((p) => (
+              {PAIRS.map((p) => (
                 <CompareSlider key={p.id} before={p.before} after={p.after} width={p.width} height={p.height} title={p.title} />
               ))}
               {SETS.map((s) => (
@@ -93,161 +305,35 @@ export default function BenchmarksPage() {
               ))}
             </div>
             <p className="text-muted-foreground mt-6 text-xs">
-              Want to orbit the splats yourself? The <Link href="/#splats" className="underline underline-offset-2">homepage demo</Link> puts the source mesh, the fast
-              preview and the standard bake in one viewer.
+              Want to orbit the splats yourself? The <Link href="/#splats" className="underline underline-offset-2">homepage demo</Link> puts the
+              source mesh, the fast preview and the standard bake in one viewer.
             </p>
           </Section>
 
-          <Section
-            id="optimisation"
-            title="Render cost, before and after the optimisation pass"
-            intro={
-              <>
-                Same nine packages run before and after: frames encoded in the render container, events sent on one connection, pooled storage uploads, and splat
-                data uploaded to the GPU once per job. <SourceTag source={opt.source} date={opt.date} />
-              </>
-            }
-          >
-            <Legend items={[{ label: "Before", color: "var(--viz-before)" }, { label: "After", color: "var(--viz-after)" }]} />
-            <h3 className="mt-5 text-sm">Billed seconds</h3>
-            <Dumbbell rows={opt.billedSeconds} fmt="sec" unit="s" ariaLabel="Billed seconds per benchmark, before and after the optimisation pass" />
-            <h3 className="mt-8 text-sm">Cost per job</h3>
-            <Dumbbell rows={opt.costUsd} fmt="usd3" unit="" ariaLabel="Cost per benchmark job, before and after" />
-            <DataTable
-              head={["Benchmark", "Billed before (s)", "Billed after (s)", "Cost before", "Cost after", "Note"]}
-              rows={opt.billedSeconds.map((r, i) => [r.label, r.before, r.after, `$${opt.costUsd[i].before.toFixed(4)}`, `$${opt.costUsd[i].after.toFixed(4)}`, r.note ?? ""])}
-            />
-          </Section>
-
-          <Section
-            id="billing"
-            title="Billing fixes found by measuring real jobs"
-            intro={
-              <>
-                The coordinator was billing the time it spent waiting on the render and encode containers, and frames moved through storage one at a time.
-                Both fixed. <SourceTag source={BILLING_FIXES.source} date="2026-10-19 → 20" />
-              </>
-            }
-          >
-            <Legend items={[{ label: "Before", color: "var(--viz-before)" }, { label: "After", color: "var(--viz-after)" }]} />
-            <div className="mt-5">
-              <Dumbbell rows={BILLING_FIXES.rows} fmt="sec" unit="s" ariaLabel="Billed seconds before and after the billing fixes" />
-            </div>
-            <DataTable head={["Job", "Billed before (s)", "Billed after (s)", "Note"]} rows={BILLING_FIXES.rows.map((r) => [r.label, r.before, r.after, r.note ?? ""])} />
-          </Section>
-
-          <Section
-            id="splat"
-            title="Mesh → Gaussian splat"
-            intro="The table scene's standard bake over time: views rendered inside the trainer for small jobs, coverage-driven cameras, positions frozen early, and pruning before export. PSNR is measured on views held out from training."
-          >
-            <div className="grid gap-8 sm:grid-cols-3">
-              <Columns
-                title="Cost per bake"
-                points={SPLAT_PROGRESSION.map((r) => ({ label: r.label, value: r.costUsd, sub: r.source === "production" ? "production" : "isolated" }))}
-                fmt="usd"
-                ariaLabel="Cost per standard splat bake over time"
-              />
-              <Columns
-                title="Wall time (minutes)"
-                points={SPLAT_PROGRESSION.map((r) => ({ label: r.label, value: r.wallSeconds / 60, sub: r.date.slice(5) }))}
-                fmt="min"
-                ariaLabel="Wall time per standard splat bake over time"
-              />
-              <DotSeries
-                title="Hold-out PSNR"
-                points={SPLAT_PROGRESSION.map((r) => ({ label: r.label, value: r.psnr, sub: r.note ? "*" : undefined }))}
-                domain={[30, 40]}
-                fmt="db"
-                ariaLabel="Hold-out PSNR per standard splat bake over time"
-              />
-            </div>
-            <p className="text-muted-foreground mt-3 text-[11px]">* PSNR is scored on 12 random hold-out views per bake, so runs aren&apos;t strictly comparable.</p>
-            <h3 className="mt-8 text-sm">Configurations</h3>
-            <div className="mt-2 overflow-x-auto">
-              <table className="w-full border-collapse font-mono text-[11px] tabular-nums">
-                <thead>
-                  <tr className="text-muted-foreground border-border border-b text-left">
-                    {["Scene", "Config", "Billed", "Cost", "Wall", "PSNR", ".spz", "Where"].map((h) => (
-                      <th key={h} className="py-1.5 pr-4 font-normal">{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {SPLAT_VARIANTS.map((v) => (
-                    <tr key={v.scene + v.config} className="border-border/60 border-b">
-                      <td className="py-1.5 pr-4">{v.scene}</td>
-                      <td className="py-1.5 pr-4">{v.config}</td>
-                      <td className="py-1.5 pr-4">{sec(v.billedSeconds)} s</td>
-                      <td className="py-1.5 pr-4">{usd(v.costUsd)}</td>
-                      <td className="py-1.5 pr-4">{v.wall}</td>
-                      <td className="py-1.5 pr-4">{v.psnr ? `${v.psnr} dB` : "—"}</td>
-                      <td className="py-1.5 pr-4">{v.size}</td>
-                      <td className="text-muted-foreground py-1.5 pr-4">{v.source}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <p className="text-muted-foreground mt-2 text-[11px]">The Canon camera&apos;s hold-out set includes close-ups, so its PSNR reads lower than the table&apos;s.</p>
-          </Section>
-
-          <Section
-            id="cold-start"
-            title="Cold start"
-            intro={
-              <>
-                Seconds from calling a worker to our code running, per image (log scale). You aren&apos;t billed for it, but it&apos;s most of a small job&apos;s wall time.
-                GPU snapshots didn&apos;t move the median and produced the two worst waits, so they stay off. <SourceTag source={COLD_START.source} date={COLD_START.date} />
-              </>
-            }
-          >
-            <StripPlot rows={COLD_START.images} ariaLabel="Cold-start samples per worker image with medians, log scale" />
-            <DataTable
-              head={["Image", "Variant", "Samples (s)", "Warm (s)"]}
-              rows={COLD_START.images.map((r) => [r.label, r.variant, r.samples.join(", "), r.warm])}
-            />
-          </Section>
-
-          <Section
-            id="estimates"
-            title="Estimates vs what was billed"
-            intro={
-              <>
-                <code className="font-mono text-xs">renda estimate</code> returns a range before anything runs. Below: the stored estimate for the nine production jobs behind
-                this page, against their billed seconds. <SourceTag source={ESTIMATES.source} date={ESTIMATES.date} />
-              </>
-            }
-          >
-            <Legend
-              items={[
-                { label: "Estimated range", color: "var(--viz-band)", shape: "band" },
-                { label: "Billed, within range", color: "var(--viz-after)" },
-                { label: "Billed, outside range", color: "var(--viz-before)" },
-              ]}
-            />
-            <div className="mt-5">
-              <RangeChart rows={ESTIMATES.rows} unit="s" ariaLabel="Estimated seconds range versus billed seconds per job" />
-            </div>
-            <DataTable
-              head={["Job", "Estimate low (s)", "Estimate high (s)", "Billed (s)", "Note"]}
-              rows={ESTIMATES.rows.map((r) => [r.label, r.lo, r.hi, r.actual, r.note ?? ""])}
-            />
-            <div className="mt-8 grid gap-3 sm:grid-cols-2">
-              <StatTile
-                label="Planner check across the benchmark set"
-                value={`${ESTIMATES.plannerInRange.after[0]}/${ESTIMATES.plannerInRange.after[1]} in range`}
-                note={`was ${ESTIMATES.plannerInRange.before[0]}/${ESTIMATES.plannerInRange.before[1]} before calibration (isolated)`}
-              />
-              <StatTile
-                label="USDZ turntable, standard priority"
-                value={`${usd(ESTIMATES.usdz.actual)} billed`}
-                note={`estimate ${usd(ESTIMATES.usdz.lo)}–${usd(ESTIMATES.usdz.hi)} (production)`}
-              />
-            </div>
-            <p className="text-muted-foreground mt-3 text-[11px]">
-              Misses are mostly fixed startup time — a cold shader cache on a fresh container, or loading a splat file — which the next calibration pass will add.
-            </p>
+          <Section id="sources" title="Sources and method">
+            <ul className="text-muted-foreground space-y-1.5 text-xs">
+              {Object.entries(SOURCES).map(([k, s]) => (
+                <li key={k}>
+                  <a href={s.url} className="hover:text-foreground underline underline-offset-2" rel="noreferrer">
+                    {s.label}
+                  </a>
+                </li>
+              ))}
+            </ul>
+            <ul className="text-muted-foreground mt-6 list-disc space-y-1.5 pl-4 text-xs">
+              <li>Renda: same packages, isolated benchmark copy of the production worker, 2026-10-20, list prices per hardware class.</li>
+              <li>Local: {LOCAL_MACHINE}; best of one run each, Blender warm; outputs discarded.</li>
+              <li>
+                VM: {ASSUMPTIONS.vmBootSeconds} s launch-to-ready is our estimate for an image with drivers and Blender pre-installed; a fresh
+                instance that installs them is slower. GCP&apos;s L4 is ~12% cheaper than AWS&apos;s; spot instances are cheaper still but can be
+                interrupted.
+              </li>
+              <li>
+                Farms: RebusFarm&apos;s GPU rate × an RTX 4090&apos;s ~{ASSUMPTIONS.farmNodeOb.toLocaleString("en-US")} OctaneBench points, assuming a 4090 renders{" "}
+                {ASSUMPTIONS.farmSpeedupVsL4}× faster than an L4 (we found no published L4 Blender benchmark). Ranch and GarageFarm publish similar
+                OB-hour rates with priority tiers.
+              </li>
+            </ul>
           </Section>
         </div>
       </main>
