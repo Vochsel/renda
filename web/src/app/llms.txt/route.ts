@@ -89,7 +89,7 @@ ${HARDWARE.map((h) => `  - ${HARDWARE_LABEL[h]} (${h}): $${PRICE_PER_MINUTE[h]}`
 
 ## Links
 - Package format: ${base}/docs · JSON Schema: ${base}/api/v1/schema.json · OpenAPI: ${base}/api/v1/openapi.json
-- Auth for agents: ${base}/auth.md · MCP discovery: ${base}/.well-known/mcp/server.json · Pricing JSON: ${base}/api/v1/pricing
+- Auth for agents: ${base}/auth.md · MCP discovery: ${base}/.well-known/mcp/server.json · Pricing JSON: ${base}/api/v1/pricing · Measured cost/time/quality benchmarks: ${base}/benchmarks
 - npm: ${CLI_PACKAGE}, ${MCP_PACKAGE} · PyPI: renda · Source: https://github.com/${GITHUB_REPO}
 `;
   return new Response(body, { headers: { "content-type": "text/plain; charset=utf-8" } });

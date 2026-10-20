@@ -210,6 +210,7 @@ export default function Home() {
       <footer className="text-muted-foreground mx-auto flex w-full max-w-5xl flex-wrap gap-x-5 gap-y-2 px-4 py-8 text-xs">
         <span>Apache-2.0 · AGPL-3.0 (cloud)</span>
         <Link href="/docs" className="hover:text-foreground">Docs</Link>
+        <Link href="/benchmarks" className="hover:text-foreground">Benchmarks</Link>
         <Link href="/llms.txt" className="hover:text-foreground">llms.txt</Link>
         <Link href="/auth.md" className="hover:text-foreground">auth.md</Link>
         <Link href="/api/v1/openapi.json" className="hover:text-foreground">OpenAPI</Link>
