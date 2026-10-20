@@ -48,7 +48,8 @@ class R2Storage:
             aws_access_key_id=access_key or os.environ["R2_ACCESS_KEY_ID"],
             aws_secret_access_key=secret_key or os.environ["R2_SECRET_ACCESS_KEY"],
             region_name="auto",
-            config=Config(retries={"max_attempts": 8, "mode": "adaptive"}, s3={"addressing_style": "path"}),
+            config=Config(retries={"max_attempts": 8, "mode": "adaptive"}, s3={"addressing_style": "path"},
+                          max_pool_connections=32),  # uploads run 16 threads; the default pool is 10
         )
 
     def put_file(self, path: Path, key: str, content_type_: str | None = None) -> int:

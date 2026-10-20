@@ -38,7 +38,9 @@ def ffmpeg_args(fmt: str, codec: str, crf: int, transparent: bool) -> list[str]:
     if codec == "h265":
         return ["-vf", even, "-c:v", "libx265", "-preset", "medium", "-crf", str(crf), "-pix_fmt", "yuv420p", "-tag:v", "hvc1", "-movflags", "+faststart"]
     if codec == "vp9":
-        return ["-c:v", "libvpx-vp9", "-crf", str(crf + 12), "-b:v", "0", "-row-mt", "1",
+        # libvpx defaults to its slowest mode (cpu-used 0); good/4 is several times faster for a barely
+        # visible difference on short clips
+        return ["-c:v", "libvpx-vp9", "-crf", str(crf + 12), "-b:v", "0", "-row-mt", "1", "-deadline", "good", "-cpu-used", "4",
                 "-pix_fmt", "yuva420p" if transparent else "yuv420p"]
     if codec == "prores":
         return ["-c:v", "prores_ks", "-profile:v", "4" if transparent else "3",

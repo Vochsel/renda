@@ -71,6 +71,9 @@ class ChunkTask:
     upload_prefix: str  # outputs/<id>/ for stills, work/<id>/frames/ for video
     final: bool         # True → files are user-facing outputs
     local_dir: str | None = None  # write files here (shared Volume) instead of uploading: splat-bake views
+    # Single-chunk video: encode in this container instead of a separate encode container (no R2 round
+    # trip for the frames). {fps, output, output_key, keep_frames_prefix}
+    encode: dict[str, Any] | None = None
 
 
 @dataclass
@@ -93,6 +96,8 @@ class ChunkResult:
     objects: list[dict[str, Any]] = field(default_factory=list)  # {key, contentType, bytes}
     warnings: list[str] = field(default_factory=list)
     seconds: float = 0.0
+    timings: dict[str, float] = field(default_factory=dict)  # phase → seconds, for overhead analysis
+    encoded: bool = False  # objects[0] is the finished video (encoded in the render container)
 
 
 def plan_chunks(plan: Any) -> list[list[int]]:

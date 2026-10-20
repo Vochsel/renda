@@ -172,6 +172,12 @@ class Splats:
         m = self.transform
         if np.allclose(m, np.eye(4)):
             return self
+        # Memoised: renderers call this once per frame, and re-baking every splat (SVD, quaternions, SH
+        # rotation) dominated turntable frame time. Keyed on the transform and array identities.
+        key = (m.tobytes(), id(self.means), id(self.rotations), id(self.scales), id(self.sh_rest))
+        cached = self.__dict__.get("_baked")
+        if cached is not None and cached[0] == key:
+            return cached[1]
         lin = m[:3, :3]
         u, _, vt = np.linalg.svd(lin)
         rot = u @ vt  # orthogonal part; may include a reflection (e.g. an axis flip)
@@ -187,7 +193,9 @@ class Splats:
         if rest is not None:
             rmat = sh_rotation_matrix(rot, self.sh_degree)
             rest = np.einsum("ij,njc->nic", rmat, rest).astype(np.float32)
-        return Splats(self.name, means, scales, quats, self.opacities, self.sh_dc, rest, identity(), self.antialiased)
+        out = Splats(self.name, means, scales, quats, self.opacities, self.sh_dc, rest, identity(), self.antialiased)
+        self.__dict__["_baked"] = (key, out)
+        return out
 
     def subset(self, mask: np.ndarray) -> "Splats":
         return Splats(self.name, self.means[mask], self.scales[mask], self.rotations[mask], self.opacities[mask],

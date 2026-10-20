@@ -21,7 +21,7 @@ def srgb_to_linear(x: np.ndarray) -> np.ndarray:
     return np.where(x <= 0.04045, x / 12.92, ((x + 0.055) / 1.055) ** 2.4)
 
 
-def save_display(rgb: np.ndarray, alpha: np.ndarray, path: Path, fmt: str, transparent: bool) -> Path:
+def save_display(rgb: np.ndarray, alpha: np.ndarray, path: Path, fmt: str, transparent: bool, fast: bool = False) -> Path:
     """Display-space straight-alpha RGB → file (EXR gets linearised premultiplied RGBA)."""
     from PIL import Image
 
@@ -36,7 +36,8 @@ def save_display(rgb: np.ndarray, alpha: np.ndarray, path: Path, fmt: str, trans
         img = Image.fromarray(np.dstack([rgb8, (np.clip(alpha, 0, 1) * 255 + 0.5).astype(np.uint8)]), "RGBA")
     else:
         img = Image.fromarray(rgb8, "RGB")
-    img.save(path, format={"png": "PNG", "jpg": "JPEG", "webp": "WEBP"}[fmt], **({"quality": 92} if fmt in ("jpg", "webp") else {}))
+    opts = {"quality": 92} if fmt in ("jpg", "webp") else {"compress_level": 1 if fast else 6}
+    img.save(path, format={"png": "PNG", "jpg": "JPEG", "webp": "WEBP"}[fmt], **opts)
     return path
 
 
@@ -84,7 +85,9 @@ def write_frame_outputs(ctx: RenderContext, frame: int, rgb: np.ndarray, alpha: 
     pkg = ctx.pkg
     fmt = pkg.output.format if not pkg.output.is_video else "png"
     transparent = pkg.output.transparent or pkg.environment.background == "transparent"
-    files.append(save_display(rgb, alpha, ctx.out_dir / frame_filename("beauty", frame, fmt), fmt, transparent and fmt != "jpg"))
+    # video frames are intermediates for the encoder: fast PNG compression (lossless either way)
+    files.append(save_display(rgb, alpha, ctx.out_dir / frame_filename("beauty", frame, fmt), fmt, transparent and fmt != "jpg",
+                              fast=pkg.output.is_video))
     for p in pkg.output.passes:
         if p == "beauty" or p not in passes_supported:
             continue

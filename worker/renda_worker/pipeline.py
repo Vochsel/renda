@@ -64,6 +64,22 @@ class Stopwatch:
             self.__enter__()
 
 
+class Phases:
+    """Wall seconds per named phase (fetch, render, upload, …), returned with results for overhead analysis."""
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic):
+        self.clock = clock
+        self.seconds: dict[str, float] = {}
+
+    @contextlib.contextmanager
+    def __call__(self, name: str):
+        t = self.clock()
+        try:
+            yield
+        finally:
+            self.seconds[name] = round(self.seconds.get(name, 0.0) + self.clock() - t, 3)
+
+
 @dataclass
 class EncodeTask:
     job_id: str
@@ -142,22 +158,28 @@ def run_scene_job(job: JobRequest, deps: Deps) -> dict[str, Any]:
     """Orchestrate a scene job end to end. Never raises; reports failure via events."""
     ev = deps.events
     active = Stopwatch(deps.clock)
+    ph = Phases(deps.clock)
+    t_start = deps.clock()
     billable = True
     cache: AssetCache | None = None
     try:
         with active:
-            ev.status("planning", progress=0.0)
-            cache = _asset_cache(deps, job.package, {k: str(v) for k, v in job.inputs.items()}, defer_commit=True)
-            pkg = deps.core.load_package(job.package)
-            work = deps.work_root / job.jobId
-            work.mkdir(parents=True, exist_ok=True)
-            asset_paths = deps.core.resolve(pkg, work, cache.fetch)
-            cache.commit()  # one Volume commit for every newly cached asset, before chunks look for them
+            with ph("resolve"):
+                ev.status("planning", progress=0.0)
+                cache = _asset_cache(deps, job.package, {k: str(v) for k, v in job.inputs.items()}, defer_commit=True)
+                pkg = deps.core.load_package(job.package)
+                work = deps.work_root / job.jobId
+                work.mkdir(parents=True, exist_ok=True)
+                asset_paths = deps.core.resolve(pkg, work, cache.fetch)
+            with ph("volume_commit"):
+                cache.commit()  # one Volume commit for every newly cached asset, before chunks look for them
             _check_cancel(deps)
-            plan = deps.core.plan(pkg, asset_paths, job.priority)
+            with ph("plan"):
+                plan = deps.core.plan(pkg, asset_paths, job.priority)
             cache_key = get(plan, "cache_key")
 
-            cached = _restore_from_cache(deps, job, cache_key)
+            with ph("result_cache"):
+                cached = _restore_from_cache(deps, job, cache_key)
             if cached is not None:
                 billable = False
                 ev.status("succeeded", progress=1.0, engine=get(plan, "engine"))
@@ -169,6 +191,14 @@ def run_scene_job(job: JobRequest, deps: Deps) -> dict[str, Any]:
             output_cfg = get(pkg, "output")
             out_format = str(get(output_cfg, "format", "png"))
             tasks = dispatch.build_tasks(job, plan, dispatch.scene_formats(asset_paths), out_format, deps.asset_root)
+            if dispatch.is_video(out_format) and len(tasks) == 1 and not dispatch.is_splat_training(plan):
+                keep = bool(get(output_cfg, "keepFrames", False))
+                tasks[0].encode = {
+                    "fps": float(get(get(pkg, "animation"), "fps", 30) or 30),
+                    "output": _plain(output_cfg),
+                    "output_key": job.outputPrefix + dispatch.output_name(job.package, out_format),
+                    "keep_frames_prefix": job.outputPrefix + "frames/" if keep else None,
+                }
             total_frames = sum(len(t.frames) for t in tasks)
             hw_now = dispatch.runner_hardware(tasks[0].runner).value if tasks else \
                 str(get(get(plan, "splat_bake"), "train_hardware", get(plan, "hardware")))
@@ -182,6 +212,7 @@ def run_scene_job(job: JobRequest, deps: Deps) -> dict[str, Any]:
         results: list[ChunkResult] = []
         done_frames = 0
         assert deps.run_chunks is not None
+        t_wait = deps.clock()
         for runner_name, group in dispatch.group_by_runner(tasks).items():
             for res in deps.run_chunks(runner_name, group):
                 _check_cancel(deps)
@@ -191,6 +222,8 @@ def run_scene_job(job: JobRequest, deps: Deps) -> dict[str, Any]:
                     ev.warning(w)
                 ev.status("rendering", progress=dispatch.render_progress(done_frames, total_frames))
 
+        ph.seconds["wait_chunks"] = round(deps.clock() - t_wait, 3)
+        t_fin = deps.clock()
         with active:
             objects = [o for r in sorted(results, key=lambda r: r.chunk) for o in r.objects]
             if dispatch.is_splat_training(plan):
@@ -206,6 +239,8 @@ def run_scene_job(job: JobRequest, deps: Deps) -> dict[str, Any]:
                 for w in trained.get("warnings", []):
                     ev.warning(w)
                 outputs = trained["outputs"]
+            elif dispatch.is_video(out_format) and results and all(r.encoded for r in results):
+                outputs = objects  # encoded in the render container: [video, *kept frames]
             elif dispatch.is_video(out_format):
                 _check_cancel(deps)
                 ev.status("encoding", progress=0.9)
@@ -234,9 +269,15 @@ def run_scene_job(job: JobRequest, deps: Deps) -> dict[str, Any]:
             billable = False
         ev.status("succeeded", progress=1.0)
         ev.done(outputs, cached=False)
-        return {"status": "succeeded", "cached": False, "outputs": outputs}
+        ph.seconds["finalize"] = round(deps.clock() - t_fin, 3)
+        ph.seconds["fetch"] = round(cache.fetch_seconds, 3) if cache is not None else 0.0
+        ph.seconds["billed_orchestrate"] = round(_billed(active.total, cache), 3)
+        ph.seconds["total"] = round(deps.clock() - t_start, 3)
+        return {"status": "succeeded", "cached": False, "outputs": outputs,
+                "timings": {"orchestrate": ph.seconds, "chunks": [r.timings for r in sorted(results, key=lambda r: r.chunk)]}}
     except Canceled:
         ev.status("canceled")
+        ev.flush()
         return {"status": "canceled"}
     except Exception as exc:
         log.exception("job %s failed", job.jobId)
@@ -267,27 +308,53 @@ def run_chunk(task: ChunkTask, deps: Deps, started: float | None = None) -> Chun
     """Render one chunk of frames and upload them. Bills its own wall time from `started`."""
     started = deps.clock() if started is None else started
     cache: AssetCache | None = None
+    ph = Phases(deps.clock)
     try:
-        cache = _asset_cache(deps, task.package, task.inputs)
-        pkg = deps.core.load_package(task.package)
-        work = Path(tempfile.mkdtemp(prefix=f"chunk-{task.chunk}-", dir=_ensure(deps.work_root)))
-        asset_paths = deps.core.resolve(pkg, work, cache.fetch)
-        out_dir = work / "out"
-        out_dir.mkdir()
-        result = deps.core.render_frames(task.plan, pkg, asset_paths, out_dir, task.frames)
-        def upload(f: Path) -> dict[str, Any]:
-            key = task.upload_prefix + f.name
+        with ph("resolve"):
+            cache = _asset_cache(deps, task.package, task.inputs)
+            pkg = deps.core.load_package(task.package)
+            work = Path(tempfile.mkdtemp(prefix=f"chunk-{task.chunk}-", dir=_ensure(deps.work_root)))
+            asset_paths = deps.core.resolve(pkg, work, cache.fetch)
+            out_dir = work / "out"
+            out_dir.mkdir()
+        with ph("render"):
+            result = deps.core.render_frames(task.plan, pkg, asset_paths, out_dir, task.frames)
+        def upload(f: Path, key: str | None = None, final: bool = task.final, poster: Path | None = None) -> dict[str, Any]:
+            key = key or task.upload_prefix + f.name
             ctype = content_type(f)
-            obj = {"key": key, "contentType": ctype, "bytes": deps.storage.put_file(f, key, ctype)}
+            obj: dict[str, Any] = {"key": key, "contentType": ctype}
             # core names passes like frame_0001.depth.exr; anything with a 2nd suffix is a pass.
             if len(f.suffixes) > 1:
                 obj["pass"] = f.suffixes[-2].lstrip(".")
-            if task.final:  # user-facing output: dimensions + thumbnail for the dashboard gallery
-                media.attach(obj, f, deps.storage)
+            if final:
+                # user-facing output: dimensions + thumbnail for the gallery, uploaded alongside the file
+                from concurrent.futures import ThreadPoolExecutor
+
+                with ThreadPoolExecutor(2) as pool:
+                    put = pool.submit(deps.storage.put_file, f, key, ctype)
+                    pool.submit(media.attach, obj, f, deps.storage, poster).result()
+                    obj["bytes"] = put.result()
+            else:
+                obj["bytes"] = deps.storage.put_file(f, key, ctype)
             return obj
 
         files = [Path(f) for f in get(result, "files") or []]
-        if task.local_dir:
+        ph.seconds["upload"] = 0.0
+        t_up = deps.clock()
+        encoded = False
+        if task.encode:
+            # single-chunk video: encode right here — frames never leave the container
+            enc = task.encode
+            beauty = sorted(f for f in files if len(f.suffixes) <= 1)
+            video = work / enc["output_key"].rsplit("/", 1)[-1]
+            with ph("encode"):
+                deps.core.encode(beauty, float(enc["fps"]), enc["output"], video)
+            jobs = [(video, enc["output_key"], True, beauty[0] if beauty else None)]
+            if enc.get("keep_frames_prefix"):
+                jobs += [(f, enc["keep_frames_prefix"] + f.name, False, None) for f in beauty]
+            objects = _parallel(lambda j: upload(j[0], j[1], j[2], j[3]), jobs)
+            encoded = True
+        elif task.local_dir:
             # splat-bake views stay on the shared Volume for the training container (no R2 round trip)
             dest = Path(task.local_dir)
             dest.mkdir(parents=True, exist_ok=True)
@@ -297,8 +364,13 @@ def run_chunk(task: ChunkTask, deps: Deps, started: float | None = None) -> Chun
         else:
             # R2 round-trips dominate small frames; sequential uploads cost ~40s of GPU time per 48 frames.
             objects = _parallel(upload, files)
+        ph.seconds["upload"] = round(deps.clock() - t_up, 3)
         shutil.rmtree(work, ignore_errors=True)
-        return ChunkResult(task.chunk, task.frames, objects, [str(w) for w in get(result, "warnings") or []])
+        if cache is not None:
+            ph.seconds["fetch"] = round(cache.fetch_seconds, 3)
+        ph.seconds["total"] = round(deps.clock() - started, 3)
+        return ChunkResult(task.chunk, task.frames, objects, [str(w) for w in get(result, "warnings") or []],
+                           timings=ph.seconds, encoded=encoded)
     finally:
         deps.events.usage(dispatch.runner_hardware(task.runner).value, _billed(deps.clock() - started, cache), task.chunk)
 
@@ -442,6 +514,7 @@ def run_hyperframes_job(job: JobRequest, deps: Deps, run: Runner = _subprocess_r
         return {"status": "succeeded", "outputs": outputs}
     except Canceled:
         ev.status("canceled")
+        ev.flush()
         return {"status": "canceled"}
     except Exception as exc:
         log.exception("hyperframes job %s failed", job.jobId)

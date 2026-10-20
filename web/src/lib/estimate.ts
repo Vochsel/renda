@@ -43,10 +43,11 @@ const FRAME_COST: Record<ConcreteEngine, Partial<Record<Hardware, { fixed: numbe
     cpu: { fixed: 0.4, perMpSample: 0.25 },
     "gpu-l4": { fixed: 0.15, perMpSample: 0.02 },
   },
-  // Gaussian splats (CUDA rasteriser; measured ~180 ms per million splats at 1080p on an L4)
+  // Gaussian splats: the CUDA raster is ~180 ms per million splats at 1080p on an L4, but host work per
+  // frame (readback, background, composite, PNG) dominates — ~0.30 s at 720×720 (measured 2026-10-20).
   gsplat: {
-    "gpu-l4": { fixed: 0.1, perMpSample: 0.09 },
-    "gpu-l40s": { fixed: 0.06, perMpSample: 0.045 },
+    "gpu-l4": { fixed: 0.05, perMpSample: 0.6 },
+    "gpu-l40s": { fixed: 0.04, perMpSample: 0.5 },
   },
 };
 
@@ -277,7 +278,8 @@ export function estimateScene(pkg: RendaPackage, priority: Priority = "standard"
       + (pkg.post ? 0.35 * mp / 2.07 : 0); // shared post stage
     const renderSeconds = perFrame * frames;
     const chunks = fanoutCount(frames, load, perFrame, priority);
-    const encode = isVideo ? 3 + frames * mp * 0.02 : 0;
+    // one chunk encodes in its own container; more need a separate encode container (~3 s start)
+    const encode = isVideo ? (chunks > 1 ? 3 : 0) + frames * mp * 0.02 : 0;
     const total = renderSeconds + chunks * load + encode;
     const wall = Math.ceil(frames / chunks) * perFrame + load + encode;
     return { hw, total, wall, chunks, cost: costUsd(hw, total) };

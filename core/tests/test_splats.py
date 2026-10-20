@@ -289,3 +289,44 @@ def test_spz_v4_reads_like_v3(tmp_path):
 
     assert kind_of(blob_path) == "spz"
     assert with_extensions({"s": blob_path}, tmp_path / "named")["s"].suffix == ".spz"
+
+
+def test_env_background_matches_per_frame_tonemap():
+    """The precomputed display env must give exactly what tonemapping each frame gave."""
+    import math
+
+    import numpy as np
+
+    from renda.engines.splat_raster import env_background, ray_directions
+    from renda.images import linear_to_srgb, tonemap
+    from renda.ir.camera import ResolvedCamera
+
+    rng = np.random.default_rng(0)
+    env = (rng.random((64, 128, 3)) * 4).astype(np.float32)
+    cam = ResolvedCamera(np.array([2.0, 1.0, 3.0]), np.zeros(3), np.array([0.0, 1.0, 0.0]), 40.0)
+    got = env_background(env, cam, 48, 32, "Y", rotation_deg=30, intensity=1.5)
+    d = ray_directions(cam, 48, 32).astype(np.float32)
+    a = math.radians(30)
+    x = d[..., 0] * math.cos(a) - d[..., 2] * math.sin(a)
+    zz = d[..., 0] * math.sin(a) + d[..., 2] * math.cos(a)
+    u = ((np.arctan2(x, -zz) / (2 * math.pi) + 0.5) * 128).astype(np.int64) % 128
+    v = np.clip((np.arccos(np.clip(d[..., 1], -1, 1)) / math.pi * 64).astype(np.int64), 0, 63)
+    np.testing.assert_allclose(got, linear_to_srgb(tonemap(env[v, u] * 1.5)), atol=1e-6)
+
+
+def test_baked_is_memoised_and_tracks_transform_changes():
+    import numpy as np
+
+    from renda.ir.splats import Splats
+
+    n = 50
+    rng = np.random.default_rng(1)
+    s = Splats("s", rng.random((n, 3)).astype(np.float32), np.zeros((n, 3), np.float32),
+               np.tile(np.array([1, 0, 0, 0], np.float32), (n, 1)), np.zeros(n, np.float32),
+               rng.random((n, 3)).astype(np.float32), None)
+    s.transform = np.diag([1.0, -1.0, -1.0, 1.0])
+    a = s.baked()
+    assert s.baked() is a  # same object while nothing changed
+    s.transform = np.diag([2.0, 2.0, 2.0, 1.0])
+    b = s.baked()
+    assert b is not a and np.allclose(b.means, s.means * 2)

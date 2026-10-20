@@ -94,7 +94,7 @@ def composite(rgba: np.ndarray, background: tuple[float, float, float] | None) -
 
 def save_beauty(rgba: np.ndarray, path: Path, fmt: str, transparent: bool,
                 background: tuple[float, float, float] | None = None, tonemap_mode: str = "agx",
-                exposure: float = 0.0) -> Path:
+                exposure: float = 0.0, fast: bool = False) -> Path:
     """rgba: (H,W,3|4) linear float, premultiplied alpha. `background` (linear RGB) is
     composited in display space after tonemapping, so solid colours come out exact."""
     path = Path(path)
@@ -117,7 +117,8 @@ def save_beauty(rgba: np.ndarray, path: Path, fmt: str, transparent: bool,
         img = Image.fromarray(np.dstack([disp8, (a[..., 0] * 255 + 0.5).astype(np.uint8)]), "RGBA")
     else:
         img = Image.fromarray(disp8, "RGB")
-    kwargs = {"quality": 92} if fmt in ("jpg", "webp") else {"optimize": False, "compress_level": 6}
+    # fast: intermediate frames (video) that only feed the encoder — lossless either way
+    kwargs = {"quality": 92} if fmt in ("jpg", "webp") else {"optimize": False, "compress_level": 1 if fast else 6}
     img.save(path, format={"jpg": "JPEG", "png": "PNG", "webp": "WEBP"}[fmt], **kwargs)
     return path
 

@@ -39,10 +39,18 @@ Poster = Callable[[str, bytes, dict[str, str]], int]
 """(url, body, headers) -> HTTP status. Raises on network errors."""
 
 
-def _requests_poster(url: str, body: bytes, headers: dict[str, str]) -> int:
-    import requests
+_SESSION = None
 
-    return requests.post(url, data=body, headers=headers, timeout=15).status_code
+
+def _requests_poster(url: str, body: bytes, headers: dict[str, str]) -> int:
+    # One pooled keep-alive session per container: a fresh TLS handshake per event added ~0.3–0.8 s of
+    # billed time to every status update.
+    global _SESSION
+    if _SESSION is None:
+        import requests
+
+        _SESSION = requests.Session()
+    return _SESSION.post(url, data=body, headers=headers, timeout=15).status_code
 
 
 class EventSink:
@@ -57,6 +65,7 @@ class EventSink:
         attempts: int = 5,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.time,
+        background: bool = False,
     ):
         self.job_id = job_id
         self.callback_url = callback_url
@@ -65,6 +74,36 @@ class EventSink:
         self.attempts = attempts
         self.sleep = sleep
         self.clock = clock
+        # background=True: status/warning events go out on one ordered worker thread so they don't add
+        # latency to billed work; usage/done/failed flush that queue first and stay synchronous.
+        self.background = background
+        self._queue = None
+
+    def _enqueue(self, type: str, **fields: Any) -> bool:
+        if not self.background:
+            return self.emit(type, **fields)
+        import queue
+        import threading
+
+        if self._queue is None:
+            self._queue = queue.Queue()
+
+            def work() -> None:
+                while True:
+                    t, f = self._queue.get()
+                    try:
+                        self.emit(t, **f)
+                    finally:
+                        self._queue.task_done()
+
+            threading.Thread(target=work, daemon=True).start()
+        self._queue.put((type, fields))
+        return True
+
+    def flush(self) -> None:
+        """Wait until every queued event has been delivered (keeps event order intact)."""
+        if self._queue is not None:
+            self._queue.join()
 
     def emit(self, type: str, idempotency_key: str | None = None, **fields: Any) -> bool:
         event = {"jobId": self.job_id, "type": type, **{k: v for k, v in fields.items() if v is not None}}
@@ -94,17 +133,20 @@ class EventSink:
 
     # Typed helpers so call sites match the contract exactly.
     def status(self, status: str, progress: float | None = None, engine: str | None = None, hardware: str | None = None) -> bool:
-        return self.emit("status", status=status, progress=None if progress is None else round(progress, 4), engine=engine, hardware=hardware)
+        return self._enqueue("status", status=status, progress=None if progress is None else round(progress, 4), engine=engine, hardware=hardware)
 
     def usage(self, hardware: str, seconds: float, chunk: int | str) -> bool:
         # Usage is money: idempotent per (job, chunk) so retries never double-bill.
+        self.flush()
         return self.emit("usage", idempotency_key=f"{self.job_id}:{chunk}", hardware=hardware, seconds=round(seconds, 3), chunk=chunk)
 
     def warning(self, message: str) -> bool:
-        return self.emit("warning", message=message)
+        return self._enqueue("warning", message=message)
 
     def done(self, outputs: list[dict[str, Any]], cached: bool) -> bool:
+        self.flush()
         return self.emit("done", idempotency_key=f"{self.job_id}:done", outputs=outputs, cached=cached)
 
     def failed(self, error: str) -> bool:
+        self.flush()
         return self.emit("failed", idempotency_key=f"{self.job_id}:failed", error=error[:4000])

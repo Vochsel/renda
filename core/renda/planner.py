@@ -36,6 +36,10 @@ ENGINE_COST: dict[str, dict[str, float]] = {
 # the numpy fallback scales with coverage). Measured on Modal 2026-10-19: L4 ≈ 180 ms per 1M splats at 1080p
 # (gsplat 1.5.3); L40S assumed ~2x faster; numpy ≈ 8 s for 79k splats at 720p on an M-series CPU.
 SPLAT_SECONDS_PER_M: dict[str, float] = {"cpu": 150.0, "gpu-l4": 0.18, "gpu-l40s": 0.09}
+# Host-side work per gsplat frame (GPU readback, background, composite, PNG), per 1080p of pixels.
+# Measured 2026-10-20 on an L4: a 48-frame 720×720 turntable of a 79k-splat capture spent ~0.30 s/frame
+# here versus ~0.01 s rasterising.
+GSPLAT_HOST_SECONDS_PER_1080P = 1.2
 DEFAULT_SPLATS = 1_000_000
 
 # Engine start + scene load (seconds); .blend/.fbx/.abc via IR add an extraction pass.
@@ -161,10 +165,13 @@ def frame_seconds(engine: str, hardware: str, pkg: RendaPackage, samples: int, c
         mp = w * h / 2.07e6  # relative to 1080p
         splat_s = splats / 1e6 * SPLAT_SECONDS_PER_M[hardware] * (mp if hardware == "cpu" else max(mp, 0.5))
     if engine == "gsplat":
-        return max(splat_s or 0.0, MIN_FRAME_SECONDS["gsplat"])
+        host = GSPLAT_HOST_SECONDS_PER_1080P * w * h / 2.07e6
+        return max((splat_s or 0.0) + host, MIN_FRAME_SECONDS["gsplat"])
     eff_samples = samples
     if engine == "blender-cycles" and pkg.render.denoise:
-        eff_samples = samples * 0.6  # adaptive sampling usually stops early on clean regions
+        # adaptive sampling stops early on clean regions; with OIDN the low-sample threshold is loose
+        # (measured 2026-10-20: 72-frame 800² draft turntable ≈ 0.5 s/frame on an L4)
+        eff_samples = samples * 0.45
     work = w * h * eff_samples * ENGINE_COST[engine][kind] * complexity
     # threejs renders splats with Spark in the same pass; other engines add a composited splat layer
     extra = splat_s if engine != "threejs" else splat_s * 0.2
@@ -299,7 +306,9 @@ def plan(
     chunks = chunk_frames(frames, load_s, frame_s, priority)
     encode_s = 0.05 * len(frames) * (pkg.render.resolution[0] * pkg.render.resolution[1] / 2.07e6) if pkg.output.is_video else 0.0
     total = len(chunks) * load_s + len(frames) * frame_s + encode_s
-    wall = wall_seconds(chunks, load_s, frame_s, encode_s + (5.0 if pkg.output.is_video else 0.0))
+    # one chunk encodes in its own container; several need a separate encode container (start + download)
+    encode_wall = encode_s + (5.0 if pkg.output.is_video and len(chunks) > 1 else 0.0)
+    wall = wall_seconds(chunks, load_s, frame_s, encode_wall)
 
     key = ""
     if asset_hashes is not None or asset_paths:
