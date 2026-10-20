@@ -92,15 +92,21 @@ export type Estimate = {
   warnings: string[];
 };
 
+/** First choice of core's `choose_engine` (renda/planner.py); kept in sync by spec/fixtures/estimator/auto-engine.json. */
+export function autoEngine(format: string | undefined, quality: "draft" | "standard" | "final", mixed = false): ConcreteEngine {
+  if (format === "splat") return mixed ? (quality === "draft" ? "threejs" : "blender-cycles") : "gsplat";
+  if (format === "blend" || format === "fbx" || format === "abc") return quality === "draft" ? "blender-eevee" : "blender-cycles";
+  if (format === "threejs") return quality === "final" ? "blender-cycles" : "threejs";
+  if (["stl", "obj", "ply", "3mf", "dae", "step", "iges"].includes(format ?? "")) {
+    // draft previews run on three.js (CPU): ~2.7× cheaper than Workbench on an L4 and no GPU wait
+    return ({ draft: "threejs", standard: "mitsuba", final: "blender-cycles" } as const)[quality];
+  }
+  return quality === "draft" ? "threejs" : "blender-cycles"; // gltf, usd, rir, unknown
+}
+
 export function resolveEngine(pkg: RendaPackage, rootFormat?: string): ConcreteEngine {
   if (pkg.render.engine !== "auto") return pkg.render.engine;
-  if (rootFormat === "splat") {
-    if (!pkg.scene.include.length) return "gsplat"; // splat-only: the cheapest engine
-    return pkg.render.quality === "draft" ? "threejs" : "blender-cycles"; // meshes + splats
-  }
-  if (rootFormat === "threejs" && pkg.render.quality === "draft") return "threejs";
-  if (pkg.render.quality === "draft") return "blender-eevee";
-  return "blender-cycles";
+  return autoEngine(rootFormat, pkg.render.quality, rootFormat === "splat" && pkg.scene.include.length > 0);
 }
 
 export function rootFormat(pkg: RendaPackage): string | undefined {

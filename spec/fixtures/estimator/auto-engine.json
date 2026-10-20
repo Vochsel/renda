@@ -1,0 +1,22 @@
+{
+  "_comment": "engine=auto choice shared by core/renda/planner.py choose_engine and web/src/lib/estimate.ts resolveEngine",
+  "cases": [
+    { "format": "blend", "quality": "draft", "engine": "blender-eevee" },
+    { "format": "blend", "quality": "standard", "engine": "blender-cycles" },
+    { "format": "fbx", "quality": "final", "engine": "blender-cycles" },
+    { "format": "abc", "quality": "draft", "engine": "blender-eevee" },
+    { "format": "threejs", "quality": "draft", "engine": "threejs" },
+    { "format": "threejs", "quality": "standard", "engine": "threejs" },
+    { "format": "threejs", "quality": "final", "engine": "blender-cycles" },
+    { "format": "stl", "quality": "draft", "engine": "threejs" },
+    { "format": "stl", "quality": "standard", "engine": "mitsuba" },
+    { "format": "step", "quality": "final", "engine": "blender-cycles" },
+    { "format": "obj", "quality": "standard", "engine": "mitsuba" },
+    { "format": "gltf", "quality": "draft", "engine": "threejs" },
+    { "format": "gltf", "quality": "standard", "engine": "blender-cycles" },
+    { "format": "usd", "quality": "final", "engine": "blender-cycles" },
+    { "format": "splat", "quality": "standard", "engine": "gsplat" },
+    { "format": "splat", "quality": "draft", "mixed": true, "engine": "threejs" },
+    { "format": "splat", "quality": "final", "mixed": true, "engine": "blender-cycles" }
+  ]
+}

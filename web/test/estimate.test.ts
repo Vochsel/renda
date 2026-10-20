@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { parsePackage } from "@rendahq/spec";
-import { estimateHyperframes, estimateScene, frameCount } from "@/lib/estimate";
+import { readFileSync } from "node:fs";
+import { autoEngine, estimateHyperframes, estimateScene, frameCount } from "@/lib/estimate";
+
+describe("auto engine parity with core", () => {
+  it("matches spec/fixtures/estimator/auto-engine.json", () => {
+    const { cases } = JSON.parse(readFileSync(new URL("../../spec/fixtures/estimator/auto-engine.json", import.meta.url), "utf8"));
+    for (const c of cases) expect([c.format, c.quality, autoEngine(c.format, c.quality, !!c.mixed)]).toEqual([c.format, c.quality, c.engine]);
+  });
+});
 
 describe("estimate", () => {
   it("splat bakes: fast is a cheap CPU conversion; standard renders 96 views then trains", () => {
@@ -15,13 +23,18 @@ describe("estimate", () => {
     expect(std.estCostUsd[0]).toBeLessThan(0.12);
     expect(std.estCostUsd[1]).toBeGreaterThan(0.12);
   });
-  it("draft still defaults to eevee on GPU and is cheap", () => {
+  it("draft still of a mesh defaults to three.js on CPU and is cheap", () => {
     const e = estimateScene(parsePackage({ scene: { root: "asset://" + "a".repeat(64) }, render: { quality: "draft", resolution: [1280, 720] } }));
-    expect(e.engine).toBe("blender-eevee");
-    expect(e.hardware).toMatch(/^gpu-/);
+    expect(e.engine).toBe("threejs");
+    expect(e.hardware).toBe("cpu");
     expect(e.frames).toBe(1);
     expect(e.estCostUsd[1]).toBeLessThan(0.05);
     expect(e.estSeconds[0]).toBeLessThan(e.estSeconds[1]);
+  });
+  it("draft of a Blender-native file stays on Eevee (GPU)", () => {
+    const e = estimateScene(parsePackage({ assets: { s: { uri: "asset://" + "b".repeat(64), format: "blend" } }, scene: { root: "s" }, render: { quality: "draft" } }));
+    expect(e.engine).toBe("blender-eevee");
+    expect(e.hardware).toMatch(/^gpu-/);
   });
   it("cpu-only request falls back with a warning for GPU-only engines", () => {
     const e = estimateScene(parsePackage({ scene: { root: "x.glb" }, render: { engine: "blender-eevee", hardware: "cpu" } }));

@@ -244,6 +244,8 @@ def _shape_kwargs(shape: hw.Shape) -> dict:
         timeout=shape.timeout_s,
         max_containers=shape.max_containers,
         scaledown_window=shape.scaledown_s,
+        min_containers=shape.min_containers,
+        buffer_containers=shape.buffer_containers,
     )
 
 
@@ -266,7 +268,7 @@ def render_chunk_blender_cpu(task):
     return _chunk(task, time.monotonic())
 
 
-@app.function(image=blender_image, gpu=_L4.gpu, secrets=SECRETS,
+@app.function(image=blender_image, gpu=hw.gpu_request(_L4, hw.L4_FALLBACK_GPUS), secrets=SECRETS,
               volumes={ASSET_ROOT: assets_volume, CACHE_ROOT: kernel_cache_volume}, retries=_retries(),
               enable_memory_snapshot=True, **_shape_kwargs(_L4))
 def render_chunk_l4(task):

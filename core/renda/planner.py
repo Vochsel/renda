@@ -145,12 +145,14 @@ def choose_engine(fmt: str, quality: str, available: set[str] | None, mixed: boo
         c = ["blender-eevee", "blender-cycles"] if quality == "draft" else ["blender-cycles", "blender-eevee"]
     elif fmt == "threejs":
         c = ["threejs", "blender-eevee", "mitsuba"] if quality != "final" else ["blender-cycles", "mitsuba", "threejs"]
+    # Draft previews of mesh formats go to three.js on CPU first: measured 7.3 s billed at the CPU rate vs
+    # ~9.5 s on an L4 for Workbench/Eevee (≈2.7× cheaper), and CPU capacity never waits for a free GPU.
     elif fmt in ("stl", "obj", "ply", "3mf", "dae", "step", "iges"):
-        c = {"draft": ["blender-workbench", "mitsuba", "threejs"],
+        c = {"draft": ["threejs", "blender-workbench", "mitsuba"],
              "standard": ["mitsuba", "blender-cycles", "threejs"],
              "final": ["blender-cycles", "mitsuba"]}[quality]
     else:  # gltf, usd, rir
-        c = ["blender-eevee", "mitsuba", "threejs"] if quality == "draft" else ["blender-cycles", "mitsuba"]
+        c = ["threejs", "blender-eevee", "mitsuba"] if quality == "draft" else ["blender-cycles", "mitsuba"]
     if available is not None:
         c = [e for e in c if e in available] + [e for e in ("mitsuba", "blender-cycles", "threejs") if e in available and e not in c]
     return c

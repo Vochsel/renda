@@ -107,7 +107,18 @@ The server must dedupe on it: Modal retries a preempted chunk and the retry reus
 - **Asset cache** — content-addressed Volume; each asset is downloaded once, hash-verified.
 - **Cold starts** — `enable_memory_snapshot=True` on all Python render/encode/orchestrate
   functions with heavy imports preloaded at module scope; slim `api` image for endpoints.
-- **Idle GPU** — `scaledown_window` 30 s (L4) / 20 s (L40S) vs 60–120 s for CPU.
+- **Idle containers** — idle time inside the scaledown window is billed to us, and at low traffic the next job rarely
+  lands in it, so windows are short: 15 s (L4) / 10 s (L40S) / 20 s (CPU, three.js) / 15 s (encode) / 60 s
+  (orchestrate). Nothing is kept warm by default. Deploy-time overrides: `RENDA_SCALEDOWN_<CLASS>`, `RENDA_MIN_<CLASS>`,
+  `RENDA_BUFFER_<CLASS>` with CLASS ∈ CPU, GPU_L4, GPU_L40S, ORCHESTRATE, ENCODE, HYPERFRAMES, THREEJS
+  (e.g. `RENDA_BUFFER_GPU_L4=1 ./deploy.sh` for a launch window).
+- **GPU capacity tails** — waiting for a free L4 took 25–166 s in testing, so the Blender/Mitsuba L4 runner may fall
+  back to an A10G (`RENDA_L4_FALLBACK_GPUS`, default `A10G`; empty disables). Splat runners stay on L4/L40S: gsplat is
+  compiled for sm_89 only.
+- **Draft previews on CPU** — `engine: auto` + `quality: draft` renders mesh formats with three.js on CPU (≈2.7×
+  cheaper than Workbench/Eevee on an L4 and no GPU wait); `.blend/.fbx/.abc` still draft on Eevee.
+- **Measuring** — `scripts/coldstart_probe.py` (cold start per image config) and `scripts/bench_wall.py` (end-to-end
+  worker wall time) run against isolated apps only.
 - **OptiX kernel cache** — `XDG_CACHE_HOME` on the `renda-kernel-cache` Volume for GPU functions.
 - **Chunking** — chunk sizes come from `renda.planner`; `.map(order_outputs=False)` for wall-clock speed at equal cost.
 - **Preemptible only** — non-preemptible is 3x on Modal; chunks are idempotent and retried
