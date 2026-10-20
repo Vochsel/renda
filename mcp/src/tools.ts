@@ -561,6 +561,8 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
       shDegree: z.number().int().min(0).max(3).optional(),
       engine: z.enum(["auto", "blender-cycles", "blender-eevee", "blender-workbench", "mitsuba", "threejs"]).optional()
         .describe("Engine that renders the training views."),
+      init: z.enum(["surface", "lit"]).optional()
+        .describe("What training starts from. lit: a path-traced lit splat; converges in ~2/3 of the steps and comes out sharper."),
       dataset: z.boolean().optional(),
       priority: z.enum(["economy", "standard", "rush"]).optional(),
       wait: z.boolean().optional().describe("Wait for completion (default true, up to 20 min)."),
@@ -570,7 +572,7 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
     const trial = local && !client.apiKey ? await startTrial() : undefined;
     const r = await resolvePackage(args, (pkg) => {
       const sb: Record<string, unknown> = { ...(pkg.output?.splatBake ?? {}) };
-      for (const k of ["preset", "views", "cameras", "coverage", "fanOut", "steps", "shDegree", "engine", "dataset"] as const) {
+      for (const k of ["preset", "views", "cameras", "coverage", "fanOut", "steps", "shDegree", "engine", "init", "dataset"] as const) {
         if (args[k] !== undefined) sb[k] = args[k];
       }
       pkg.output = { format: "splat", splatFormat: args.splatFormat ?? pkg.output?.splatFormat ?? "spz", splatBake: sb };

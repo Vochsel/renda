@@ -391,6 +391,10 @@ def _plan_model(pkg, asset_paths, fmt, priority, available, triangles, asset_has
 # on the PSNR plateau, so `steps` is an upper bound.
 TRAIN_SECONDS_PER_K_STEPS: dict[str, float] = {"gpu-l4": 30.0, "gpu-l40s": 12.0, "cpu": 0.0}
 TRAIN_START_SECONDS = 15.0
+# init "lit" (splatbake.lit) runs in the trainer before training: sampling + visibility, tracing 64 directions
+# at 32 spp, GPU denoise/fit. Modal L4 2026-10-20: 400k Gaussians 32 s, 1M 60 s.
+LIT_START_SECONDS = 8.0
+LIT_SECONDS_PER_100K: dict[str, float] = {"gpu-l4": 6.0, "gpu-l40s": 4.0, "cpu": 0.0}
 # Fan the training views out to parallel containers only when rendering them inside the trainer would add
 # more than this much wall time; economy never fans out, rush fans out past 20 s of view rendering.
 SINGLE_CONTAINER_MAX_VIEW_SECONDS = {"economy": math.inf, "standard": 240.0, "rush": 20.0}
@@ -402,7 +406,10 @@ def train_seconds(settings: dict) -> float:
         return 0.0
     res = (settings["resolution"] / 768) ** 2
     hw = settings["train_hardware"]
-    return TRAIN_START_SECONDS + settings["steps"] / 1000 * TRAIN_SECONDS_PER_K_STEPS[hw] * max(res, 0.25)
+    t = TRAIN_START_SECONDS + settings["steps"] / 1000 * TRAIN_SECONDS_PER_K_STEPS[hw] * max(res, 0.25)
+    if settings.get("init") == "lit":
+        t += LIT_START_SECONDS + settings["init_points"] / 1e5 * LIT_SECONDS_PER_100K[hw]
+    return t
 
 
 def _plan_splat_bake(pkg: RendaPackage, asset_paths, fmt: str, priority: str, available, triangles,
@@ -422,6 +429,8 @@ def _plan_splat_bake(pkg: RendaPackage, asset_paths, fmt: str, priority: str, av
                         "(lens/blur/screen-space effects would bake in as view-inconsistent noise)")
     if settings.cameras and settings.preset == "fast" and not settings.views:
         warnings.append("splat bake: preset fast converts the mesh directly; splatBake.cameras need preset standard or high")
+    if pkg.output.splatBake and pkg.output.splatBake.init == "lit" and settings.direct:
+        warnings.append("splat bake: init lit seeds training, which preset fast doesn't run; use preset standard or high")
     key = ""
     if asset_hashes is not None or asset_paths:
         from .cache import cache_key, sha256_file

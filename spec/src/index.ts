@@ -299,6 +299,8 @@ export const SplatBake = z.strictObject({
     .describe("auto: framing shell + close-ups placed by surface coverage and detail; sphere/hemisphere: elevation band; orbit: one ring."),
   fanOut: z.union([z.literal("auto"), z.boolean()]).default("auto")
     .describe("Render views in parallel containers (true), inside the training container (false), or let the planner decide."),
+  init: z.enum(["surface", "lit"]).default("surface")
+    .describe("What training starts from. surface: albedo-coloured surface samples. lit: a splat with the lighting path-traced in (Mitsuba); training needs ~2/3 of the steps (the default drops accordingly) and comes out sharper. Ignored by preset fast."),
   dataset: z.boolean().default(false).describe("Also return the views + exact COLMAP sparse model as a zip."),
 });
 

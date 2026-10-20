@@ -23,7 +23,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import FREEZE_STEPS, HOLDOUT_EVERY, BakeSettings, adapt_to_scene, bake_rig, export_splats, init_gaussians, \
+from . import FREEZE_STEPS, HOLDOUT_EVERY, LIT_FREEZE_STEPS, BakeSettings, adapt_to_scene, bake_rig, export_splats, init_gaussians, \
     output_name, sample_surface, view_image_name, write_colmap, zip_dataset
 from ..ir.splats import Splats
 
@@ -73,10 +73,13 @@ def _normals_of(quats, scales):
 
 
 def train(init: Splats, images: dict[int, np.ndarray], cams: dict[int, "object"], settings: BakeSettings,
-          scene_radius: float, log=print, more_views=None) -> tuple[Splats, dict]:
+          scene_radius: float, log=print, more_views=None, freeze: int = FREEZE_STEPS,
+          full_sh: bool = False) -> tuple[Splats, dict]:
     """Refine `init` against `images` (frame → (H,W,4) uint8 straight-alpha sRGB).
 
-    `more_views()` (streaming) returns newly landed views as {frame: image}, or None once complete."""
+    `more_views()` (streaming) returns newly landed views as {frame: image}, or None once complete.
+    `freeze`: steps with positions held (colour/opacity/shape fit first). `full_sh`: train every SH band from the
+    start instead of adding one per 1000 steps (for an init whose SH is already fitted, see splatbake.lit)."""
     import torch
     import torch.nn.functional as F
     from gsplat import rasterization
@@ -103,12 +106,16 @@ def train(init: Splats, images: dict[int, np.ndarray], cams: dict[int, "object"]
         "sh0": torch.nn.Parameter(t(init.sh_dc)[:, None, :]),
     })
     if k_rest:
-        params["shN"] = torch.nn.Parameter(torch.zeros((len(init), k_rest, 3), device=dev))
+        rest = np.zeros((len(init), k_rest, 3), np.float32)
+        if init.sh_rest is not None and init.sh_rest.size:  # keep a fitted init's view-dependent colour
+            kk = min(k_rest, init.sh_rest.shape[1])
+            rest[:, :kk] = init.sh_rest[:, :kk]
+        params["shN"] = torch.nn.Parameter(t(rest))
     s = max(scene_radius, 1e-3)
     lrs = {"means": 1.6e-4 * s, "scales": 5e-3, "quats": 1e-3, "opacities": 5e-2, "sh0": 2.5e-3, "shN": 2.5e-3 / 20}
     opts = {k: torch.optim.Adam([{"params": params[k], "lr": lrs[k], "name": k}], eps=1e-15) for k in params}
     steps = max(settings.steps, 1)
-    freeze = min(FREEZE_STEPS, steps // 3)
+    freeze = min(freeze, steps // 3)
     gamma = 0.01 ** (1 / max(steps - freeze, 1))
     sched = torch.optim.lr_scheduler.ExponentialLR(opts["means"], gamma=gamma)
     # relocation (teleporting dead Gaussians onto live ones) is fine while positions are frozen; only the
@@ -208,7 +215,7 @@ def train(init: Splats, images: dict[int, np.ndarray], cams: dict[int, "object"]
         train_f = [f for f in imgs if f not in hold] or list(imgs)
         f = train_f[rng.integers(len(train_f))]
         bg = torch.rand(1, 3, device=dev)
-        sh_deg = min(max(step - freeze, 0) // 1000, deg)
+        sh_deg = deg if full_sh else min(max(step - freeze, 0) // 1000, deg)
         scale = 0.5 if step < coarse_until else 1.0
         normals_now = step >= freeze and step % 4 == 0
         out, alpha, info, nimg = render(f, bg, sh_deg, scale, normals_now)
@@ -334,6 +341,13 @@ def train_bake(plan, pkg, asset_paths: dict[str, Path], views_dir: Path, out_dir
     rig = bake_rig(stage, settings)
     frames = sorted(rig)
     t = mark("scene", t)
+    lit = None
+    if settings.init == "lit":  # before the views: when they're fanned out, this overlaps their rendering
+        from .lit import lit_gaussians
+
+        lit, lit_m = lit_gaussians(stage, pkg, asset_paths, settings.init_points, settings.sh_degree, settings.seed,
+                                   cache_dir)
+        t = mark("lit_init", t)
     views_dir = Path(views_dir)
     if settings.single_container:
         from ..render import _splat_bake_frames
@@ -364,11 +378,13 @@ def train_bake(plan, pkg, asset_paths: dict[str, Path], views_dir: Path, out_dir
         images = load_views(views_dir, frames)
     t = mark("decode", t)
     samples = sample_surface(stage, settings.init_points, settings.seed)
-    init = init_gaussians(samples, settings.sh_degree)
+    init = lit if lit is not None else init_gaussians(samples, settings.sh_degree)
     lo, hi = stage.bounds()
     radius = float(np.linalg.norm(hi - lo)) / 2
     t = mark("init", t)
-    splats, m = train(init, images, rig, settings, radius, more_views=more)
+    # a lit init's positions, colours and SH are already fitted: short freeze, every SH band from the start
+    lit_opts = {"freeze": LIT_FREEZE_STEPS, "full_sh": True} if lit is not None else {}
+    splats, m = train(init, images, rig, settings, radius, more_views=more, **lit_opts)
     if more is not None:  # pick up anything that landed after training stopped streaming (dataset only)
         images.update(load_views(views_dir, frames, strict=False))
     t = mark("train", t)
@@ -389,6 +405,10 @@ def train_bake(plan, pkg, asset_paths: dict[str, Path], views_dir: Path, out_dir
     warnings += [n for n in notes if n not in warnings]
     q = f", holdout PSNR {m['psnr']:.1f} dB / SSIM {m['ssim']:.3f} on {m['holdout_views']} views" if m["psnr"] else ""
     mode = "views rendered in the trainer" if settings.single_container else "views streamed from parallel chunks"
+    if lit is not None:
+        warnings.append(f"splat bake: lit init, {lit_m['gaussians']:,} Gaussians at {lit_m['spacing_mm']} mm in "
+                        f"{lit_m['seconds']:.0f}s (sample {lit_m['sample_s']:.0f}s, trace {lit_m['trace_s']:.0f}s, "
+                        f"fit {lit_m['fit_s']:.0f}s)")
     warnings.append(f"splat bake ({settings.preset}): {m['gaussians']:,} Gaussians (SH {settings.sh_degree}, "
                     f"{m['pruned']:,} pruned), {m['steps']} steps in {m['train_seconds']:.0f}s from {m['views']} "
                     f"{settings.engine} views ({mode}){q}")

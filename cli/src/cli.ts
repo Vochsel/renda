@@ -71,7 +71,7 @@ Render
                [--frames a-b] [--format png|mp4|…] [-o dir] [--no-wait] [--max-minutes N] [--local]
                [--texture "material=/Wood.*/i,slot=baseColor,scale=4:./oak.jpg"]  (repeatable; any image or video)
   renda splat <file|pkg> [--preset fast|standard|high] [--format spz|ply|splat] [--views N] [--steps N]
-        [--coverage auto|sphere|hemisphere|orbit] [--fan-out | --no-fan-out]
+        [--coverage auto|sphere|hemisphere|orbit] [--fan-out | --no-fan-out] [--init surface|lit]
                [--engine …] [--dataset] [--local]   bake any 3D scene into a Gaussian splat, lighting included
   renda estimate <file|pkg>                  time + cost before rendering
   renda jobs [id] [--cancel] [--download dir]
@@ -380,6 +380,7 @@ const COMMANDS: Record<string, Handler> = {
       if (str(ctx.flags, "engine")) sb.engine = str(ctx.flags, "engine"); // the engine that renders the training views
       if (bool(ctx.flags, "dataset")) sb.dataset = true;
       if (str(ctx.flags, "coverage")) sb.coverage = str(ctx.flags, "coverage");
+      if (str(ctx.flags, "init")) sb.init = str(ctx.flags, "init"); // surface | lit (start from a path-traced lit splat)
       if (bool(ctx.flags, "fan-out")) sb.fanOut = true;
       if (bool(ctx.flags, "no-fan-out")) sb.fanOut = false;
       p.output = { format: "splat", splatFormat: fmt, splatBake: sb };

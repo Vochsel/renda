@@ -112,7 +112,7 @@ material names). A rule that matches nothing adds a job warning listing what was
 - `keepFrames` = false: also return individual frames for video
 - `format: "splat"` bakes the scene into a 3D Gaussian splat instead of images:
   - `splatFormat` = `"ply"`: `ply | spz | splat` (spz ≈ 10x smaller; .ply/.splat are written Y-down like captures, .spz Y-up)
-  - `splatBake` `{ preset = "standard", views?, resolution?, steps?, shDegree?, maxGaussians?, engine = "auto", coverage = "auto", dataset = false }`
+  - `splatBake` `{ preset = "standard", views?, resolution?, steps?, shDegree?, maxGaussians?, engine = "auto", coverage = "auto", init = "surface", dataset = false }` — `init: "lit"` starts training from a path-traced lit splat: ~2/3 of the steps, sharper result
     - `preset`: `fast` (mesh → Gaussians directly; albedo only, seconds on CPU), `standard` (96 views at 768px + 7k
       gsplat steps, SH2, L4), `high` (200 views at 1024px + 30k steps, SH3, L40S)
     - `engine`: renders the training views (any mesh engine, not `gsplat`); `coverage`: `auto` (−30°…90°), `sphere`, `hemisphere`
