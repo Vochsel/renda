@@ -62,6 +62,15 @@ export function openapi(baseUrl: string) {
             billedSeconds: { type: "number" }, costUsd: { type: "number" }, cached: { type: "boolean" },
             warnings: { type: "array", items: { type: "string" } }, error: { type: "string" }, estimate: ref("Estimate"),
             outputs: { type: "array", items: { type: "object", properties: { name: { type: "string" }, url: { type: "string", format: "uri" }, contentType: { type: "string" }, bytes: { type: "integer" } } } },
+            live: {
+              type: "object",
+              description: "Only while the job is running: billed seconds so far plus running containers, at list price (the final bill can be lower, e.g. free minutes). Interpolate with costUsd + ratePerSecond × (now − updatedAt).",
+              properties: {
+                seconds: { type: "object", properties: { cpu: { type: "number" }, "gpu-l4": { type: "number" }, "gpu-l40s": { type: "number" } } },
+                costUsd: { type: "number" }, activeContainers: { type: "integer" }, ratePerSecond: { type: "number" },
+                updatedAt: { type: "string", format: "date-time" },
+              },
+            },
           },
         },
         Estimate: {

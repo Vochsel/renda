@@ -66,6 +66,7 @@ class EventSink:
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.time,
         background: bool = False,
+        meter_interval: float | None = None,
     ):
         self.job_id = job_id
         self.callback_url = callback_url
@@ -78,6 +79,9 @@ class EventSink:
         # latency to billed work; usage/done/failed flush that queue first and stay synchronous.
         self.background = background
         self._queue = None
+        # Live cost heartbeats ("meter" events). Off unless background delivery is on (production) or an
+        # interval is given explicitly (tests); they never touch billing.
+        self.meter_interval = meter_interval if meter_interval is not None else (3.0 if background else None)
 
     def _enqueue(self, type: str, **fields: Any) -> bool:
         if not self.background:
@@ -131,6 +135,25 @@ class EventSink:
         log.error("event %s dropped after %d attempts", type, self.attempts)
         return False
 
+    def meter(self, chunk: int | str, hardware: str, elapsed_seconds: float) -> bool:
+        """One best-effort heartbeat: single attempt, no retry, never raises. Not billing — usage events are."""
+        event = {"jobId": self.job_id, "type": "meter", "chunk": chunk, "hardware": hardware,
+                 "elapsedSeconds": round(max(elapsed_seconds, 0.0), 2), "at": round(self.clock(), 3)}
+        body = encode(event)
+        ts = int(self.clock())
+        headers = {"content-type": "application/json", TIMESTAMP_HEADER: str(ts), SIGNATURE_HEADER: sign_timed(body, ts, self.secret)}
+        try:
+            return self.poster(self.callback_url, body, headers) < 400
+        except Exception as exc:
+            log.debug("meter dropped: %s", exc)
+            return False
+
+    def start_meter(self, chunk: int | str, hardware: str, elapsed: Callable[[], float]) -> "Meter":
+        """Heartbeat every `meter_interval` s on a daemon thread until `.stop()`; a no-op when metering is off."""
+        m = Meter(self, chunk, hardware, elapsed, self.meter_interval)
+        m.start()
+        return m
+
     # Typed helpers so call sites match the contract exactly.
     def status(self, status: str, progress: float | None = None, engine: str | None = None, hardware: str | None = None) -> bool:
         return self._enqueue("status", status=status, progress=None if progress is None else round(progress, 4), engine=engine, hardware=hardware)
@@ -150,3 +173,35 @@ class EventSink:
     def failed(self, error: str) -> bool:
         self.flush()
         return self.emit("failed", idempotency_key=f"{self.job_id}:failed", error=error[:4000])
+
+
+class Meter:
+    """Daemon thread posting `meter` heartbeats for one billed container.
+
+    Sends are synchronous on this thread, so a slow callback can only delay the next tick (ticks that fall
+    behind are skipped, never queued) — rendering and billing events are never blocked by it.
+    """
+
+    def __init__(self, sink: EventSink, chunk: int | str, hardware: str, elapsed: Callable[[], float], interval: float | None):
+        self.sink, self.chunk, self.hardware, self.elapsed, self.interval = sink, chunk, hardware, elapsed, interval
+        self._stop = None
+
+    def start(self) -> None:
+        if not self.interval:
+            return
+        import threading
+
+        self._stop = threading.Event()
+
+        def loop() -> None:
+            while not self._stop.wait(self.interval):
+                try:
+                    self.sink.meter(self.chunk, self.hardware, self.elapsed())
+                except Exception:  # elapsed() must never take the render down
+                    pass
+
+        threading.Thread(target=loop, daemon=True, name=f"meter-{self.chunk}").start()
+
+    def stop(self) -> None:
+        if self._stop is not None:
+            self._stop.set()

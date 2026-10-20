@@ -28,6 +28,23 @@ export interface Job {
   warnings: string[];
   error?: string;
   outputs: JobOutput[];
+  /** While running: billed so far + running containers at list price (the final bill can be lower). */
+  live?: LiveCost;
+}
+
+export interface LiveCost {
+  seconds: Record<Hardware, number>;
+  costUsd: number;
+  activeContainers: number;
+  ratePerSecond: number;
+  updatedAt: string;
+}
+
+/** "≈$0.0123 so far" for a running job, "" otherwise. */
+export function liveCostLabel(job: Pick<Job, "live">): string {
+  const v = job.live?.costUsd;
+  if (v === undefined) return "";
+  return `≈$${v < 0.01 ? v.toFixed(4) : v.toFixed(3)} so far`;
 }
 
 export const TERMINAL_STATUSES: ReadonlySet<JobStatus> = new Set(["succeeded", "failed", "canceled"]);

@@ -29,6 +29,13 @@
       "when": 1792410194188,
       "tag": "0003_security",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792482659980,
+      "tag": "0004_job_live",
+      "breakpoints": true
     }
   ]
 }

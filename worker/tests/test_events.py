@@ -59,3 +59,48 @@ def test_network_errors_give_up_after_attempts():
         raise ConnectionError("down")
 
     assert not EventSink("j", "https://x", "s", poster=poster, attempts=3, sleep=lambda s: None).done([], cached=False)
+
+
+def test_meter_is_a_single_signed_attempt_and_never_raises():
+    calls = []
+
+    def poster(url, body, headers):
+        calls.append((body, headers))
+        raise ConnectionError("down")
+
+    sink = EventSink("job_1", "https://api.test/events", "s3cret", poster=poster, clock=lambda: 1_700_000_000.0)
+    assert sink.meter(0, "gpu-l4", 12.345) is False  # no exception, no retry
+    assert len(calls) == 1
+    body, headers = calls[0]
+    event = json.loads(body)
+    assert event == {"jobId": "job_1", "type": "meter", "chunk": 0, "hardware": "gpu-l4", "elapsedSeconds": 12.35, "at": 1_700_000_000.0}
+    ts = int(headers["x-renda-timestamp"])
+    assert headers["x-renda-signature"] == sign_timed(body, ts, "s3cret")
+
+
+def test_meter_thread_heartbeats_until_stopped_and_is_off_by_default():
+    import time
+
+    sent = []
+    sink = EventSink("job_1", "https://api.test/events", "s3cret", poster=lambda u, b, h: sent.append(json.loads(b)) or 200,
+                     meter_interval=0.02)
+    t0 = time.monotonic()
+    m = sink.start_meter("train", "gpu-l4", lambda: time.monotonic() - t0)
+    time.sleep(0.15)
+    m.stop()
+    n = len(sent)
+    time.sleep(0.06)
+    assert n >= 3 and len(sent) == n  # ticked, then stopped
+    assert all(e["type"] == "meter" and e["chunk"] == "train" for e in sent)
+    assert sent[-1]["elapsedSeconds"] >= sent[0]["elapsedSeconds"]
+
+    quiet = []
+    off = EventSink("job_1", "https://api.test/events", "s3cret", poster=lambda u, b, h: quiet.append(b) or 200)
+    off.start_meter(0, "cpu", lambda: 1.0).stop()
+    time.sleep(0.05)
+    assert quiet == []  # synchronous sinks (tests, local) don't meter
+
+
+def test_background_sink_meters_every_three_seconds_by_default():
+    assert EventSink("j", "u", "s", background=True).meter_interval == 3.0
+    assert EventSink("j", "u", "s").meter_interval is None

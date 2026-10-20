@@ -461,9 +461,18 @@ def _wait_job(client, job: dict, json_out: bool) -> dict:
     from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
 
     with Progress(TextColumn("[bold]{task.fields[status]}"), BarColumn(), TextColumn("{task.percentage:>3.0f}%"),
-                  TimeElapsedColumn(), console=console) as prog:
-        task = prog.add_task("job", total=1.0, status=job.get("status", "queued"))
-        return client.wait(job["id"], on_update=lambda j: prog.update(task, completed=j.get("progress", 0), status=j.get("status")))
+                  TimeElapsedColumn(), TextColumn("[dim]{task.fields[cost]}"), console=console) as prog:
+        task = prog.add_task("job", total=1.0, status=job.get("status", "queued"), cost="")
+        return client.wait(job["id"], on_update=lambda j: prog.update(
+            task, completed=j.get("progress", 0), status=j.get("status"), cost=live_cost_label(j)))
+
+
+def live_cost_label(job: dict) -> str:
+    """'≈$0.0123 so far' while a cloud job runs (billed so far + running containers, list price)."""
+    v = (job.get("live") or {}).get("costUsd")
+    if v is None:
+        return ""
+    return f"≈${v:.4f} so far" if v < 0.01 else f"≈${v:.3f} so far"
 
 
 @command
