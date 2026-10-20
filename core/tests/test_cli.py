@@ -206,3 +206,64 @@ def test_estimate_fast_prints_fast_vs_standard(tmp_path):
     r = runner.invoke(app, ["estimate", str(f), "--local", "--res", "3840x2160", "--quality", "final", "--engine", "mitsuba", "--fast"])
     assert r.exit_code == 0, r.output
     assert "fast (--fast)" in r.output and "standard:" in r.output
+
+
+def _cloud_api(job_id="job_p"):
+    """Fake API: upload → create (queued) → polls (running, with live cost) → succeeded."""
+    import httpx
+
+    seq = [
+        {"status": "rendering", "progress": 0.3, "live": {"costUsd": 0.002}},
+        {"status": "rendering", "progress": 0.7, "live": {"costUsd": 0.006}},
+        {"status": "succeeded", "progress": 1, "billedSeconds": 12.0, "costUsd": 0.007},
+    ]
+
+    def api(req):
+        p = req.url.path
+        if p == "/api/v1/uploads":
+            return httpx.Response(200, json={"assetUri": "asset://" + "a" * 64, "exists": True})
+        if p == "/api/v1/jobs" and req.method == "POST":
+            return httpx.Response(200, json={"id": job_id, "status": "queued", "outputs": [],
+                                             "estimate": {"hardware": "gpu-l4", "estWallSeconds": [20, 60], "estCostUsd": [0.003, 0.01]}})
+        if p == f"/api/v1/jobs/{job_id}":
+            j = seq.pop(0) if len(seq) > 1 else seq[0]
+            return httpx.Response(200, json={"id": job_id, "outputs": [], **j})
+        raise AssertionError(f"unexpected {req.method} {p}")
+
+    return api
+
+
+def test_cloud_render_announces_job_and_streams_progress_on_stderr(monkeypatch, tmp_path):
+    from renda.cloud import client as cloud_client
+
+    monkeypatch.setattr(cloud_client.time, "sleep", lambda s: None)
+    files = write_mesh_files(tmp_path)
+    _mock_client(monkeypatch, _cloud_api(), key="rnd_live_xxxxxxxxxxxxxxxxxxxxxxxx")
+    res = runner.invoke(app, ["render", str(files["glb"]), "--cloud", "-o", str(tmp_path / "out"), "--json"])
+    assert res.exit_code == 0, res.output
+    # stdout stays exactly one JSON document (the final result), so existing parsers keep working
+    lines = [ln for ln in res.stdout.strip().splitlines() if ln.strip()]
+    assert len(lines) == 1 and json.loads(lines[0])["status"] == "succeeded"
+    # stderr: an immediate "submitted" line with the id + resume hint, then progress lines with live cost
+    events = [json.loads(ln) for ln in res.stderr.strip().splitlines() if ln.startswith("{")]
+    assert events[0]["status"] == "submitted" and events[0]["id"] == "job_p"
+    assert events[0]["next"][0].startswith("renda jobs job_p --wait")
+    assert events[0]["estimate"]["estWallSeconds"] == [20, 60]
+    progress = [e for e in events if e["status"] == "progress"]
+    assert progress and progress[0]["liveCostUsd"] == 0.002 and progress[-1]["jobStatus"] == "succeeded"
+
+
+def test_jobs_wait_resumes_and_downloads(monkeypatch, tmp_path):
+    from renda.cloud import client as cloud_client
+
+    monkeypatch.setattr(cloud_client.time, "sleep", lambda s: None)
+    _mock_client(monkeypatch, _cloud_api(), key="rnd_live_xxxxxxxxxxxxxxxxxxxxxxxx")
+    code, data = run("jobs", "job_p", "--wait", "-o", tmp_path / "out")
+    assert code == 0 and data["status"] == "succeeded" and data["id"] == "job_p"
+
+
+def test_no_wait_tells_agents_how_to_resume(monkeypatch, tmp_path):
+    files = write_mesh_files(tmp_path)
+    _mock_client(monkeypatch, _cloud_api(), key="rnd_live_xxxxxxxxxxxxxxxxxxxxxxxx")
+    code, data = run("render", files["glb"], "--cloud", "--no-wait")
+    assert code == 0 and data["id"] == "job_p" and data["next"][0].startswith("renda jobs job_p --wait")

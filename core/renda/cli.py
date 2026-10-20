@@ -390,8 +390,10 @@ def _run(raw: dict, base: Path, output: Path, *, priority: str, cloud: bool, wai
                                "lower --res/--quality/--frames, or raise --max-minutes")
         job = client.create_job(prepared, priority=priority)
         if not wait:
-            emit(json_out, job, lambda: console.print(f"queued job [bold]{job['id']}[/] — `renda jobs {job['id']}`"))
+            emit(json_out, job, lambda: console.print(f"queued job [bold]{job['id']}[/] — `renda jobs {job['id']} --wait`"),
+                 [f"renda jobs {job['id']} --wait -o {output}"])
             return
+        announce_submitted(job, json_out, output)
         _finish_cloud_job(client, _wait_job(client, job, json_out), output, json_out, claim_url)
         return
 
@@ -461,9 +463,41 @@ def _ensure_key(client, json_out: bool) -> str | None:
     return t["claimUrl"]
 
 
+def _stderr_json(obj: dict) -> None:
+    """One NDJSON line on stderr: progress for agents while stdout stays a single final JSON document."""
+    sys.stderr.write(json.dumps(obj, default=str) + "\n")
+    sys.stderr.flush()
+
+
+def announce_submitted(job: dict, json_out: bool, output: Path | None = None) -> None:
+    """Say the job id and how to resume straight away, so a caller with a short command timeout can
+    reattach with `renda jobs <id> --wait` instead of resubmitting."""
+    resume = f"renda jobs {job['id']} --wait" + (f" -o {output}" if output else "")
+    est = job.get("estimate") or {}
+    if json_out:
+        _stderr_json({"status": "submitted", "id": job["id"], "jobStatus": job.get("status"),
+                      "estimate": {k: est.get(k) for k in ("hardware", "estWallSeconds", "estCostUsd") if k in est} or None,
+                      "next": [resume]})
+        return
+    wall = est.get("estWallSeconds")
+    console.print(f"submitted job [bold]{job['id']}[/]"
+                  + (f" · est. {wall[0]:.0f}–{wall[1]:.0f}s" if wall else "")
+                  + f" [dim]· if interrupted: {resume}[/]")
+
+
 def _wait_job(client, job: dict, json_out: bool) -> dict:
     if json_out:
-        return client.wait(job["id"])
+        last = {"t": 0.0, "key": None}
+
+        def on_update(j: dict) -> None:
+            key = (j.get("status"), round(float(j.get("progress") or 0), 2))
+            now = time.time()
+            if key != last["key"] or now - last["t"] >= 5:
+                last.update(t=now, key=key)
+                _stderr_json({"status": "progress", "id": j.get("id", job["id"]), "jobStatus": j.get("status"),
+                              "progress": j.get("progress"), "liveCostUsd": (j.get("live") or {}).get("costUsd")})
+
+        return client.wait(job["id"], on_update=on_update)
     from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
 
     with Progress(TextColumn("[bold]{task.fields[status]}"), BarColumn(), TextColumn("{task.percentage:>3.0f}%"),
@@ -566,8 +600,10 @@ def video(
         pkg["variables"] = resolved
     job = client.create_job(pkg, kind="hyperframes", priority="rush" if fast else priority)
     if not wait:
-        emit(json_out, {**job, "inputJobs": input_jobs}, lambda: console.print(f"queued job [bold]{job['id']}[/] — `renda jobs {job['id']}`"))
+        emit(json_out, {**job, "inputJobs": input_jobs}, lambda: console.print(f"queued job [bold]{job['id']}[/] — `renda jobs {job['id']} --wait`"),
+             [f"renda jobs {job['id']} --wait -o {output}"])
         return
+    announce_submitted(job, json_out, output)
     _finish_cloud_job(client, _wait_job(client, job, json_out), output, json_out, claim_url,
                       {"inputJobs": input_jobs} if input_jobs else None)
 
@@ -919,10 +955,11 @@ def jobs(
     job_id: Annotated[Optional[str], typer.Argument(help="Job id (omit to list recent jobs)")] = None,
     limit: Annotated[int, typer.Option(help="How many to list")] = 20,
     cancel: Annotated[bool, typer.Option("--cancel", help="Cancel the job")] = False,
-    download: Annotated[Optional[Path], typer.Option("--download", help="Download outputs to this directory")] = None,
+    download: Annotated[Optional[Path], typer.Option("--download", "-o", "--output", help="Download outputs to this directory")] = None,
+    wait: Annotated[bool, typer.Option("--wait", help="Wait for the job to finish (resume after an interrupted render/bake/splat), then download")] = False,
     json_out: JsonOpt = False,
 ):
-    """List jobs, show one, cancel it, or download its outputs."""
+    """List jobs, show one, wait for it, cancel it, or download its outputs."""
     client = _client()
     if job_id is None:
         rows = client.list_jobs(limit)
@@ -935,6 +972,9 @@ def jobs(
             out.print(t)
 
         emit(json_out, {"jobs": rows}, human)
+        return
+    if wait and not cancel:
+        _finish_cloud_job(client, _wait_job(client, client.get_job(job_id), json_out), download or Path("renders"), json_out, None)
         return
     job = client.cancel_job(job_id) if cancel else client.get_job(job_id)
     files = client.download_outputs(job, download) if download and job.get("status") == "succeeded" else []

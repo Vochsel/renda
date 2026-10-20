@@ -66,6 +66,8 @@ HyperFrames video (HTML composition → mp4/webm/mov/gif, CPU-billed). Compositi
     renda video ./title-card --var clipUrl=job:<id> --quality delivery           # reuse a render you already made
 MCP: renda_render_video { projectDir, variables: { clipUrl: "job:<id>" } }. quality: draft | looks (default) | delivery.
 
+Long jobs (bakes, splats, video) under a short command timeout: submit with --no-wait --json, then \`renda jobs <id> --wait -o renders --json\` (safe to repeat; never resubmits). Without --no-wait the CLI prints the job id + resume command on stderr right after submitting (NDJSON in --json mode: {"status":"submitted","id":…,"next":[…]} then {"status":"progress",…,"liveCostUsd":…}); stdout stays one final JSON result.
+
 ## 5. MCP (if you'd rather use tools than the CLI)
 - Local stdio: \`${installSnippets.mcp.claudeCode}\` (or \`renda mcp add --agent cursor|codex|claude-code\`).
 - Remote (streamable HTTP): ${base}/api/mcp with header \`Authorization: Bearer <apiKey>\`.

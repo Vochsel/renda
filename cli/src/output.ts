@@ -50,6 +50,15 @@ export class Out {
     if (!this.json) this.io.stderr(msg + "\n");
   }
 
+  /**
+   * A progress event. JSON mode: one NDJSON line on stderr (stdout stays the single final JSON object), so
+   * agents with short command timeouts learn the job id + resume command immediately. Human mode: `human` on stderr.
+   */
+  event(data: Record<string, unknown>, human?: string) {
+    if (this.json) this.io.stderr(JSON.stringify(data) + "\n");
+    else if (human) this.io.stderr(human + "\n");
+  }
+
   /** Final success: one JSON object `{status:"ok", ...data, next[]}` or human text. */
   ok(data: Record<string, unknown>, human: string | (() => string), next: string[] = []) {
     const safeNext = next.map(redact);

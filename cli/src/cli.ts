@@ -419,7 +419,11 @@ const COMMANDS: Record<string, Handler> = {
     }
     let job = bool(ctx.flags, "cancel") ? await client.cancelJob(id) : await client.getJob(id);
     if (ctx.flags.wait === true && !TERMINAL_STATUSES.has(job.status)) job = await waitJob(ctx, client, job);
-    const dl = str(ctx.flags, "download");
+    if (ctx.flags.wait === true && job.status === "failed") {
+      throw new CliError("job_failed", job.error ?? "Render failed.", EXIT.error, `See \`renda jobs ${job.id}\``, [], { job });
+    }
+    // --wait resumes an interrupted render/bake/splat: download like the original command would have
+    const dl = str(ctx.flags, "download") ?? str(ctx.flags, "output") ?? (ctx.flags.wait === true && job.status === "succeeded" ? "renders" : undefined);
     if (dl) {
       const files = await download(ctx, job, dl);
       ctx.out.ok({ job, files }, files.join("\n"));
@@ -493,7 +497,10 @@ const COMMANDS: Record<string, Handler> = {
       pkg.variables = resolved.variables;
     }
     let job = await client.createJob({ package: pkg as any, kind: "hyperframes" });
-    if (ctx.flags.wait !== false) job = await waitJob(ctx, client, job);
+    if (ctx.flags.wait !== false) {
+      announceSubmitted(ctx, job);
+      job = await waitJob(ctx, client, job);
+    }
     await finish(ctx, job, trial?.claimUrl);
   },
 };
@@ -532,8 +539,10 @@ async function submitAndFinish(ctx: Ctx, pkg: any, baseDir: string) {
     }
   }
   let job = await client.createJob({ package: uploadedPkg as any, priority: priorityOf(ctx) });
-  ctx.out.info(`job ${job.id} ${job.status}`);
-  if (ctx.flags.wait !== false) job = await waitJob(ctx, client, job);
+  if (ctx.flags.wait !== false) {
+    announceSubmitted(ctx, job);
+    job = await waitJob(ctx, client, job);
+  }
   await finish(ctx, job, trial?.claimUrl);
 }
 
@@ -578,14 +587,34 @@ async function buildPackage(ctx: Ctx, file: string, edit?: (pkg: any) => void, f
   return { pkg, baseDir };
 }
 
+/** Job id + estimate + how to resume, right after submit (before any waiting). */
+function announceSubmitted(ctx: Ctx, job: Job) {
+  const out = str(ctx.flags, "output");
+  const resume = `renda jobs ${job.id} --wait${out ? ` -o ${out}` : ""}`;
+  const est: any = (job as any).estimate ?? {};
+  const wall = est.estWallSeconds as [number, number] | undefined;
+  ctx.out.event(
+    { status: "submitted", id: job.id, jobStatus: job.status,
+      estimate: wall || est.estCostUsd ? { hardware: est.hardware, estWallSeconds: wall, estCostUsd: est.estCostUsd } : null,
+      next: [resume] },
+    `submitted job ${job.id}${wall ? ` · est. ${Math.round(wall[0])}–${Math.round(wall[1])}s` : ""} · if interrupted: ${resume}`,
+  );
+}
+
 async function waitJob(ctx: Ctx, client: RendaClient, job: Job): Promise<Job> {
   let last = "";
+  let lastAt = 0;
   return client.waitForJob(job.id, {
     intervalMs: ctx.deps.pollMs ?? 2000,
     onProgress: (j) => {
       const line = `${j.status} ${Math.round((j.progress ?? 0) * 100)}%${j.engine ? ` · ${j.engine}` : ""}${j.hardware ? ` · ${j.hardware}` : ""}${j.live ? ` · ${liveCostLabel(j)}` : ""}`;
-      if (line !== last) ctx.out.info(line);
-      last = line;
+      const now = Date.now();
+      if (line !== last || now - lastAt >= 5000) {
+        ctx.out.event({ status: "progress", id: j.id ?? job.id, jobStatus: j.status, progress: j.progress ?? 0,
+          liveCostUsd: (j as any).live?.costUsd ?? null }, line);
+        last = line;
+        lastAt = now;
+      }
     },
   });
 }
@@ -622,7 +651,7 @@ async function finish(ctx: Ctx, job: Job, claimUrl?: string) {
   if (job.status === "succeeded") {
     if (ctx.flags.output !== undefined || ctx.flags.wait !== false) files = await download(ctx, job, str(ctx.flags, "output") ?? "renders");
   } else {
-    next.push(`renda jobs ${job.id} --wait --download renders`);
+    next.push(`renda jobs ${job.id} --wait -o ${str(ctx.flags, "output") ?? "renders"}`);
   }
   if (claimUrl) next.push(`Give the user this link to keep the trial workspace: ${claimUrl}`);
   ctx.out.ok({ job, files }, [describeJob(job), ...files.map((f) => `saved ${f}`)].join("\n"), next);
