@@ -184,8 +184,10 @@ kernel_cache_volume = modal.Volume.from_name(f"renda-kernel-cache{_SUFFIX}", cre
 cancel_flags = modal.Dict.from_name(f"renda-cancel{_SUFFIX}", create_if_missing=True)
 job_calls = modal.Dict.from_name(f"renda-calls{_SUFFIX}", create_if_missing=True)
 
-r2_secret = modal.Secret.from_name("renda-r2")
-worker_secret = modal.Secret.from_name("renda-worker")
+# Isolated apps get their own secrets too (renda-r2-dev, renda-worker-dev): their own bucket and signing
+# keys, so a dev/preview stack can never write production storage or sign production callbacks.
+r2_secret = modal.Secret.from_name(f"renda-r2{_SUFFIX}")
+worker_secret = modal.Secret.from_name(f"renda-worker{_SUFFIX}")
 if _SUFFIX:
     # Containers re-import this module without the deploy-time env; carry the isolated app's name in a
     # secret so they resolve the same volumes/dicts (production keeps its secrets unchanged).

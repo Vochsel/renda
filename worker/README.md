@@ -147,8 +147,10 @@ modal serve renda_worker/app.py        # dev URLs: https://<ws>--renda-submit-de
 ./deploy.sh                                # prod URLs: https://<ws>--renda-submit.modal.run, …--renda-cancel.modal.run
 ```
 
-Isolated copy for development (own endpoints `renda-submit-<name>`, volumes and dicts; production
-untouched): `RENDA_APP_NAME=renda-worker-<name> ./deploy.sh`, then `modal app stop renda-worker-<name>`.
+Isolated copy for development (own endpoints `renda-submit-<name>`, volumes, dicts and secrets
+`renda-worker-<name>` / `renda-r2-<name>`; production untouched): create those two secrets, then
+`RENDA_APP_NAME=renda-worker-<name> ./deploy.sh`, and `modal app stop renda-worker-<name>` when done.
+The hosted preview stack runs as `renda-worker-dev` on its own bucket.
 
 Splat bakes (`output.format: "splat"`): view chunks write PNGs to the assets Volume
 (`bakes/<job>/views/`), then `train_splat_l4` / `train_splat_l40s` (splat image) refine with gsplat and
