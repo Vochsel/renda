@@ -17,6 +17,6 @@ export const POST = api(async (req) => {
   await rateLimit("api_write_key", auth.keyId);
   const b = Body.parse(await readJson(req));
   const pkg = b.kind === "scene" ? (await flattenForOrg(auth.org.id, b.package)).package : b.package;
-  const parsed = parseJobPackage(b.kind, pkg);
+  const parsed = parseJobPackage(b.kind, pkg, { allowLocal: true });
   return Response.json(estimateWithPriorities(parsed, b.priority));
 });

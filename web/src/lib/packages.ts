@@ -60,7 +60,8 @@ export type ParsedJob =
   | { kind: "hyperframes"; pkg: HyperframesPackage; raw: unknown; uris: UriCheck };
 
 /** Parse + validate a submitted package; throws ApiError with agent hints. Asset existence is checked by the caller. */
-export function parseJobPackage(kind: "scene" | "hyperframes", input: unknown): ParsedJob {
+/** `allowLocal`: estimates never touch the files, so local paths are fine there (jobs must upload first). */
+export function parseJobPackage(kind: "scene" | "hyperframes", input: unknown, opts: { allowLocal?: boolean } = {}): ParsedJob {
   let parsed: ParsedJob;
   if (kind === "hyperframes") {
     const r = HyperframesPackage.safeParse(input);
@@ -73,7 +74,7 @@ export function parseJobPackage(kind: "scene" | "hyperframes", input: unknown): 
     // (e.g. a .blend's own camera/world are used unless camera/environment are set).
     parsed = { kind, pkg: r.data, raw: input, uris: checkUris(sceneUris(r.data)) };
   }
-  if (parsed.uris.localUris.length) {
+  if (parsed.uris.localUris.length && !opts.allowLocal) {
     throw new ApiError("local_uri", undefined, { uris: parsed.uris.localUris });
   }
   if (parsed.uris.badUris.length) {

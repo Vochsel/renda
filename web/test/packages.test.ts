@@ -62,3 +62,11 @@ describe("package uri validation", () => {
     expect(code(() => parseJobPackage("hyperframes", { project: `asset://${SHA}`, variables: { clip: "asset://nope" } }))).toBe("invalid_package");
   });
 });
+
+describe("estimates accept local paths", () => {
+  it("parseJobPackage allowLocal skips the upload requirement but jobs still require it", () => {
+    const pkg = { version: 1, scene: { root: "./model.glb" } };
+    expect(() => parseJobPackage("scene", pkg)).toThrow();
+    expect(parseJobPackage("scene", pkg, { allowLocal: true }).uris.localUris).toEqual(["./model.glb"]);
+  });
+});
