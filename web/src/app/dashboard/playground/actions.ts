@@ -5,8 +5,11 @@ import { ZodError } from "zod";
 import { requireAccount } from "@/lib/auth";
 import { ApiError } from "@/lib/errors";
 import { zodIssues } from "@/lib/http";
-import { estimateWithPriorities, getJob, serializeJob, submitJob, type Job } from "@/lib/jobs";
+import type { schema } from "@/lib/db";
+import { cancelJob, estimateWithPriorities, getJob, getJobsByIds, listJobs, serializeJob, submitJob, type Job } from "@/lib/jobs";
 import { parseJobPackage } from "@/lib/packages";
+import { isPlaygroundJob, MAX_BATCH } from "@/lib/playground";
+import { presignGet } from "@/lib/r2";
 import { rateLimit } from "@/lib/ratelimit";
 import { registerUpload, type UploadInput, type UploadTicket } from "@/lib/uploads";
 
@@ -17,6 +20,8 @@ import { registerUpload, type UploadInput, type UploadTicket } from "@/lib/uploa
  */
 export type ActionError = { code: string; message: string; hint?: string; issues?: { path: string; message: string }[] };
 export type ActionResult<T> = { ok: true; data: T } | { ok: false; error: ActionError };
+
+type JobRow = typeof schema.jobs.$inferSelect;
 
 const MAX_FILES = 20;
 type Priority = "economy" | "standard" | "rush";
@@ -81,5 +86,48 @@ export async function getPlaygroundJob(id: string): Promise<ActionResult<Job>> {
   return run(async () => {
     const { org } = await requireAccount();
     return serializeJob(await getJob(org.id, String(id)));
+  });
+}
+
+/** A job as the queue shows it: the job plus its gallery thumbnail once it has one. */
+export type QueueJob = Job & { thumb?: { url: string; placeholder?: string; width?: number; height?: number } };
+
+async function toQueueJob(row: JobRow): Promise<QueueJob> {
+  const job = await serializeJob(row);
+  const outs = row.outputs ?? [];
+  const o = outs.find((x) => x.thumbKey && !x.pass) ?? outs.find((x) => x.thumbKey);
+  if (!o?.thumbKey) return job;
+  return { ...job, thumb: { url: await presignGet(o.thumbKey), placeholder: o.placeholder, width: o.width, height: o.height } };
+}
+
+const MAX_POLL = 100;
+
+/** Poll many of this org's jobs in one request (ids from other orgs are simply not returned). */
+export async function getPlaygroundJobs(ids: string[]): Promise<ActionResult<QueueJob[]>> {
+  return run(async () => {
+    const { org } = await requireAccount();
+    if (!Array.isArray(ids) || ids.length > MAX_POLL) throw new ApiError("invalid_request", `Send up to ${MAX_POLL} job ids.`);
+    const rows = await getJobsByIds(org.id, ids.map(String));
+    return Promise.all(rows.map(toQueueJob));
+  });
+}
+
+export async function cancelPlaygroundJob(id: string): Promise<ActionResult<QueueJob>> {
+  return run(async () => {
+    const { user, org } = await requireAccount();
+    await rateLimit("api_write_key", `session:${user.id}`);
+    return toQueueJob(await cancelJob(org.id, String(id)));
+  });
+}
+
+/** This org's playground jobs from the last day, so the queue survives a refresh. */
+export async function recentPlaygroundJobs(): Promise<ActionResult<QueueJob[]>> {
+  return run(async () => {
+    const { org } = await requireAccount();
+    const since = Date.now() - 24 * 3600_000;
+    const rows = (await listJobs(org.id, { limit: 100 }))
+      .filter((j) => isPlaygroundJob(j.name) && j.createdAt.getTime() >= since)
+      .slice(0, MAX_BATCH * 2);
+    return Promise.all(rows.map(toQueueJob));
   });
 }

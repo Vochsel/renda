@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { safeParsePackage } from "@rendahq/spec";
-import { buildPackage, copyAs, DEFAULT_OPTIONS, inlineGltf, pickScene, roleFor, type PlaygroundFile, type PlaygroundOptions } from "@/lib/playground";
+import {
+  buildPackage, combineEstimates, copyAs, DEFAULT_OPTIONS, expandBatch, inlineGltf, isPlaygroundJob, MAX_BATCH, pickScene, PLAYGROUND_PREFIX, roleFor,
+  type PlaygroundFile, type PlaygroundOptions,
+} from "@/lib/playground";
 
 const SHA = "a".repeat(64);
 const HDR = "b".repeat(64);
@@ -94,5 +97,56 @@ describe("inlineGltf", () => {
     expect(doc.images[0].uri).toBe("data:image/png;base64,CQ==");
     expect(inlined).toEqual(["scene.bin", "wood oak.png"]);
     expect(missing).toEqual(["gone.jpg"]);
+  });
+});
+
+describe("playground queue batches", () => {
+  const stl: PlaygroundFile = { name: "bracket.stl", size: 10, uri: `asset://${"c".repeat(64)}`, role: "scene" };
+
+  it("one job per scene × engine × resolution, sharing the HDRI, all valid and named for the queue", () => {
+    const { items, total } = expandBatch([glb, stl, hdri], opts({ action: "still", engine: "blender-cycles" }), {
+      engines: ["mitsuba"],
+      resolutions: [[1080, 1080]],
+    });
+    expect(total).toBe(8);
+    expect(items).toHaveLength(8);
+    for (const it of items) {
+      const p = valid(it.pkg);
+      expect(p.environment.hdri).toBe("env");
+      expect(isPlaygroundJob(p.name)).toBe(true);
+      expect(p.name).toBe(`${PLAYGROUND_PREFIX}${it.label}`);
+    }
+    expect(new Set(items.map((i) => i.label)).size).toBe(8);
+    expect(items.map((i) => i.scene)).toEqual(expect.arrayContaining(["chair.glb", "bracket.stl"]));
+    expect(items[0].label).toBe("chair.glb · still · blender-cycles · 1280×720");
+  });
+
+  it("drops variations the action can't use and de-duplicates", () => {
+    const bake = expandBatch([glb], opts({ action: "bake", engine: "blender-cycles" }), {
+      engines: ["blender-eevee", "mitsuba", "blender-cycles"],
+      resolutions: [[1080, 1080]],
+    });
+    expect(bake.items.map((i) => i.engine)).toEqual(["blender-cycles", "mitsuba"]); // eevee can't bake; resolutions ignored
+    const convert = expandBatch([glb, stl], opts({ action: "glb" }), { engines: ["mitsuba"] });
+    expect(convert.items).toHaveLength(2); // one per scene, no engine variations
+  });
+
+  it("caps a batch at MAX_BATCH and reports the uncapped size", () => {
+    const scenes = Array.from({ length: 9 }, (_, i) => ({ ...glb, name: `m${i}.glb`, uri: `asset://${String(i).repeat(64)}` }));
+    const { items, total } = expandBatch(scenes, opts({ action: "still" }), { engines: ["mitsuba", "threejs"] });
+    expect(total).toBe(27);
+    expect(items).toHaveLength(MAX_BATCH);
+  });
+
+  it("combined estimate sums cost and takes the slowest wall time", () => {
+    const c = combineEstimates([
+      { estCostUsd: [0.01, 0.03], estWallSeconds: [20, 60], hardware: "gpu-l4" },
+      { estCostUsd: [0.002, 0.004], estWallSeconds: [10, 90], hardware: "cpu" },
+    ]);
+    expect(c!.estCostUsd[0]).toBeCloseTo(0.012);
+    expect(c!.estCostUsd[1]).toBeCloseTo(0.034);
+    expect(c!.estWallSeconds).toEqual([20, 90]);
+    expect(c!.hardware).toBe("gpu-l4+cpu");
+    expect(combineEstimates([])).toBeNull();
   });
 });

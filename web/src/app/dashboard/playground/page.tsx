@@ -5,7 +5,9 @@ import { listJobs } from "@/lib/jobs";
 import { fmtAgo, fmtUsd } from "@/lib/format";
 import { Playground } from "@/components/playground/playground";
 import { StatusBadge } from "@/components/status-badge";
-import { estimatePlayground, getPlaygroundJob, registerUploads, submitPlayground } from "./actions";
+import {
+  cancelPlaygroundJob, estimatePlayground, getPlaygroundJob, getPlaygroundJobs, recentPlaygroundJobs, registerUploads, submitPlayground,
+} from "./actions";
 
 export const metadata: Metadata = { title: "Playground" };
 
@@ -20,7 +22,12 @@ export default async function PlaygroundPage() {
           Drop a 3D file, pick what to make, and see the cost before you run it. The same job is one CLI command or MCP call away.
         </p>
       </div>
-      <Playground actions={{ registerUploads, estimate: estimatePlayground, submit: submitPlayground, getJob: getPlaygroundJob }} />
+      <Playground
+        actions={{
+          registerUploads, estimate: estimatePlayground, submit: submitPlayground, getJob: getPlaygroundJob,
+          getJobs: getPlaygroundJobs, cancel: cancelPlaygroundJob, recent: recentPlaygroundJobs,
+        }}
+      />
       {recent.length > 0 && (
         <section className="space-y-2">
           <div className="flex items-center justify-between">

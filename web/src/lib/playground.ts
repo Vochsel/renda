@@ -186,6 +186,70 @@ export function contentTypeFor(name: string): string {
   return "application/octet-stream";
 }
 
+// ---- queue: batches and variations --------------------------------------------------------------
+
+/** Job names start with this, so playground jobs can be found again after a refresh (no extra column). */
+export const PLAYGROUND_PREFIX = "playground · ";
+export const isPlaygroundJob = (name: string | null | undefined) => !!name?.startsWith(PLAYGROUND_PREFIX);
+/** Most jobs one "Add to queue" may create, and the size above which the UI asks first. */
+export const MAX_BATCH = 24;
+export const CONFIRM_ABOVE = 8;
+
+export type Variations = { engines?: PlaygroundEngine[]; resolutions?: [number, number][] };
+export type BatchItem = {
+  label: string;
+  scene: string;
+  engine: PlaygroundEngine;
+  resolution: [number, number];
+  pkg: RendaPackageInput;
+};
+
+/** Engines the action accepts (the rest fall back to auto in buildPackage anyway). */
+export function enginesFor(action: PlaygroundAction): readonly PlaygroundEngine[] {
+  return action === "bake" ? BAKE_ENGINES : action === "splat" ? SPLAT_VIEW_ENGINES : action === "glb" ? [] : ENGINES;
+}
+
+const resLabel = (r: [number, number]) => `${r[0]}×${r[1]}`;
+function uniq<T>(xs: T[], key: (x: T) => string): T[] {
+  return [...new Map(xs.map((x) => [key(x), x])).values()];
+}
+
+/**
+ * One job per scene file × engine × resolution. Every scene gets the shared HDRI; variations an action can't
+ * use are dropped (engines for Convert, resolutions for Bake/Splat/Convert). `total` is the size before the cap.
+ */
+export function expandBatch(files: PlaygroundFile[], o: PlaygroundOptions, v: Variations = {}): { items: BatchItem[]; total: number } {
+  const scenes = files.filter((f) => f.role === "scene");
+  if (!scenes.length) throw new Error("Add a 3D file (.glb, .blend, .usdz, .fbx, .obj, .stl, .step, .ply, splats …).");
+  const shared = files.filter((f) => f.role !== "scene");
+  const allowed = enginesFor(o.action);
+  const engines = allowed.length ? uniq([o.engine, ...(v.engines ?? [])].filter((e) => allowed.includes(e)), String) : [o.engine];
+  const usesRes = o.action === "still" || o.action === "turntable";
+  const resolutions = usesRes ? uniq([o.resolution, ...(v.resolutions ?? [])], resLabel) : [o.resolution];
+  const out: BatchItem[] = [];
+  for (const scene of scenes) {
+    for (const engine of engines.length ? engines : (["auto"] as PlaygroundEngine[])) {
+      for (const resolution of resolutions) {
+        const pkg = buildPackage([scene, ...shared], { ...o, engine, resolution });
+        const label = [scene.name, o.action, ...(allowed.length ? [engine] : []), ...(usesRes ? [resLabel(resolution)] : [])].join(" · ");
+        out.push({ label, scene: scene.name, engine, resolution, pkg: { ...pkg, name: `${PLAYGROUND_PREFIX}${label}`.slice(0, 200) } });
+      }
+    }
+  }
+  return { items: out.slice(0, MAX_BATCH), total: out.length };
+}
+
+export type PriorityRange = { estCostUsd: [number, number]; estWallSeconds: [number, number]; hardware?: string };
+
+/** A batch's estimate: costs add up; wall time is the slowest job (they run side by side). */
+export function combineEstimates(list: PriorityRange[]): PriorityRange | null {
+  if (!list.length) return null;
+  const sum = (i: 0 | 1) => list.reduce((n, e) => n + e.estCostUsd[i], 0);
+  const max = (i: 0 | 1) => Math.max(...list.map((e) => e.estWallSeconds[i]));
+  const hw = [...new Set(list.map((e) => e.hardware).filter(Boolean))];
+  return { estCostUsd: [sum(0), sum(1)], estWallSeconds: [max(0), max(1)], hardware: hw.join("+") || undefined };
+}
+
 /** The same job as a CLI command, an MCP tool call and raw JSON — for "copy as". */
 export function copyAs(pkg: RendaPackageInput, o: PlaygroundOptions, sceneName: string) {
   const res = `${o.resolution[0]}x${o.resolution[1]}`;

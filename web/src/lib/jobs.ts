@@ -198,6 +198,13 @@ export async function listJobs(orgId: string, opts: { limit?: number; before?: s
   return db().select().from(jobs).where(and(...conds)).orderBy(desc(jobs.createdAt)).limit(Math.min(opts.limit ?? 50, 200));
 }
 
+/** Several of an org's jobs by id in one query (other orgs' ids are simply absent). */
+export async function getJobsByIds(orgId: string, ids: string[]): Promise<JobRow[]> {
+  const unique = [...new Set(ids)].slice(0, 100);
+  if (!unique.length) return [];
+  return db().select().from(jobs).where(and(eq(jobs.orgId, orgId), inArray(jobs.id, unique)));
+}
+
 export async function cancelJob(orgId: string, id: string): Promise<JobRow> {
   const job = await getJob(orgId, id);
   if (TERMINAL.has(job.status)) throw new ApiError("conflict", `Job is already ${job.status}.`);
