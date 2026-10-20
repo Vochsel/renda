@@ -112,7 +112,8 @@ splat_image = (
         "python -c \"import importlib.util as u; assert u.find_spec('gsplat.csrc'), 'gsplat built without CUDA'; print('gsplat.csrc ok')\"",
     )
 )
-splat_image = _with_core(_blender(splat_image), "mitsuba,usd,cad").add_local_python_source("renda_worker")
+# scipy: kNN for splatBake.init "lit" (splatbake/lit.py); after the gsplat build so its layer stays cached
+splat_image = _with_core(_blender(splat_image), "mitsuba,usd,cad").pip_install("scipy").add_local_python_source("renda_worker")
 
 # Slim CPU image: Mitsuba (LLVM variant), trimesh, USD, ffmpeg. ~5x smaller than the Blender image →
 # faster cold starts for Mitsuba stills of non-Blender formats and for video encoding.

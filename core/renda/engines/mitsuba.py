@@ -378,6 +378,33 @@ def _aim(params, cam, first, width: int, height: int, mi) -> None:
     params.update()
 
 
+def baking_scene(pkg, stage, asset_paths, scratch: Path):
+    """The scene the bakers trace (texel bakes, the lit splat init): the stage with package lights and the
+    environment (or a grey sky when the scene has no light), path-traced to 6 bounces. Needs a variant set."""
+    import mitsuba as mi
+
+    from ..ir.exporters.mitsuba import TextureCache, light_dict, stage_to_dict
+    from ..scene import env_map_path, package_lights
+
+    scene = stage_to_dict(stage, mi, TextureCache(stage.base_dir), Path(scratch) / "mi-meshes")
+    for i, lt in enumerate(package_lights(pkg, stage)):
+        d = light_dict(lt, stage.up_vector(), mi)
+        if d:
+            scene[f"pkg_light_{i}"] = d
+    env = pkg.environment
+    dome = next((l for l in stage.lights if l.type == "dome" and l.texture), None)
+    env_path = env_map_path(pkg, asset_paths) or (Path(dome.texture) if dome is not None else None)
+    if env_path is not None:
+        rot = mi.ScalarTransform4f().rotate(stage.up_vector().tolist(), env.rotationDeg)
+        if stage.up_axis == "Z":  # Mitsuba envmaps are Y-up
+            rot = rot @ mi.ScalarTransform4f().rotate([1, 0, 0], 90)
+        scene["environment"] = {"type": "envmap", "filename": str(env_path), "scale": float(env.intensity), "to_world": rot}
+    elif not any(k.startswith(("light_", "pkg_light_")) for k in scene):
+        scene["environment"] = {"type": "constant", "radiance": {"type": "rgb", "value": [0.8, 0.8, 0.8]}}
+    scene["integrator"] = {"type": "path", "max_depth": 6}
+    return mi.load_dict(scene)
+
+
 def bake_atlas(ctx: RenderContext, stage, layout, texels, warnings: list[str]) -> np.ndarray:
     """Texel-space bake with Dr.Jit through the same Mitsuba scene the renderer uses (path integrator,
     env + lights + GI). Returns (linear RGB atlas, valid mask), v-up rows.
@@ -391,9 +418,6 @@ def bake_atlas(ctx: RenderContext, stage, layout, texels, warnings: list[str]) -
     import drjit as dr
     import mitsuba as mi
 
-    from ..ir.exporters.mitsuba import TextureCache, light_dict, stage_to_dict
-    from ..scene import env_map_path, package_lights
-
     pkg, plan = ctx.pkg, ctx.plan
     bake = pkg.output.bake
     variant = pick_variant(_gpu_wanted(plan.hardware))
@@ -401,23 +425,7 @@ def bake_atlas(ctx: RenderContext, stage, layout, texels, warnings: list[str]) -
         warnings.append(f"mitsuba: no GPU backend available, baked with {variant}")
     scratch = Path(tempfile.mkdtemp(prefix="mi-bake-", dir=ctx.cache_dir or ctx.out_dir))
     try:
-        scene = stage_to_dict(stage, mi, TextureCache(stage.base_dir), scratch / "mi-meshes")
-        for i, lt in enumerate(package_lights(pkg, stage)):
-            d = light_dict(lt, stage.up_vector(), mi)
-            if d:
-                scene[f"pkg_light_{i}"] = d
-        env = pkg.environment
-        dome = next((l for l in stage.lights if l.type == "dome" and l.texture), None)
-        env_path = env_map_path(pkg, ctx.asset_paths) or (Path(dome.texture) if dome is not None else None)
-        if env_path is not None:
-            rot = mi.ScalarTransform4f().rotate(stage.up_vector().tolist(), env.rotationDeg)
-            if stage.up_axis == "Z":  # Mitsuba envmaps are Y-up
-                rot = rot @ mi.ScalarTransform4f().rotate([1, 0, 0], 90)
-            scene["environment"] = {"type": "envmap", "filename": str(env_path), "scale": float(env.intensity), "to_world": rot}
-        elif not any(k.startswith(("light_", "pkg_light_")) for k in scene):
-            scene["environment"] = {"type": "constant", "radiance": {"type": "rgb", "value": [0.8, 0.8, 0.8]}}
-        scene["integrator"] = {"type": "path", "max_depth": 6}
-        mi_scene = mi.load_dict(scene)
+        mi_scene = baking_scene(pkg, stage, ctx.asset_paths, scratch)
         integrator = mi_scene.integrator()
 
         lo, hi = stage.bounds()

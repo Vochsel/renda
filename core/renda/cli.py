@@ -356,6 +356,7 @@ def splat(
     fan_out: Annotated[Optional[bool], typer.Option("--fan-out/--no-fan-out",
                                                     help="Render views in parallel containers / inside the trainer (default: auto)")] = None,
     steps: Annotated[Optional[int], typer.Option(help="Refinement steps")] = None,
+    init: Annotated[Optional[str], typer.Option(help="surface | lit: start training from a path-traced lit splat (fewer steps, sharper)")] = None,
     sh_degree: Annotated[Optional[int], typer.Option("--sh-degree", help="0-3 view-dependent colour")] = None,
     engine: Annotated[Optional[str], typer.Option(help="Engine for the training views (auto|blender-cycles|blender-eevee|mitsuba|threejs)")] = None,
     dataset: Annotated[bool, typer.Option("--dataset", help="Also return the views + exact COLMAP model (zip)")] = False,
@@ -372,7 +373,7 @@ def splat(
     o.update({"format": "splat", "splatFormat": fmt})
     sb = {"preset": preset, "dataset": dataset}
     for k, v in (("views", views), ("steps", steps), ("shDegree", sh_degree), ("engine", engine), ("coverage", coverage),
-                 ("fanOut", fan_out)):
+                 ("fanOut", fan_out), ("init", init)):
         if v is not None:
             sb[k] = v
     o["splatBake"] = {**o.get("splatBake", {}), **sb}

@@ -257,3 +257,63 @@ def test_view_package_uses_cheap_denoised_views():
     final = load_package({"scene": {"root": str(GLB)}, "render": {"quality": "final"}, "output": {"format": "splat"}})
     keep = splatbake.view_package(final, st)
     assert keep.render.quality == "final"
+
+
+def test_lit_init_settings():
+    lit = splatbake.resolve_settings(_pkg(splatBake={"init": "lit"}))
+    assert (lit.init, lit.steps, lit.init_points) == ("lit", 4000, 400_000)  # 2/3 of the steps, a denser init
+    pinned = splatbake.resolve_settings(_pkg(splatBake={"init": "lit", "steps": 5000, "maxGaussians": 300_000}))
+    assert (pinned.steps, pinned.init_points) == (5000, 300_000)
+    high = splatbake.resolve_settings(_pkg(splatBake={"init": "lit", "preset": "high"}))
+    assert (high.steps, high.init_points) == (10_000, 800_000)
+    fast = splatbake.resolve_settings(_pkg(splatBake={"init": "lit", "preset": "fast"}))
+    assert fast.direct and fast.init == "surface"
+    assert splatbake.resolve_settings(_pkg()).init == "surface"
+
+
+def test_lit_init_planning():
+    surface = plan(_pkg(), {str(GLB): GLB}, available={"blender-cycles"})
+    lit = plan(_pkg(splatBake={"init": "lit"}), {str(GLB): GLB}, available={"blender-cycles"})
+    assert lit.splat_bake["init"] == "lit"
+    from renda.planner import train_seconds
+    # the lit trace costs seconds; the 2000 fewer steps save a minute
+    assert train_seconds(lit.splat_bake) < train_seconds(surface.splat_bake)
+    with_lit_cost = {**surface.splat_bake, "init": "lit"}
+    assert train_seconds(with_lit_cost) > train_seconds(surface.splat_bake)
+    fast = plan(_pkg(splatBake={"init": "lit", "preset": "fast"}), {str(GLB): GLB})
+    assert any("init lit" in w for w in fast.warnings)
+
+
+def test_surface_samples_record_alpha(stage):
+    s = splatbake.sample_surface(stage, 5000, seed=0)
+    assert s.alpha is not None and s.alpha.shape == (len(s.points),)
+    assert (s.alpha >= 0).all() and (s.alpha <= 1).all()
+
+
+def test_thin_even_spreads_points():
+    from renda.splatbake.lit import thin_even
+
+    rng = np.random.default_rng(0)
+    pts = np.c_[rng.random((60_000, 2)), np.zeros(60_000)].astype(np.float32)  # a unit square
+    idx = thin_even(pts, 4000)
+    assert abs(len(idx) - 4000) < 200 and (np.diff(idx) > 0).all()
+    # one per voxel: no two kept points much closer than the random-sample nearest-neighbour distance
+    kept = pts[idx][:, :2]
+    d = np.sqrt(((kept[:500, None] - kept[None]) ** 2).sum(-1)) + np.eye(500, len(kept)) * 9
+    assert d.min(1).mean() > 0.5 / math.sqrt(4000)
+    assert len(thin_even(pts[:100], 4000)) == 100
+
+
+def test_lit_gaussians_end_to_end(stage):
+    pytest.importorskip("mitsuba")
+    pytest.importorskip("torch")
+    pytest.importorskip("scipy")
+    from renda.splatbake.lit import lit_gaussians
+
+    pkg = _pkg(splatBake={"init": "lit"})
+    splats, m = lit_gaussians(stage, pkg, {str(GLB): GLB}, points=4000, sh_degree=2, device="cpu", batch=1 << 16)
+    assert 0.5 * 4000 < len(splats) <= 4100 and splats.sh_degree == 2
+    assert np.isfinite(splats.sh_dc).all() and np.isfinite(splats.sh_rest).all()
+    rgb = splats.sh_dc * 0.28209479177387814 + 0.5
+    assert 0.02 < rgb.mean() < 0.98 and rgb.std() > 0.01  # lit, not black or blown out
+    assert m["trace_s"] >= 0 and 0 < m["visible"] <= 1

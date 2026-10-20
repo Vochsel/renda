@@ -360,6 +360,8 @@ class SplatBake(_M):
     engine: EngineName = "auto"
     coverage: Literal["auto", "sphere", "hemisphere", "orbit"] = "auto"
     fanOut: Literal["auto"] | bool = "auto"
+    # surface: training starts from albedo surface samples. lit: from a path-traced lit splat (fewer steps)
+    init: Literal["surface", "lit"] = "surface"
     dataset: bool = False
 
 

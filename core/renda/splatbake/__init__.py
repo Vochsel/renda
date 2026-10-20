@@ -38,10 +38,14 @@ PRESETS: dict[str, dict] = {
     "fast": {"views": 0, "resolution": 0, "steps": 0, "sh_degree": 0, "init_points": 300_000,
              "max_gaussians": 300_000, "train_hardware": "cpu"},
     "standard": {"views": 96, "resolution": 768, "steps": 6000, "sh_degree": None, "init_points": 200_000,
-                 "max_gaussians": 450_000, "train_hardware": "gpu-l4"},
+                 "max_gaussians": 450_000, "train_hardware": "gpu-l4", "lit_points": 400_000},
     "high": {"views": 200, "resolution": 1024, "steps": 15000, "sh_degree": None, "init_points": 400_000,
-             "max_gaussians": 2_000_000, "train_hardware": "gpu-l40s"},
+             "max_gaussians": 2_000_000, "train_hardware": "gpu-l40s", "lit_points": 800_000},
 }
+# init "lit" (splatbake.lit): training starts from a path-traced lit splat, so it needs fewer steps. Porsche on an
+# L4, 16 held-out Cycles views: surface init 6000 steps 33.5 dB; lit init 4000 steps 34.1 dB, 3000 steps 33.4 dB.
+LIT_STEPS_FACTOR = 2 / 3
+LIT_FREEZE_STEPS = 300
 FREEZE_STEPS = 1000  # mesh-initialised positions are exact: optimise colour/opacity/shape first
 VIEW_FOV_DEG = 40.0
 HOLDOUT_EVERY = 8  # every 8th view is held out for PSNR/SSIM
@@ -63,6 +67,8 @@ class BakeSettings:
     splat_format: str
     train_hardware: str
     seed: int = 0
+    # what training starts from: "surface" (albedo surface samples) or "lit" (path-traced lit splat, splatbake.lit)
+    init: str = "surface"
     # explicit training cameras ([{position, target, up?, fovDeg}]) instead of the automatic rig
     cameras: list | None = None
     # engine=auto for the views: Eevee for diffuse scenes, Cycles when glossy/glass/emissive (decided once the
@@ -106,13 +112,19 @@ def resolve_settings(pkg: RendaPackage) -> BakeSettings:
     sh = sb.shDegree if sb.shDegree is not None else p["sh_degree"]
     if views == 0:
         sh = 0 if sh is None else sh
+    lit = sb.init == "lit" and views > 0  # the lit init seeds training; preset fast has none
+    steps = sb.steps if sb.steps is not None else (p["steps"] or PRESETS["standard"]["steps"])
+    if lit and sb.steps is None:
+        steps = int(round(steps * LIT_STEPS_FACTOR, -2))
+    std = PRESETS["standard"]
+    points = (p.get("lit_points") or std["lit_points"]) if lit else (p["init_points"] or std["init_points"])
     return BakeSettings(
         preset=sb.preset,
         views=views,
         resolution=sb.resolution or p["resolution"] or 768,
-        steps=sb.steps if sb.steps is not None else (p["steps"] or PRESETS["standard"]["steps"]),
+        steps=steps,
         sh_degree=SH_AUTO if sh is None else sh,
-        init_points=min(p["init_points"] or PRESETS["standard"]["init_points"], max_g),
+        init_points=min(points, max_g),
         max_gaussians=max_g,
         engine=sb.engine,
         coverage=sb.coverage,
@@ -120,6 +132,7 @@ def resolve_settings(pkg: RendaPackage) -> BakeSettings:
         splat_format=pkg.output.splatFormat or "spz",
         train_hardware=(p["train_hardware"] if p["train_hardware"] != "cpu" else "gpu-l4") if views else "cpu",
         seed=pkg.render.seed,
+        init="lit" if lit else "surface",
         cameras=cameras,
         view_engine_auto=sb.engine == "auto",
         fan_out=sb.fanOut,
@@ -377,6 +390,7 @@ class SurfaceSamples:
     colors: np.ndarray  # (N,3) display sRGB 0..1
     radius: np.ndarray  # (N,) tangent radius covering the sample's share of area
     glossy: np.ndarray | None = None  # (N,) bool: sample lies on a view-dependent material
+    alpha: np.ndarray | None = None  # (N,) opacity: material factor × base-colour texture alpha
 
 
 def sample_surface(stage: Stage, n: int, seed: int = 0) -> SurfaceSamples:
@@ -403,7 +417,7 @@ def sample_surface(stage: Stage, n: int, seed: int = 0) -> SurfaceSamples:
     areas = [0.5 * np.linalg.norm(np.cross(t[:, 1] - t[:, 0], t[:, 2] - t[:, 0]), axis=1) for t in tris_p]
     total = float(sum(a.sum() for a in areas)) or 1.0
     rng = np.random.default_rng(seed)
-    out_p, out_n, out_c, out_g = [], [], [], []
+    out_p, out_n, out_c, out_g, out_a = [], [], [], [], []
     for t, tn, tuv, tc, mat, a in zip(tris_p, tris_n, tris_uv, tris_c, mats, areas):
         k = int(round(n * a.sum() / total))
         if k == 0 or a.sum() == 0:
@@ -425,11 +439,13 @@ def sample_surface(stage: Stage, n: int, seed: int = 0) -> SurfaceSamples:
         base = np.array(mat.base_color[:3] if mat else (0.8, 0.8, 0.8), dtype=np.float64)
         # IR base colours are linear; splats store display sRGB
         col = np.tile(base, (k, 1))
+        alpha = np.full(k, float(mat.opacity) if mat else 1.0)
         tex = _load_texture(stage, mat.base_color_tex) if mat else None
         if tex is not None and tuv is not None:
             uv = np.einsum("nk,nkd->nd", bary, tuv[face])
-            texel = _sample_texture(tex, uv)[:, :3]
-            col = col * _srgb_to_linear(texel)
+            texel = _sample_texture(tex, uv)
+            col = col * _srgb_to_linear(texel[:, :3])
+            alpha = alpha * texel[:, 3]
         if tc is not None:
             col = col * np.einsum("nk,nkd->nd", bary, tc[face]).clip(0, 1)
         if mat is not None and mat.emission_strength > 0:
@@ -438,10 +454,11 @@ def sample_surface(stage: Stage, n: int, seed: int = 0) -> SurfaceSamples:
         out_n.append(nn)
         out_c.append(_linear_to_srgb(np.clip(col, 0, 1)))
         out_g.append(np.full(k, material_is_glossy(mat)))
+        out_a.append(alpha)
     points = np.concatenate(out_p).astype(np.float32)
     radius = np.full(len(points), math.sqrt(total / max(len(points), 1) / math.pi) * 1.3, dtype=np.float32)
     return SurfaceSamples(points, np.concatenate(out_n).astype(np.float32), np.concatenate(out_c).astype(np.float32), radius,
-                          np.concatenate(out_g))
+                          np.concatenate(out_g), np.concatenate(out_a).astype(np.float32))
 
 
 def _srgb_to_linear(x: np.ndarray) -> np.ndarray:

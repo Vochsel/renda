@@ -224,11 +224,11 @@ describe("render", () => {
       if (method === "POST" && url.endsWith("/jobs")) return { status: 201, json: job({ status: "queued" }) };
     }, { creds: { apiKey: "rnd_live_xxxxxxxxxxxxxxxxxxxxxxxx" } });
     const code = await run(["splat", "https://example.com/chair.glb", "--preset", "high", "--format", "spz", "--engine", "blender-eevee",
-      "--views", "120", "--dataset", "--no-wait"], t.deps);
+      "--views", "120", "--dataset", "--init", "lit", "--no-wait"], t.deps);
     expect(code).toBe(0);
     const submitted = t.calls.find((c) => c.method === "POST" && c.url.endsWith("/jobs"))!;
     expect(submitted.body.package.output).toEqual({ format: "splat", splatFormat: "spz",
-      splatBake: { preset: "high", views: 120, engine: "blender-eevee", dataset: true } });
+      splatBake: { preset: "high", views: 120, engine: "blender-eevee", dataset: true, init: "lit" } });
     expect(submitted.body.package.render?.engine).toBeUndefined();
   });
 

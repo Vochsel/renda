@@ -2325,6 +2325,15 @@
                 }
               ]
             },
+            "init": {
+              "default": "surface",
+              "description": "What training starts from. surface: albedo-coloured surface samples. lit: a splat with the lighting path-traced in (Mitsuba); training needs ~2/3 of the steps (the default drops accordingly) and comes out sharper. Ignored by preset fast.",
+              "type": "string",
+              "enum": [
+                "surface",
+                "lit"
+              ]
+            },
             "dataset": {
               "default": false,
               "description": "Also return the views + exact COLMAP sparse model as a zip.",

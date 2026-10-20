@@ -359,6 +359,17 @@ lights, material + texture overrides, layering); lens/blur/screen-space post are
    (glossy scenes: degree 2, or 3 for `high`; otherwise 1), and early stop on the held-out PSNR plateau (`steps` is an
    upper bound: 6k standard, 15k high). Gaussians below 1% opacity are pruned before export. Every 8th
    view is held out; PSNR/SSIM and a per-phase timing line are reported as job warnings.
+5. **Lit init** (`splatBake.init: "lit"`, `splatbake/lit.py`, in the trainer before the views are awaited, so
+   it overlaps fanned-out view rendering): instead of albedo surface samples, training starts from a splat with
+   the lighting path-traced in. Candidates are oversampled, culled to solid surface an outward ray escapes from,
+   and thinned to one per voxel (400k standard, 800k high); each is traced in 64 directions at 32 spp through
+   the texel baker's Mitsuba scene (`engines/mitsuba.baking_scene`, CUDA), with base-colour alpha applied as
+   opacity for the trace. Semi-transparent ones stay opaque over other geometry and keep their alpha
+   (un-premultiplied with a ray traced past them) when free-standing. Radiance is bilateral-denoised over
+   neighbours with albedo detail multiplied back, tonemapped like the views and ridge-fitted to SH on the GPU
+   (torch + scipy kNN). Training then freezes positions for 300 steps, trains every SH band from the start and
+   defaults to 2/3 of the steps. Porsche, L4, 16 held-out Cycles views: surface 6k steps 33.5 dB;
+   lit 4k steps 34.1 dB (lit init 32 s).
 
 Worker flow: orchestrate → either `train_splat_{l4,l40s}` alone (views rendered inside it), or the trainer
 spawned up front + view chunks writing to the Volume (`local_dir`) → `.complete` marker → splat (+ dataset
