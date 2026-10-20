@@ -2,13 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { safeParsePackage } from "@rendahq/spec";
-import type { ActionResult } from "@/app/dashboard/playground/actions";
+import type { ActionResult, QueueJob } from "@/app/dashboard/playground/actions";
 import type { Job } from "@/lib/jobs";
 import type { UploadInput, UploadTicket } from "@/lib/uploads";
 import {
-  ACTIONS, BAKE_ENGINES, DEFAULT_OPTIONS, ENGINES, RESOLUTIONS, SPLAT_VIEW_ENGINES,
-  buildPackage, contentTypeFor, copyAs, inlineGltf, pickScene, roleFor,
-  type FileRole, type PlaygroundFile, type PlaygroundOptions,
+  ACTIONS, CONFIRM_ABOVE, DEFAULT_OPTIONS, MAX_BATCH, PLAYGROUND_PREFIX, RESOLUTIONS,
+  combineEstimates, contentTypeFor, copyAs, enginesFor, expandBatch, inlineGltf, pickScene, roleFor,
+  type FileRole, type PlaygroundEngine, type PlaygroundFile, type PlaygroundOptions, type PriorityRange,
 } from "@/lib/playground";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -19,14 +19,17 @@ import { SplatViewer } from "@/components/viewers/splat-viewer";
 import { cn } from "@/lib/utils";
 
 type Priority = PlaygroundOptions["priority"];
-type PriorityEstimate = { hardware: string; chunks: number; estCostUsd: [number, number]; estWallSeconds: [number, number] };
-type Estimate = { warnings?: string[]; priorities?: Record<Priority, PriorityEstimate> } & Partial<PriorityEstimate>;
+type PriorityEstimate = PriorityRange & { chunks?: number };
+type Estimate = { warnings?: string[]; priorities?: Record<Priority, PriorityEstimate> };
 
 export type PlaygroundActions = {
   registerUploads: (files: UploadInput[]) => Promise<ActionResult<UploadTicket[]>>;
   estimate: (pkg: unknown, priority: Priority) => Promise<ActionResult<unknown>>;
   submit: (pkg: unknown, priority: Priority, idempotencyKey?: string) => Promise<ActionResult<Job>>;
   getJob: (id: string) => Promise<ActionResult<Job>>;
+  getJobs: (ids: string[]) => Promise<ActionResult<QueueJob[]>>;
+  cancel: (id: string) => Promise<ActionResult<QueueJob>>;
+  recent: () => Promise<ActionResult<QueueJob[]>>;
 };
 
 /** A dropped file: hashed in the browser, then uploaded straight to R2. */
@@ -42,12 +45,28 @@ type Local = {
   note?: string;
 };
 
+/** One queued job. `pkg` is kept so a failed or canceled row can be retried (rows restored after a refresh can't). */
+type Row = {
+  key: string;
+  label: string;
+  priority: Priority;
+  pkg?: unknown;
+  estimate?: PriorityEstimate;
+  state: "uploading" | "submitting" | "submitted" | "error";
+  job?: QueueJob;
+  error?: string;
+};
+
 const TERMINAL = new Set(["succeeded", "failed", "canceled"]);
 const ACCEPT = ".glb,.gltf,.blend,.usd,.usda,.usdc,.usdz,.fbx,.obj,.stl,.ply,.dae,.3mf,.abc,.json,.step,.stp,.iges,.igs,.splat,.spz,.ksplat,.hdr,.exr,.bin,.mtl,.png,.jpg,.jpeg,.webp";
+const SUBMIT_CONCURRENCY = 2;
+const POLL_MS = 2500;
 
 const mb = (n: number) => (n >= 1e9 ? `${(n / 1e9).toFixed(2)} GB` : n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1e3))} KB`);
 const usd = (n: number) => (n < 0.01 ? `$${n.toFixed(4)}` : `$${n.toFixed(2)}`);
 const secs = (n: number) => (n >= 90 ? `${(n / 60).toFixed(1)} min` : `${Math.round(n)} s`);
+const msg = (e: { message: string; hint?: string }) => (e.hint ? `${e.message} ${e.hint}` : e.message);
+const rowLabel = (name: string | null | undefined, id: string) => (name?.startsWith(PLAYGROUND_PREFIX) ? name.slice(PLAYGROUND_PREFIX.length) : name ?? id);
 
 async function sha256Hex(blob: Blob): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
@@ -82,16 +101,28 @@ async function bundleGltf(files: File[]): Promise<{ files: File[]; notes: Map<st
   return { files: files.map((f) => (f === gltf ? merged : f)), notes };
 }
 
+/** Run `fn` over `items` with at most `n` in flight. */
+async function pool<T>(items: T[], n: number, fn: (t: T) => Promise<void>) {
+  const queue = [...items];
+  await Promise.all(Array.from({ length: Math.min(n, queue.length) }, async () => {
+    while (queue.length) await fn(queue.shift()!);
+  }));
+}
+
 export function Playground({ actions }: { actions: PlaygroundActions }) {
   const [files, setFiles] = useState<Local[]>([]);
   const [opts, setOpts] = useState<PlaygroundOptions>(DEFAULT_OPTIONS);
+  const [extraEngines, setExtraEngines] = useState<PlaygroundEngine[]>([]);
+  const [extraRes, setExtraRes] = useState<[number, number][]>([]);
   const [tab, setTab] = useState<"options" | "json">("options");
   const [jsonText, setJsonText] = useState<string | null>(null); // non-null once the user edits the JSON
   const [estimate, setEstimate] = useState<Estimate | null>(null);
+  const [itemEstimates, setItemEstimates] = useState<Record<Priority, PriorityEstimate>[]>([]);
   const [estimateError, setEstimateError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
+  const [uploading, setUploading] = useState(0); // batches still uploading
   const [error, setError] = useState<string | null>(null);
-  const [job, setJob] = useState<Job | null>(null);
+  const [queue, setQueue] = useState<Row[]>([]);
+  const [selected, setSelected] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const input = useRef<HTMLInputElement>(null);
 
@@ -99,6 +130,7 @@ export function Playground({ actions }: { actions: PlaygroundActions }) {
     setOpts((o) => ({ ...o, [k]: v }));
     setJsonText(null);
   };
+  const patchRow = useCallback((key: string, p: Partial<Row>) => setQueue((q) => q.map((r) => (r.key === key ? { ...r, ...p } : r))), []);
 
   // ---- files ------------------------------------------------------------------------------------
   const addFiles = useCallback(async (list: FileList | File[]) => {
@@ -130,23 +162,25 @@ export function Playground({ actions }: { actions: PlaygroundActions }) {
     setJsonText(null);
   };
 
-  // Files that go into the package (scene + HDRI), once hashed.
+  // Files that go into packages (scenes + HDRI), once hashed.
   const used = useMemo(() => files.filter((f) => (f.role === "scene" || f.role === "hdri") && f.sha256), [files]);
   const sceneFile = pickScene(used);
+  const sceneCount = used.filter((f) => f.role === "scene").length;
   const pkgFiles: PlaygroundFile[] = useMemo(
     () => used.map((f) => ({ name: f.name, size: f.size, uri: `asset://${f.sha256}`, role: f.role })),
     [used],
   );
   const hashing = files.some((f) => f.state === "hashing");
 
-  // ---- package ----------------------------------------------------------------------------------
-  const generated = useMemo(() => {
+  // ---- packages: one per scene × engine × resolution, or the hand-edited JSON ------------------
+  const batch = useMemo(() => {
     try {
-      return sceneFile ? buildPackage(pkgFiles, opts) : null;
+      return sceneFile ? expandBatch(pkgFiles, opts, { engines: extraEngines, resolutions: extraRes }) : null;
     } catch {
       return null;
     }
-  }, [pkgFiles, opts, sceneFile]);
+  }, [pkgFiles, opts, sceneFile, extraEngines, extraRes]);
+  const generated = batch?.items[0]?.pkg ?? null;
   const text = jsonText ?? (generated ? JSON.stringify(generated, null, 2) : "");
   const parsedJson = useMemo(() => {
     if (!text) return { pkg: null as unknown, issues: [] as string[] };
@@ -158,74 +192,172 @@ export function Playground({ actions }: { actions: PlaygroundActions }) {
       return { pkg: null, issues: [`JSON: ${(e as Error).message}`] };
     }
   }, [text]);
-  const valid = parsedJson.pkg != null && parsedJson.issues.length === 0;
+  // A hand-edited package is one job; otherwise the expanded batch.
+  const items = useMemo<{ label: string; pkg: unknown }[]>(() => {
+    if (jsonText !== null) return parsedJson.pkg ? [{ label: sceneFile ? `${sceneFile.name} · custom JSON` : "custom JSON", pkg: parsedJson.pkg }] : [];
+    return batch?.items.map((i) => ({ label: i.label, pkg: i.pkg })) ?? [];
+  }, [jsonText, parsedJson.pkg, batch, sceneFile]);
+  const overCap = jsonText === null && (batch?.total ?? 0) > MAX_BATCH;
+  const valid = parsedJson.pkg != null && parsedJson.issues.length === 0 && items.length > 0
+    && items.every((i) => safeParsePackage(i.pkg).success);
 
-  // ---- live estimate (debounced) ----------------------------------------------------------------
+  // ---- live estimate (debounced): one job → its estimate; a batch → summed cost, slowest wall ----
   useEffect(() => {
     if (!valid) return;
+    let stale = false;
     const t = setTimeout(async () => {
-      const r = await actions.estimate(parsedJson.pkg, opts.priority);
-      if (r.ok) {
-        setEstimate(r.data as Estimate);
-        setEstimateError(null);
-      } else {
+      const results: Record<Priority, PriorityEstimate>[] = [];
+      let warnings: string[] | undefined;
+      let failure: string | null = null;
+      await pool(items.map((it, i) => ({ it, i })), 4, async ({ it, i }) => {
+        const r = await actions.estimate(it.pkg, opts.priority);
+        if (!r.ok) return void (failure ??= r.error.message);
+        const e = r.data as Estimate;
+        if (e.priorities) results[i] = e.priorities;
+        if (i === 0) warnings = e.warnings;
+      });
+      if (stale) return;
+      if (failure || results.filter(Boolean).length !== items.length) {
         setEstimate(null);
-        setEstimateError(r.error.message);
+        setItemEstimates([]);
+        setEstimateError(failure ?? "Couldn't estimate.");
+        return;
       }
-    }, 350);
-    return () => clearTimeout(t);
-  }, [valid, parsedJson.pkg, opts.priority, actions]);
+      const combined = Object.fromEntries((["economy", "standard", "rush"] as const).map((p) => [p, combineEstimates(results.map((r) => r[p]))!])) as Record<Priority, PriorityEstimate>;
+      setEstimate({ priorities: combined, warnings });
+      setItemEstimates(results);
+      setEstimateError(null);
+    }, 400);
+    return () => {
+      stale = true;
+      clearTimeout(t);
+    };
+  }, [valid, items, opts.priority, actions]);
 
-  // ---- submit -----------------------------------------------------------------------------------
-  async function submit() {
-    if (!valid || !sceneFile) return;
-    setSubmitting(true);
-    setError(null);
-    setJob(null);
-    try {
-      // Only upload what the package references (scene, HDRI); the server says which bytes it still needs.
-      const toSend = files.filter((f) => f.sha256 && JSON.stringify(parsedJson.pkg).includes(f.sha256));
-      const reg = await actions.registerUploads(
-        toSend.map((f) => ({ filename: f.name, size: f.size, sha256: f.sha256!, contentType: contentTypeFor(f.name) })),
-      );
-      if (!reg.ok) throw new Error(reg.error.hint ? `${reg.error.message} ${reg.error.hint}` : reg.error.message);
-      await Promise.all(
-        reg.data.map(async (t, i) => {
-          const f = toSend[i];
-          if (t.exists) {
-            setFiles((cur) => cur.map((c) => (c.key === f.key ? { ...c, state: "uploaded", progress: 1, note: c.note ?? "already uploaded" } : c)));
-            return;
-          }
-          setFiles((cur) => cur.map((c) => (c.key === f.key ? { ...c, state: "uploading" } : c)));
-          await putWithProgress(t.uploadUrl, f.file, t.uploadHeaders, (p) =>
-            setFiles((cur) => cur.map((c) => (c.key === f.key ? { ...c, progress: p } : c))),
-          );
-          setFiles((cur) => cur.map((c) => (c.key === f.key ? { ...c, state: "uploaded", progress: 1 } : c)));
-        }),
-      );
-      const r = await actions.submit(parsedJson.pkg, opts.priority, crypto.randomUUID());
-      if (!r.ok) throw new Error(r.error.hint ? `${r.error.message} ${r.error.hint}` : r.error.message);
-      setJob(r.data);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setSubmitting(false);
-    }
+  // ---- uploads ----------------------------------------------------------------------------------
+  /** Upload every dropped file these packages reference; the server says which bytes it already has. */
+  async function uploadFor(pkgs: unknown[]) {
+    const refs = JSON.stringify(pkgs);
+    const toSend = files.filter((f) => f.sha256 && refs.includes(f.sha256));
+    if (!toSend.length) return;
+    const reg = await actions.registerUploads(
+      toSend.map((f) => ({ filename: f.name, size: f.size, sha256: f.sha256!, contentType: contentTypeFor(f.name) })),
+    );
+    if (!reg.ok) throw new Error(msg(reg.error));
+    await Promise.all(
+      reg.data.map(async (t, i) => {
+        const f = toSend[i];
+        if (t.exists) {
+          setFiles((cur) => cur.map((c) => (c.key === f.key ? { ...c, state: "uploaded", progress: 1, note: c.note ?? "already uploaded" } : c)));
+          return;
+        }
+        setFiles((cur) => cur.map((c) => (c.key === f.key ? { ...c, state: "uploading" } : c)));
+        await putWithProgress(t.uploadUrl, f.file, t.uploadHeaders, (p) =>
+          setFiles((cur) => cur.map((c) => (c.key === f.key ? { ...c, progress: p } : c))),
+        );
+        setFiles((cur) => cur.map((c) => (c.key === f.key ? { ...c, state: "uploaded", progress: 1 } : c)));
+      }),
+    );
   }
 
-  // ---- poll the job -----------------------------------------------------------------------------
+  /** Submit one row; rate-limited submissions back off and retry a few times before giving up. */
+  const submitRow = useCallback(async (row: Row) => {
+    patchRow(row.key, { state: "submitting", error: undefined });
+    const idem = crypto.randomUUID();
+    for (let attempt = 0; ; attempt++) {
+      const r = await actions.submit(row.pkg, row.priority, idem);
+      if (r.ok) return patchRow(row.key, { state: "submitted", job: r.data as QueueJob });
+      if (r.error.code === "rate_limited" && attempt < 4) {
+        patchRow(row.key, { error: "rate limited — retrying…" });
+        await new Promise((res) => setTimeout(res, 2000 * 2 ** attempt));
+        continue;
+      }
+      return patchRow(row.key, { state: "error", error: msg(r.error) });
+    }
+  }, [actions, patchRow]);
+
+  // ---- add to queue (non-blocking: the form is free again immediately) -------------------------
+  function enqueue() {
+    if (!valid || hashing || !sceneFile) return;
+    setError(null);
+    if (overCap) return setError(`That's ${batch!.total} jobs; the most per submit is ${MAX_BATCH}. Drop fewer files or compare fewer engines/resolutions.`);
+    if (items.length > CONFIRM_ABOVE && !window.confirm(`Queue ${items.length} jobs?`)) return;
+    const priority = opts.priority;
+    const rows: Row[] = items.map((it, i) => ({
+      key: crypto.randomUUID(),
+      label: it.label,
+      priority,
+      pkg: it.pkg,
+      estimate: itemEstimates[i]?.[priority],
+      state: "uploading",
+    }));
+    setQueue((q) => [...rows, ...q]);
+    setUploading((n) => n + 1);
+    (async () => {
+      try {
+        await uploadFor(rows.map((r) => r.pkg));
+      } catch (e) {
+        for (const r of rows) patchRow(r.key, { state: "error", error: (e as Error).message });
+        return;
+      } finally {
+        setUploading((n) => n - 1);
+      }
+      await pool(rows, SUBMIT_CONCURRENCY, submitRow);
+    })();
+  }
+
+  // ---- restore the last day's playground jobs after a refresh -----------------------------------
   useEffect(() => {
-    if (!job || TERMINAL.has(job.status)) return;
-    const t = setTimeout(async () => {
-      const r = await actions.getJob(job.id);
-      if (r.ok) setJob(r.data);
-    }, 2000);
-    return () => clearTimeout(t);
-  }, [job, actions]);
+    let cancelled = false;
+    actions.recent().then((r) => {
+      if (cancelled || !r.ok || !r.data.length) return;
+      setQueue((q) => {
+        const have = new Set(q.map((x) => x.job?.id));
+        const restored: Row[] = r.data.filter((j) => !have.has(j.id)).map((j) => ({
+          key: j.id, label: rowLabel(j.name, j.id), priority: j.priority as Priority, state: "submitted", job: j,
+        }));
+        return [...q, ...restored];
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [actions]);
+
+  // ---- poll every active job in one request -----------------------------------------------------
+  const activeIds = queue.filter((r) => r.job && !TERMINAL.has(r.job.status)).map((r) => r.job!.id);
+  const activeKey = activeIds.join(",");
+  useEffect(() => {
+    if (!activeKey) return;
+    const ids = activeKey.split(",");
+    const t = setInterval(async () => {
+      const r = await actions.getJobs(ids);
+      if (!r.ok) return;
+      const byId = new Map(r.data.map((j) => [j.id, j]));
+      setQueue((q) => q.map((row) => (row.job && byId.has(row.job.id) ? { ...row, job: byId.get(row.job.id)! } : row)));
+    }, POLL_MS);
+    return () => clearInterval(t);
+  }, [activeKey, actions]);
+
+  async function cancelRow(row: Row) {
+    if (!row.job) return;
+    const r = await actions.cancel(row.job.id);
+    if (r.ok) patchRow(row.key, { job: r.data });
+    else patchRow(row.key, { error: msg(r.error) });
+  }
+  const cancelAll = () => queue.filter((r) => r.job && !TERMINAL.has(r.job.status)).forEach(cancelRow);
+  const retryRow = (row: Row) => row.pkg && submitRow({ ...row, job: undefined });
 
   const copies = generated && sceneFile && valid ? copyAs(parsedJson.pkg as never, opts, sceneFile.name) : null;
-  const engines = opts.action === "bake" ? BAKE_ENGINES : opts.action === "splat" ? SPLAT_VIEW_ENGINES : opts.action === "glb" ? [] : ENGINES;
+  const engines = enginesFor(opts.action);
+  const usesRes = opts.action === "still" || opts.action === "turntable";
   const pe = valid ? estimate?.priorities : undefined; // stale estimates hide while the package is invalid
+  const selectedRow = queue.find((r) => r.key === selected);
+  const finished = queue.filter((r) => r.job?.status === "succeeded");
+  const n = items.length;
+
+  const toggle = <T,>(list: T[], v: T, eq: (a: T, b: T) => boolean) => (list.some((x) => eq(x, v)) ? list.filter((x) => !eq(x, v)) : [...list, v]);
+  const sameRes = (a: [number, number], b: [number, number]) => a[0] === b[0] && a[1] === b[1];
 
   return (
     <div className="space-y-6">
@@ -251,7 +383,7 @@ export function Playground({ actions }: { actions: PlaygroundActions }) {
         <div>
           <p className="text-sm font-medium">Drop 3D files here, or click to browse</p>
           <p className="text-muted-foreground mt-1 text-xs">
-            .glb .gltf(+.bin, textures) .blend .usdz .fbx .obj .stl .ply .dae .3mf .abc .step .iges · splats .ply .spz .splat · optional .hdr/.exr environment
+            Several scenes = one job each. .glb .gltf(+.bin, textures) .blend .usdz .fbx .obj .stl .ply .dae .3mf .abc .step .iges · splats .ply .spz .splat · optional .hdr/.exr environment
           </p>
         </div>
         <input
@@ -274,7 +406,7 @@ export function Playground({ actions }: { actions: PlaygroundActions }) {
             <li key={f.key} className="flex items-center gap-3 px-3 py-2">
               <span className="min-w-0 flex-1 truncate font-mono text-xs">{f.name}</span>
               <span className="text-muted-foreground hidden font-mono text-[11px] sm:inline">
-                {f === files.find((x) => x.name === sceneFile?.name) ? "scene" : f.role === "sidecar" ? "sidecar" : f.role}
+                {f.role}
                 {f.note ? ` · ${f.note}` : ""}
               </span>
               <span className="text-muted-foreground w-16 text-right font-mono text-[11px]">{mb(f.size)}</span>
@@ -316,7 +448,16 @@ export function Playground({ actions }: { actions: PlaygroundActions }) {
       </div>
 
       {/* Options / JSON */}
-      <div className="border-border overflow-hidden rounded-lg border">
+      <div
+        className="border-border overflow-hidden rounded-lg border"
+        onKeyDown={(e) => {
+          const t = e.target as HTMLElement;
+          if (e.key === "Enter" && !e.shiftKey && (t.tagName === "INPUT" || t.tagName === "SELECT")) {
+            e.preventDefault();
+            enqueue();
+          }
+        }}
+      >
         <div className="border-border flex gap-4 border-b px-4" role="tablist">
           {(["options", "json"] as const).map((t) => (
             <button
@@ -330,18 +471,23 @@ export function Playground({ actions }: { actions: PlaygroundActions }) {
               {t === "options" ? "Options" : ".renda.json"}
             </button>
           ))}
-          {jsonText !== null && <span className="text-muted-foreground ml-auto self-center text-[11px]">edited by hand · options paused</span>}
+          {jsonText !== null && <span className="text-muted-foreground ml-auto self-center text-[11px]">edited by hand · one job · options paused</span>}
         </div>
         {tab === "options" ? (
           <div className="grid gap-4 p-4 sm:grid-cols-2 lg:grid-cols-3">
             {engines.length > 0 && (
               <Field label="Engine">
-                <select className={SELECT} value={engines.includes(opts.engine) ? opts.engine : "auto"} onChange={(e) => set("engine", e.target.value as PlaygroundOptions["engine"])}>
+                <select className={SELECT} value={engines.includes(opts.engine) ? opts.engine : "auto"} onChange={(e) => set("engine", e.target.value as PlaygroundEngine)}>
                   {engines.map((e) => <option key={e} value={e}>{e}</option>)}
                 </select>
+                <Chips
+                  label="Compare with"
+                  options={engines.filter((e) => e !== opts.engine).map((e) => ({ id: e, label: e.replace("blender-", ""), on: extraEngines.includes(e) }))}
+                  onToggle={(id) => setExtraEngines((l) => toggle(l, id as PlaygroundEngine, (a, b) => a === b))}
+                />
               </Field>
             )}
-            {(opts.action === "still" || opts.action === "turntable") && (
+            {usesRes && (
               <Field label="Resolution">
                 <div className="flex gap-2">
                   <select
@@ -360,6 +506,14 @@ export function Playground({ actions }: { actions: PlaygroundActions }) {
                   <input aria-label="Height" type="number" min={16} max={8192} className={cn(SELECT, "w-20")} value={opts.resolution[1]}
                     onChange={(e) => set("resolution", [opts.resolution[0], Number(e.target.value) || 16])} />
                 </div>
+                <Chips
+                  label="Also render at"
+                  options={RESOLUTIONS.filter((r) => !sameRes(r.value, opts.resolution)).map((r) => ({ id: r.label, label: r.label, on: extraRes.some((x) => sameRes(x, r.value)) }))}
+                  onToggle={(id) => {
+                    const r = RESOLUTIONS.find((x) => x.label === id)!.value;
+                    setExtraRes((l) => toggle(l, r, sameRes));
+                  }}
+                />
               </Field>
             )}
             {opts.action !== "splat" && opts.action !== "glb" && (
@@ -369,7 +523,7 @@ export function Playground({ actions }: { actions: PlaygroundActions }) {
                 </select>
               </Field>
             )}
-            {(opts.action === "still" || opts.action === "turntable") && (
+            {usesRes && (
               <Field label="Background">
                 <div className="flex gap-2">
                   <select
@@ -442,7 +596,7 @@ export function Playground({ actions }: { actions: PlaygroundActions }) {
               {text && (parsedJson.issues.length ? (
                 <ul className="text-destructive space-y-0.5" aria-live="polite">{parsedJson.issues.slice(0, 6).map((i) => <li key={i}>{i}</li>)}</ul>
               ) : (
-                <span className="text-muted-foreground" aria-live="polite">valid package</span>
+                <span className="text-muted-foreground" aria-live="polite">valid package{n > 1 ? ` (first of ${n} jobs shown)` : ""}</span>
               ))}
               {jsonText !== null && (
                 <button type="button" className="text-muted-foreground hover:text-foreground ml-auto underline" onClick={() => setJsonText(null)}>
@@ -454,40 +608,49 @@ export function Playground({ actions }: { actions: PlaygroundActions }) {
         )}
       </div>
 
-      {/* Estimate + submit */}
+      {/* Estimate + add to queue */}
       <div className="flex flex-wrap items-end gap-4">
         <div className="min-w-0 basis-full sm:basis-0 sm:flex-1" aria-live="polite">
           {pe ? (
-            <div className="grid grid-cols-3 gap-2 font-mono text-[11px]">
-              {(["economy", "standard", "rush"] as const).map((p) => (
-                <button
-                  key={p}
-                  type="button"
-                  onClick={() => setOpts((o) => ({ ...o, priority: p }))}
-                  className={cn("rounded-md border px-2 py-1.5 text-left", opts.priority === p ? "border-foreground" : "border-border text-muted-foreground")}
-                >
-                  <span className="block uppercase tracking-wide">{p}</span>
-                  <span className="text-foreground block">{usd(pe[p].estCostUsd[0])}–{usd(pe[p].estCostUsd[1])}</span>
-                  <span className="block">{secs(pe[p].estWallSeconds[0])}–{secs(pe[p].estWallSeconds[1])} · {pe[p].hardware}</span>
-                </button>
-              ))}
-            </div>
+            <>
+              {n > 1 && (
+                <p className="text-muted-foreground mb-1 font-mono text-[11px]" data-testid="batch-summary">
+                  {n} jobs{sceneCount > 1 ? ` · ${sceneCount} scenes` : ""}{extraEngines.length ? ` × ${1 + extraEngines.filter((e) => engines.includes(e)).length} engines` : ""}
+                  {usesRes && extraRes.length ? ` × ${1 + extraRes.length} sizes` : ""} · total cost, slowest job
+                </p>
+              )}
+              <div className="grid grid-cols-3 gap-2 font-mono text-[11px]">
+                {(["economy", "standard", "rush"] as const).map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => setOpts((o) => ({ ...o, priority: p }))}
+                    className={cn("rounded-md border px-2 py-1.5 text-left", opts.priority === p ? "border-foreground" : "border-border text-muted-foreground")}
+                  >
+                    <span className="block uppercase tracking-wide">{p}</span>
+                    <span className="text-foreground block">{usd(pe[p].estCostUsd[0])}–{usd(pe[p].estCostUsd[1])}</span>
+                    <span className="block">{secs(pe[p].estWallSeconds[0])}–{secs(pe[p].estWallSeconds[1])}{pe[p].hardware ? ` · ${pe[p].hardware}` : ""}</span>
+                  </button>
+                ))}
+              </div>
+            </>
           ) : (
             <p className="text-muted-foreground text-xs">
-              {!files.length ? "Add a file to see the estimate." : hashing ? "Reading files…" : estimateError ?? (valid ? "Estimating…" : "Fix the package to see the estimate.")}
+              {!files.length ? "Add files to see the estimate." : hashing ? "Reading files…" : overCap ? `${batch!.total} jobs — the most per submit is ${MAX_BATCH}.` : estimateError ?? (valid ? "Estimating…" : "Fix the package to see the estimate.")}
             </p>
           )}
           {valid && estimate?.warnings?.length ? <p className="text-muted-foreground mt-1 text-[11px]">{estimate.warnings.slice(0, 2).join(" · ")}</p> : null}
         </div>
-        <Button className="w-full sm:w-auto" onClick={submit} disabled={!valid || submitting || hashing || !sceneFile}>
-          {submitting ? "Uploading…" : opts.action === "bake" ? "Bake" : opts.action === "splat" ? "Bake splat" : opts.action === "glb" ? "Convert" : "Render"}
+        <Button className="w-full sm:w-auto" onClick={enqueue} disabled={!valid || hashing || !sceneFile || overCap}>
+          {n > 1 ? `Add ${n} to queue` : "Add to queue"}
         </Button>
       </div>
+      {uploading > 0 && <p className="text-muted-foreground text-xs">Uploading files for {uploading} batch{uploading === 1 ? "" : "es"}… you can keep queueing.</p>}
       {error && <p className="text-destructive text-sm" role="alert">{error}</p>}
 
       {copies && (
         <details className="text-sm">
-          <summary className="text-muted-foreground cursor-pointer text-xs">Copy as CLI · MCP · JSON</summary>
+          <summary className="text-muted-foreground cursor-pointer text-xs">Copy as CLI · MCP · JSON{n > 1 ? " (first job)" : ""}</summary>
           <div className="mt-3 space-y-3">
             {([["CLI", copies.cli], ["MCP tool call", copies.mcp], [".renda.json", copies.json], ["API (curl, with the JSON as job.json)", copies.curl]] as const).map(([label, value]) => (
               <div key={label}>
@@ -502,7 +665,37 @@ export function Playground({ actions }: { actions: PlaygroundActions }) {
         </details>
       )}
 
-      {job && <JobResult job={job} />}
+      {queue.length > 0 && (
+        <QueuePanel
+          rows={queue}
+          selected={selected}
+          onSelect={(k) => setSelected((s) => (s === k ? null : k))}
+          onCancel={cancelRow}
+          onRetry={retryRow}
+          onCancelAll={cancelAll}
+          onClearFinished={() => setQueue((q) => q.filter((r) => !(r.job && TERMINAL.has(r.job.status)) && r.state !== "error"))}
+        />
+      )}
+
+      {selectedRow?.job && <JobResult job={selectedRow.job} />}
+
+      {finished.length > 0 && (
+        <section aria-label="Finished" className="space-y-2">
+          <h2 className="text-sm font-medium">Finished</h2>
+          <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+            {finished.map((r) => (
+              <li key={r.key}>
+                <button type="button" onClick={() => setSelected(r.key)} className="block w-full text-left">
+                  <Thumb job={r.job!} />
+                  <span className="text-muted-foreground mt-1 block truncate font-mono text-[11px]">{r.label}</span>
+                </button>
+                <a href={`/dashboard/jobs/${r.job!.id}`} className="text-muted-foreground font-mono text-[10px] underline-offset-2 hover:underline">job →</a>
+              </li>
+            ))}
+          </ul>
+          <a href="/dashboard/gallery" className="text-muted-foreground text-xs hover:underline">Gallery →</a>
+        </section>
+      )}
     </div>
   );
 }
@@ -515,6 +708,117 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <span className="text-muted-foreground block text-[11px]">{label}</span>
       {children}
     </label>
+  );
+}
+
+/** Toggle chips for variations (each extra choice multiplies the batch). */
+function Chips({ label, options, onToggle }: { label: string; options: { id: string; label: string; on: boolean }[]; onToggle: (id: string) => void }) {
+  if (!options.length) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-1 pt-1" role="group" aria-label={label}>
+      <span className="text-muted-foreground mr-1 text-[10px]">{label}</span>
+      {options.map((o) => (
+        <button
+          key={o.id}
+          type="button"
+          aria-pressed={o.on}
+          onClick={() => onToggle(o.id)}
+          className={cn(
+            "rounded border px-1.5 py-0.5 font-mono text-[10px] transition-colors",
+            o.on ? "border-foreground bg-foreground text-background" : "border-border text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function rowStatus(r: Row): string {
+  if (r.state === "uploading") return "uploading";
+  if (r.state === "submitting") return "submitting";
+  if (r.state === "error" && !r.job) return "failed";
+  return r.job?.status ?? "queued";
+}
+
+function QueuePanel({ rows, selected, onSelect, onCancel, onRetry, onCancelAll, onClearFinished }: {
+  rows: Row[];
+  selected: string | null;
+  onSelect: (key: string) => void;
+  onCancel: (r: Row) => void;
+  onRetry: (r: Row) => void;
+  onCancelAll: () => void;
+  onClearFinished: () => void;
+}) {
+  const active = rows.filter((r) => r.state !== "error" && !(r.job && TERMINAL.has(r.job.status))).length;
+  const spent = rows.reduce((n, r) => n + (r.job?.costUsd ?? 0), 0);
+  return (
+    <section aria-label="Queue" className="space-y-2">
+      <div className="flex flex-wrap items-center gap-3">
+        <h2 className="text-sm font-medium">Queue</h2>
+        <span className="text-muted-foreground font-mono text-[11px]">{active} active · {rows.length} total · {usd(spent)} billed</span>
+        <span className="ml-auto flex gap-3 text-xs">
+          {active > 0 && <button type="button" onClick={onCancelAll} className="text-muted-foreground hover:text-foreground underline-offset-2 hover:underline">Cancel all</button>}
+          <button type="button" onClick={onClearFinished} className="text-muted-foreground hover:text-foreground underline-offset-2 hover:underline">Clear finished</button>
+        </span>
+      </div>
+      <ul className="divide-border border-border divide-y rounded-lg border text-sm" data-testid="queue">
+        {rows.map((r) => {
+          const status = rowStatus(r);
+          const j = r.job;
+          const running = j && !TERMINAL.has(j.status);
+          const eta = running && r.estimate ? `~${secs(r.estimate.estWallSeconds[1])}` : "";
+          const failed = status === "failed" || j?.status === "failed" || j?.status === "canceled";
+          return (
+            <li key={r.key} className={cn("px-3 py-2", selected === r.key && "bg-muted/50")} data-testid="queue-row">
+              <div className="flex items-center gap-3">
+                {j?.thumb ? <Thumb job={j} small /> : <span className="bg-muted size-8 shrink-0 rounded" aria-hidden />}
+                <button type="button" onClick={() => j && onSelect(r.key)} className="min-w-0 flex-1 truncate text-left font-mono text-xs hover:underline" disabled={!j}>
+                  {r.label}
+                </button>
+                {j ? <StatusBadge status={j.status} /> : <span className="text-muted-foreground font-mono text-[11px]">{status}</span>}
+                {/* Cost slot: billed so far. Live running cost (LiveCost) drops in here. */}
+                <span className="text-muted-foreground hidden w-16 text-right font-mono text-[11px] sm:inline" data-slot="cost">
+                  {j ? usd(j.costUsd) : r.estimate ? `≤${usd(r.estimate.estCostUsd[1])}` : ""}
+                </span>
+                <span className="text-muted-foreground hidden w-12 text-right font-mono text-[11px] sm:inline">{eta}</span>
+                <span className="flex w-14 justify-end gap-2 text-[11px]">
+                  {running && <button type="button" onClick={() => onCancel(r)} className="text-muted-foreground hover:text-foreground" aria-label={`Cancel ${r.label}`}>cancel</button>}
+                  {failed && r.pkg != null && <button type="button" onClick={() => onRetry(r)} className="text-muted-foreground hover:text-foreground" aria-label={`Retry ${r.label}`}>retry</button>}
+                </span>
+              </div>
+              {(r.state === "uploading" || r.state === "submitting" || running) && (
+                <Progress className="mt-2 h-1" value={Math.round((j?.progress ?? 0) * 100)} aria-label={`${r.label} progress`} />
+              )}
+              {(r.error || j?.error) && <p className="text-destructive mt-1 text-[11px]">{j?.error ?? r.error}</p>}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
+/** Result thumbnail: the worker's thumb + blurred placeholder, reserving the aspect ratio. */
+function Thumb({ job, small }: { job: QueueJob; small?: boolean }) {
+  const t = job.thumb;
+  if (small) {
+    return t ? (
+      // eslint-disable-next-line @next/next/no-img-element -- presigned thumbnail
+      <img src={t.url} alt="" className="size-8 shrink-0 rounded object-cover" style={t.placeholder ? { backgroundImage: `url(${t.placeholder})`, backgroundSize: "cover" } : undefined} />
+    ) : null;
+  }
+  const ratio = t?.width && t?.height ? `${t.width} / ${t.height}` : "4 / 3";
+  return (
+    <div className="bg-muted overflow-hidden rounded-md" style={{ aspectRatio: ratio, ...(t?.placeholder ? { backgroundImage: `url(${t.placeholder})`, backgroundSize: "cover" } : {}) }}>
+      {t ? (
+        // eslint-disable-next-line @next/next/no-img-element -- presigned thumbnail
+        <img src={t.url} alt={job.name ?? job.id} loading="lazy" className="h-full w-full object-cover" />
+      ) : (
+        <span className="text-muted-foreground grid h-full place-items-center font-mono text-[10px]">{job.outputs[0]?.name ?? "output"}</span>
+      )}
+    </div>
   );
 }
 

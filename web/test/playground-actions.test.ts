@@ -62,7 +62,7 @@ vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
 }));
 
 const actions = await import("@/app/dashboard/playground/actions");
-const { buildPackage, DEFAULT_OPTIONS } = await import("@/lib/playground");
+const { buildPackage, DEFAULT_OPTIONS, expandBatch } = await import("@/lib/playground");
 
 const as = (who: "alice" | "bob") => {
   session = { user: { id: `user_${who}`, email: `${who}@example.com` }, organizationId: `org_wos_${who}` };
@@ -123,6 +123,44 @@ describe("playground actions", () => {
     expect(reg.ok && reg.data[0].exists).toBe(false); // must upload its own copy
     const sub = await actions.submitPlayground(pkg(), "standard");
     expect(sub).toMatchObject({ ok: false, error: { code: "asset_missing" } });
+  });
+
+  it("batched status, cancel and restore are session-only and org-scoped", async () => {
+    session = null;
+    await expect(actions.getPlaygroundJobs(["x"])).rejects.toBeInstanceOf(RedirectToSignIn);
+    await expect(actions.recentPlaygroundJobs()).rejects.toBeInstanceOf(RedirectToSignIn);
+
+    as("alice");
+    const items = expandBatch([{ name: "m.glb", size: BYTES.length, uri: `asset://${SHA}`, role: "scene" }], DEFAULT_OPTIONS, { engines: ["mitsuba"] }).items;
+    expect(items).toHaveLength(2);
+    const ids: string[] = [];
+    for (const [i, it] of items.entries()) {
+      const r = await actions.submitPlayground(it.pkg, "standard", `pg-batch-${i}`);
+      expect(r.ok).toBe(true);
+      if (r.ok) ids.push(r.data.id);
+    }
+    const polled = await actions.getPlaygroundJobs([...ids, "job_nope"]);
+    expect(polled.ok && polled.data.map((j) => j.id).sort()).toEqual([...ids].sort());
+    const tooMany = await actions.getPlaygroundJobs(Array.from({ length: 101 }, (_, i) => `job_${i}`));
+    expect(tooMany).toMatchObject({ ok: false, error: { code: "invalid_request" } });
+
+    const recent = await actions.recentPlaygroundJobs();
+    expect(recent.ok && recent.data.map((j) => j.id)).toEqual(expect.arrayContaining(ids));
+    expect(recent.ok && recent.data.every((j) => j.name?.startsWith("playground · "))).toBe(true);
+
+    as("bob");
+    const peek = await actions.getPlaygroundJobs(ids);
+    expect(peek.ok && peek.data).toEqual([]); // other org's ids are simply absent
+    const bobRecent = await actions.recentPlaygroundJobs();
+    expect(bobRecent.ok && bobRecent.data.some((j) => ids.includes(j.id))).toBe(false);
+    const steal = await actions.cancelPlaygroundJob(ids[0]);
+    expect(steal).toMatchObject({ ok: false, error: { code: "not_found" } });
+
+    as("alice");
+    const canceled = await actions.cancelPlaygroundJob(ids[0]);
+    expect(canceled.ok && canceled.data.status).toBe("canceled");
+    const again = await actions.cancelPlaygroundJob(ids[0]);
+    expect(again).toMatchObject({ ok: false, error: { code: "conflict" } });
   });
 
   it("returns API errors as values (bad package, bad priority, too many files)", async () => {

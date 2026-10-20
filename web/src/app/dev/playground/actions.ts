@@ -1,6 +1,6 @@
 "use server";
 
-import type { ActionResult } from "@/app/dashboard/playground/actions";
+import type { ActionResult, QueueJob } from "@/app/dashboard/playground/actions";
 import type { Job } from "@/lib/jobs";
 import { estimateWithPriorities } from "@/lib/jobs";
 import { parseJobPackage } from "@/lib/packages";
@@ -43,20 +43,50 @@ export async function devSubmit(pkg: unknown, priority: "economy" | "standard" |
         : { name: "frame_0001.webp", url: "/showcase/porsche-cycles.webp", contentType: "image/webp", bytes: 1 };
   const id = `job_dev${Math.random().toString(36).slice(2, 10)}`;
   const job: Job = {
-    id, kind: "scene", name: "playground (dev)", status: "queued", priority, progress: 0, createdAt: new Date().toISOString(),
+    id, kind: "scene", name: (pkg as { name?: string }).name ?? "playground (dev)", status: "queued", priority, progress: 0, createdAt: new Date().toISOString(),
     billedSeconds: 0, costUsd: 0, cached: false, warnings: [], outputs: [],
   };
   jobs.set(id, { job, polls: 0, output });
   return { ok: true, data: job };
 }
 
-export async function devGetJob(id: string): Promise<ActionResult<Job>> {
-  guard();
+function advance(id: string): QueueJob | null {
   const s = jobs.get(id);
-  if (!s) return { ok: false, error: { code: "not_found", message: "Not found." } };
+  if (!s) return null;
+  if (s.job.status === "canceled") return s.job;
   s.polls += 1;
   s.job = s.polls < 2
     ? { ...s.job, status: "rendering", progress: 0.5, engine: "blender-cycles", hardware: "gpu-l4" }
     : { ...s.job, status: "succeeded", progress: 1, billedSeconds: 9.8, costUsd: 0.0057, outputs: [s.output] };
+  const thumb = s.job.status === "succeeded" && s.output.contentType.startsWith("image/") ? { url: s.output.url, width: 1600, height: 1000 } : undefined;
+  return { ...s.job, ...(thumb ? { thumb } : {}) };
+}
+
+export async function devGetJob(id: string): Promise<ActionResult<Job>> {
+  guard();
+  const j = advance(id);
+  return j ? { ok: true, data: j } : { ok: false, error: { code: "not_found", message: "Not found." } };
+}
+
+export async function devGetJobs(ids: string[]): Promise<ActionResult<QueueJob[]>> {
+  guard();
+  return { ok: true, data: ids.map(advance).filter((j): j is QueueJob => !!j) };
+}
+
+export async function devCancel(id: string): Promise<ActionResult<QueueJob>> {
+  guard();
+  const s = jobs.get(id);
+  if (!s) return { ok: false, error: { code: "not_found", message: "Not found." } };
+  s.job = { ...s.job, status: "canceled" };
   return { ok: true, data: s.job };
+}
+
+export async function devRecent(): Promise<ActionResult<QueueJob[]>> {
+  guard();
+  return {
+    ok: true,
+    data: [...jobs.values()].map((s) =>
+      s.job.status === "succeeded" && s.output.contentType.startsWith("image/") ? { ...s.job, thumb: { url: s.output.url, width: 1600, height: 1000 } } : s.job,
+    ),
+  };
 }
