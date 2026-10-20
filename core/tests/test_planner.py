@@ -114,3 +114,17 @@ def test_plan_json_roundtrip():
 
     p = plan(P(root="a.blend", animation={"frames": [1, 30]}), None)
     assert RenderPlan.from_json(p.to_json()) == p
+
+
+def test_estimator_hardware_fixture_matches_planner():
+    """spec/fixtures/estimator/hardware.json pins what web/src/lib/estimate.ts must reproduce; it must match the
+    planner exactly (regenerate with core/scripts/gen_estimator_fixture.py after changing the cost model)."""
+    import json
+    from pathlib import Path
+
+    cases = json.loads((Path(__file__).parents[2] / "spec/fixtures/estimator/hardware.json").read_text())["cases"]
+    assert len(cases) > 1000
+    for c in cases:
+        p = plan(load_package(c["package"]), None, c["priority"])
+        got = (p.engine, p.hardware, len(p.chunks), list(p.est_seconds), list(p.est_wall_seconds))
+        assert got == (c["engine"], c["hardware"], c["chunks"], c["estSeconds"], c["estWallSeconds"]), c
