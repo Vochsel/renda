@@ -1,0 +1,45 @@
+{
+  "suffix": "You are running unattended: don't ask questions, finish the task yourself, and stop once the output file exists.",
+  "tasks": [
+    {
+      "id": "still",
+      "label": "Product still from a .glb",
+      "inputs": { "testdata/scenes/scene.glb": "model.glb" },
+      "prompt": "Render a product shot of the 3D model in model.glb and save it as a PNG at out/render.png.",
+      "output": "out/render.png",
+      "kind": "image"
+    },
+    {
+      "id": "step",
+      "label": "Render a STEP CAD part",
+      "inputs": { "testdata/scenes/cad/bracket.step": "part.step" },
+      "prompt": "Render an image of the CAD part in part.step and save it as a PNG at out/render.png.",
+      "output": "out/render.png",
+      "kind": "image"
+    },
+    {
+      "id": "turntable",
+      "label": "3 s turntable MP4 from a .usdz",
+      "inputs": { "testdata/scenes/scene.usdz": "model.usdz" },
+      "prompt": "Make a 3-second turntable video (MP4) of the model in model.usdz and save it at out/turntable.mp4.",
+      "output": "out/turntable.mp4",
+      "kind": "video"
+    },
+    {
+      "id": "bake",
+      "label": "Bake lighting into a GLB",
+      "inputs": { "testdata/scenes/scene.glb": "model.glb" },
+      "prompt": "Bake the scene lighting into the textures of model.glb and save the result as a GLB at out/baked.glb.",
+      "output": "out/baked.glb",
+      "kind": "glb"
+    },
+    {
+      "id": "splat",
+      "label": "Mesh → Gaussian splat",
+      "inputs": { "testdata/scenes/scene.glb": "model.glb" },
+      "prompt": "Convert the mesh in model.glb into a 3D Gaussian splat and save it at out/model.ply (or out/model.spz).",
+      "output": ["out/model.ply", "out/model.spz"],
+      "kind": "splat"
+    }
+  ]
+}

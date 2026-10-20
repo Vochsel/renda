@@ -47,6 +47,8 @@ export type SeriesSpec = { id: string; label: string; color: string; shape: Shap
 
 /** Number formats by name (server components can't pass functions to these client charts). */
 export type Fmt = "sec" | "usd";
+const px = (v: number) => Math.round(v * 100) / 100;
+
 const FORMATS: Record<Fmt, (v: number) => string> = {
   sec: (v) => (v >= 60 ? `${(v / 60).toFixed(v >= 600 ? 0 : 1)} min` : `${v >= 10 ? v.toFixed(0) : v.toFixed(1)} s`),
   usd: (v) => (v === 0 ? "$0" : v < 0.01 ? `$${v.toFixed(4)}` : v < 1 ? `$${v.toFixed(3)}` : v < 100 ? `$${v.toFixed(2)}` : `$${Math.round(v).toLocaleString("en-US")}`),
@@ -177,7 +179,8 @@ export function MultiDot({
   const tk = logTicks(Math.min(...all), Math.max(...all));
   const lo = Math.log10(tk[0]);
   const hi = Math.log10(tk[tk.length - 1]);
-  const x = (v: number) => labelW + ((Math.log10(v) - lo) / (hi - lo)) * plotW;
+  // rounded: server and browser Math.log10 can differ in the last digit, which breaks hydration
+  const x = (v: number) => px(labelW + ((Math.log10(v) - lo) / (hi - lo)) * plotW);
   const h = top + rows.length * rowH + 24;
 
   return (
@@ -269,8 +272,8 @@ export function LineChart({
   const yt = logTicks(Math.min(...ys), Math.max(...ys)).filter((_, i, a) => a.length <= 7 || i % 2 === 0);
   const [x0, x1] = [Math.log10(Math.min(...xs)), Math.log10(Math.max(...xs))];
   const [y0, y1] = [Math.log10(Math.min(yt[0], Math.min(...ys))), Math.log10(Math.max(yt[yt.length - 1], Math.max(...ys)))];
-  const X = (v: number) => left + ((Math.log10(v) - x0) / (x1 - x0)) * (width - left - right);
-  const Y = (v: number) => top + (1 - (Math.log10(v) - y0) / (y1 - y0)) * (h - top - bottom);
+  const X = (v: number) => px(left + ((Math.log10(v) - x0) / (x1 - x0)) * (width - left - right));
+  const Y = (v: number) => px(top + (1 - (Math.log10(v) - y0) / (y1 - y0)) * (h - top - bottom));
   const spec = Object.fromEntries(series.map((s) => [s.id, s]));
   // End-of-line labels, pushed apart so they never overlap (≥12px).
   const ends = data
