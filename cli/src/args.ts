@@ -8,7 +8,7 @@ export interface Parsed {
 
 /** Flags that never take a value. */
 const BOOLEAN = new Set([
-  "json", "yes", "y", "trial", "wait", "no-wait", "local", "remote", "help", "h", "cancel", "transparent", "turntable", "force", "version",
+  "json", "yes", "y", "trial", "wait", "no-wait", "local", "remote", "help", "h", "cancel", "transparent", "turntable", "force", "version", "fast",
 ]);
 
 const ALIASES: Record<string, string> = { o: "output", y: "yes", h: "help", v: "version" };

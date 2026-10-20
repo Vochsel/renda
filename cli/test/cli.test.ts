@@ -107,6 +107,16 @@ describe("render", () => {
     expect(submitted.body.package.assets.scene.uri).toBe(`asset://${"a".repeat(64)}`);
   });
 
+  it("--fast submits priority rush", async () => {
+    const route: Route = ({ method, url }) => {
+      if (method === "POST" && url.endsWith("/jobs")) return { status: 201, json: job() };
+      if (url.endsWith("/jobs/job_1")) return { json: job({ status: "succeeded", progress: 1 }) };
+    };
+    const t = await setup(route, { creds: { apiKey: "rnd_live_xxxxxxxxxxxxxxxxxxxxxxxx" } });
+    expect(await run(["render", "https://example.com/a.glb", "--fast"], t.deps)).toBe(0);
+    expect(t.calls.find((c) => c.method === "POST" && c.url.endsWith("/jobs"))!.body.priority).toBe("rush");
+  });
+
   it("bake submits a glb package with the bake block (and --glb converts without baking)", async () => {
     const route: Route = ({ method, url }) => {
       if (method === "POST" && url.endsWith("/jobs")) return { status: 201, json: job() };

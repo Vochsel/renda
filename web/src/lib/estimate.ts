@@ -205,7 +205,9 @@ export function estimateSplatBake(pkg: RendaPackage, priority: Priority = "stand
   // auto → Cycles or Eevee from the materials; estimate as Cycles (conservative)
   const viewEngine = (sb.engine && sb.engine !== "auto" ? sb.engine : "blender-cycles") as ConcreteEngine;
   const engine: ConcreteEngine = viewEngine === "gsplat" ? "blender-cycles" : viewEngine;
-  const train: Hardware = p.train === "cpu" ? "gpu-l4" : p.train;
+  let train: Hardware = p.train === "cpu" ? "gpu-l4" : p.train;
+  // fast mode (rush): refine on an L40S, views fanned out (core planner does the same)
+  if (priority === "rush" && train === "gpu-l4") train = "gpu-l40s";
   // training views are draft + denoised unless the package asks for final quality / explicit samples
   const quality = pkg.render.quality === "final" ? "final" : "draft";
   const samples = pkg.render.samples ?? PRESET_SAMPLES[engine][quality];
@@ -300,7 +302,7 @@ function chooseHardware(engine: ConcreteEngine, pkg: RendaPackage, priority: Pri
   if (req === "cpu") candidates = ["cpu"];
   else if (req === "gpu") candidates = ["gpu-l4", "gpu-l40s"];
   if (engine === "threejs" && req !== "gpu" && !splats) return "cpu";
-  if (priority !== "rush" && candidates.includes("gpu-l40s") && candidates.length > 1) {
+  if ((priority !== "rush" || nFrames <= 200) && candidates.includes("gpu-l40s") && candidates.length > 1) {
     candidates = candidates.filter((c) => c !== "gpu-l40s");
   }
   let best = candidates[0];
@@ -328,6 +330,45 @@ function postActive(post: RendaPackage["post"]): boolean {
 function assetFormat(pkg: RendaPackage, ref: string): string | undefined {
   const a = pkg.assets[ref];
   return a?.format ?? formatFromPath(a?.uri ?? ref);
+}
+
+const TILE_ENGINES = new Set<ConcreteEngine>(["blender-cycles", "blender-eevee", "mitsuba"]);
+const TILE_MAX = 8;
+const TILE_OVERLAP = 32;
+
+/** core/renda/planner.py _tileable: a single still big enough that rush splits it into tiles. */
+function tileable(pkg: RendaPackage, engine: ConcreteEngine, frames: number): boolean {
+  if (frames !== 1 || !TILE_ENGINES.has(engine)) return false;
+  if (["mp4", "webm", "gif", "mov", "glb", "splat", "exr"].includes(pkg.output.format)) return false;
+  if (pkg.output.passes.some((p) => p !== "beauty")) return false;
+  const [w, h] = pkg.render.resolution;
+  if (w * h < 4_000_000) return false;
+  const p = pkg.post;
+  if (p && (p.vignette || p.chromaticAberration || p.lensDistortion || p.bloom != null || p.filmGrain || p.sharpen)) return false;
+  return true;
+}
+
+/** core/renda/planner.py tile_grid: ~n near-square tiles, each padded by TILE_OVERLAP px inside the frame. */
+function tileGrid(w: number, h: number, n: number): [number, number, number, number][] {
+  const cols = Math.max(1, Math.min(n, pyRound(Math.sqrt((n * w) / h))));
+  const rows = Math.max(1, Math.floor(n / cols));
+  const out: [number, number, number, number][] = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const x0 = Math.floor((w * c) / cols), x1 = Math.floor((w * (c + 1)) / cols);
+      const y0 = Math.floor((h * r) / rows), y1 = Math.floor((h * (r + 1)) / rows);
+      out.push([Math.max(0, x0 - TILE_OVERLAP), Math.max(0, y0 - TILE_OVERLAP), Math.min(w, x1 + TILE_OVERLAP), Math.min(h, y1 + TILE_OVERLAP)]);
+    }
+  }
+  return out;
+}
+
+/** Python's round(): halves go to the even neighbour. */
+function pyRound(x: number): number {
+  const f = Math.floor(x);
+  const d = x - f;
+  if (Math.abs(d - 0.5) < 1e-12) return f % 2 === 0 ? f : f + 1;
+  return Math.round(x);
 }
 
 export function estimateScene(pkg: RendaPackage, priority: Priority = "standard"): Estimate {
@@ -365,8 +406,23 @@ export function estimateScene(pkg: RendaPackage, priority: Priority = "standard"
   const chunks = Math.ceil(frames / perChunk);
   const isVideo = ["mp4", "webm", "gif", "mov"].includes(pkg.output.format);
   const encode = isVideo ? (0.05 * frames * w * h) / 2.07e6 : 0;
-  const total = chunks * load + frames * frameS + encode;
-  const wall = load + perChunk * frameS + encode + (isVideo && chunks > 1 ? 5 : 0);
+  let total = chunks * load + frames * frameS + encode;
+  let wall = load + perChunk * frameS + encode + (isVideo && chunks > 1 ? 5 : 0);
+  let outChunks = chunks;
+
+  // core planner: rush stills ≥ 4 MP in Cycles/Eevee/Mitsuba split into padded tiles rendered in parallel
+  if (tileable(pkg, engine, frames)) {
+    const nTiles = frameS < 60 ? 1 : Math.min(Math.max(Math.floor(frameS / Math.max(3 * load, 1e-3)), 1), TILE_MAX);
+    if (priority === "rush" && nTiles > 1) {
+      const boxes = tileGrid(w, h, nTiles);
+      const tiledPx = boxes.reduce((a, b) => a + (b[2] - b[0]) * (b[3] - b[1]), 0);
+      const tileS = (frameS * tiledPx) / (w * h) / boxes.length;
+      total = boxes.length * load + boxes.length * tileS;
+      wall = load + tileS + 2 + (0.4 * w * h) / 2.07e6;
+      outChunks = boxes.length;
+      warnings.push(`fast mode: ${boxes.length} tiles rendered in parallel and stitched`);
+    }
+  }
 
   const lo = 0.6, hi = 1.8;
   const cost = costUsd(hardware, total);
@@ -375,7 +431,7 @@ export function estimateScene(pkg: RendaPackage, priority: Priority = "standard"
     hardware,
     frames,
     samples,
-    chunks,
+    chunks: outChunks,
     estSeconds: [round1(total * lo), round1(total * hi)],
     estWallSeconds: [round1(wall * lo), round1(wall * hi)],
     estCostUsd: [round4(cost * lo), round4(cost * hi)],

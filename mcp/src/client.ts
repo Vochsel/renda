@@ -220,8 +220,8 @@ export class RendaClient {
   }
 
   // jobs
-  estimate(pkg: RendaPackageInput | HyperframesPackage, kind: JobKind = "scene") {
-    return this.request<Estimate>("POST", "/estimate", { package: pkg, kind });
+  estimate(pkg: RendaPackageInput | HyperframesPackage, kind: JobKind = "scene", priority?: "economy" | "standard" | "rush") {
+    return this.request<Estimate>("POST", "/estimate", { package: pkg, kind, ...(priority ? { priority } : {}) });
   }
 
   /** Resolve `extends` / package references server-side (https and asset:// layers). */

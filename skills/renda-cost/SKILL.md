@@ -41,8 +41,11 @@ upper bound is above about $1, or above what they said they'd spend:
 4. **Engine.** workbench/threejs (CPU, cheapest) < eevee (fast GPU) < cycles/mitsuba
    (path tracing). Auto already picks the cheapest that fits.
 5. **Priority.** `economy` allows cheaper hardware and batching (slower, lowest cost);
-   `standard` default; `rush` uses bigger GPUs (fastest, costliest per minute, though often
-   similar total for short jobs).
+   `standard` default; `rush` = **fast mode** (`--fast`, `fast: true` in MCP/API): fans out as wide as it can
+   on faster GPUs. Big stills (≥ ~4 MP, Cycles/Eevee/Mitsuba, no passes or screen-space post) split into
+   tiles rendered in parallel and stitched; animations use up to 20 L40S containers; splat bakes fan the
+   views out and refine on an L40S. Typically ~1.3–1.6× the cost for several times less wall time —
+   `renda estimate` prints "fast: $X in Y vs standard: $A in B" so you can offer the trade to the user.
 
 ## Cheap-by-default habits
 

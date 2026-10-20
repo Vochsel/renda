@@ -457,7 +457,7 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
     const r = await resolvePackage(args);
     if ("issues" in r) return fail(`Invalid package: ${JSON.stringify(r.issues, null, 2)}`, "Fix the issues and retry.");
     const est = await client.estimate(r.pkg);
-    return ok(est, "If acceptable, call renda_render with the same package. To cut cost: lower resolution, quality draft, fewer frames, or priority economy.");
+    return ok(est, "If acceptable, call renda_render with the same package. To cut cost: lower resolution, quality draft, fewer frames, or priority economy. To finish sooner, pass fast: true (see priorities.rush for its price and wall time).");
   }));
 
   server.registerTool("renda_render", {
@@ -468,6 +468,7 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
     inputSchema: {
       ...RenderSource,
       priority: z.enum(["economy", "standard", "rush"]).optional().describe("economy = cheapest, slower; rush = fastest, pricier."),
+      fast: z.boolean().optional().describe("Fast mode: same as priority rush — wider fan-out on faster GPUs (big stills split into tiles, splat bakes train on an L40S); costs a bit more."),
       wait: z.boolean().optional().describe("Wait for completion (default true, up to 10 min)."),
       includeImage: z.boolean().optional().describe("Inline small image outputs so you can see them (default true)."),
       idempotencyKey: z.string().optional(),
@@ -478,7 +479,7 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
     const trial = local && !client.apiKey ? await startTrial() : undefined;
     const r = await resolvePackage(args);
     if ("issues" in r) return fail(`Invalid package: ${JSON.stringify(r.issues, null, 2)}`, "Fix the issues (see `fix`) and retry.");
-    let job = await client.createJob({ package: r.pkg, kind: "scene", priority: args.priority, idempotencyKey: args.idempotencyKey });
+    let job = await client.createJob({ package: r.pkg, kind: "scene", priority: args.fast ? "rush" : args.priority, idempotencyKey: args.idempotencyKey });
     if (trial) {
       if (args.wait !== false && !TERMINAL_STATUSES.has(job.status)) job = await waitWithProgress(job.id, extra);
       const res = await finishJob(job, args.includeImage !== false, { trialStarted: { claimUrl: trial.claimUrl, freeSecondsLeft: trial.freeSecondsLeft } });
@@ -506,6 +507,7 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
       textureFormat: z.enum(["jpg", "png", "webp"]).optional(),
       plain: z.boolean().optional().describe("Convert to GLB without baking."),
       priority: z.enum(["economy", "standard", "rush"]).optional(),
+      fast: z.boolean().optional().describe("Fast mode (= priority rush): more parallel, costs a bit more."),
       wait: z.boolean().optional().describe("Wait for completion (default true, up to 10 min)."),
     },
     annotations: { openWorldHint: true },
@@ -526,7 +528,7 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
       if (args.engine || args.quality) pkg.render = { ...(pkg.render ?? {}), ...(args.engine ? { engine: args.engine } : {}), ...(args.quality ? { quality: args.quality } : {}) };
     });
     if ("issues" in r) return fail(`Invalid package: ${JSON.stringify(r.issues, null, 2)}`, "Fix the issues (see `fix`) and retry.");
-    let job = await client.createJob({ package: r.pkg, kind: "scene", priority: args.priority });
+    let job = await client.createJob({ package: r.pkg, kind: "scene", priority: args.fast ? "rush" : args.priority });
     if (args.wait !== false && !TERMINAL_STATUSES.has(job.status)) job = await waitWithProgress(job.id, extra);
     const res = await finishJob(job, false, trial ? { trialStarted: { claimUrl: trial.claimUrl, freeSecondsLeft: trial.freeSecondsLeft } } : undefined);
     if (trial) res.content[0] = { type: "text", text: (res.content[0] as { text: string }).text + `\nNo account was configured, so a free trial was started.${claimNote()}` };
@@ -563,6 +565,7 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
         .describe("Engine that renders the training views."),
       dataset: z.boolean().optional(),
       priority: z.enum(["economy", "standard", "rush"]).optional(),
+      fast: z.boolean().optional().describe("Fast mode (= priority rush): more parallel, costs a bit more."),
       wait: z.boolean().optional().describe("Wait for completion (default true, up to 20 min)."),
     },
     annotations: { openWorldHint: true },
@@ -577,7 +580,7 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
       delete pkg.animation;
     });
     if ("issues" in r) return fail(`Invalid package: ${JSON.stringify(r.issues, null, 2)}`, "Fix the issues (see `fix`) and retry.");
-    let job = await client.createJob({ package: r.pkg, kind: "scene", priority: args.priority });
+    let job = await client.createJob({ package: r.pkg, kind: "scene", priority: args.fast ? "rush" : args.priority });
     if (args.wait !== false && !TERMINAL_STATUSES.has(job.status)) job = await waitWithProgress(job.id, extra, 20 * 60_000);
     const res = await finishJob(job, false, trial ? { trialStarted: { claimUrl: trial.claimUrl, freeSecondsLeft: trial.freeSecondsLeft } } : undefined);
     if (trial) res.content[0] = { type: "text", text: (res.content[0] as { text: string }).text + `\nNo account was configured, so a free trial was started.${claimNote()}` };
@@ -606,6 +609,7 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
         .describe("draft (fast) | looks (default) | delivery (final). standard/final are accepted as looks/delivery."),
       durationSec: z.number().positive().optional().describe("Composition length, for a better cost estimate."),
       priority: z.enum(["economy", "standard", "rush"]).optional(),
+      fast: z.boolean().optional().describe("Fast mode (= priority rush): more parallel, costs a bit more."),
       wait: z.boolean().optional(),
     },
     annotations: { openWorldHint: true },
@@ -632,7 +636,7 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
       });
       pkg.variables = resolved.variables;
     }
-    let job = await client.createJob({ package: pkg, kind: "hyperframes", priority: args.priority });
+    let job = await client.createJob({ package: pkg, kind: "hyperframes", priority: args.fast ? "rush" : args.priority });
     if (args.wait !== false && !TERMINAL_STATUSES.has(job.status)) job = await waitWithProgress(job.id, extra, 20 * 60_000);
     const extraInfo: Record<string, unknown> = {};
     if (uploaded) extraInfo.uploaded = uploaded;

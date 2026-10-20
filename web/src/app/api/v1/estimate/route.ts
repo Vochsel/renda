@@ -10,6 +10,8 @@ const Body = z.object({
   package: z.unknown(),
   kind: z.enum(["scene", "hyperframes"]).default("scene"),
   priority: z.enum(["economy", "standard", "rush"]).default("standard"),
+  /** Fast mode: alias for priority "rush" (wider fan-out on faster GPUs, costs a bit more). */
+  fast: z.boolean().optional(),
 });
 
 export const POST = api(async (req) => {
@@ -18,5 +20,5 @@ export const POST = api(async (req) => {
   const b = Body.parse(await readJson(req));
   const pkg = b.kind === "scene" ? (await flattenForOrg(auth.org.id, b.package)).package : b.package;
   const parsed = parseJobPackage(b.kind, pkg, { allowLocal: true });
-  return Response.json(estimateWithPriorities(parsed, b.priority));
+  return Response.json(estimateWithPriorities(parsed, b.fast ? "rush" : b.priority));
 });

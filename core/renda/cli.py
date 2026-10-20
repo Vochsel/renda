@@ -318,6 +318,7 @@ def render(
         "--texture", help='Override a texture (repeatable): "material=/Wood.*/i,slot=baseColor,scale=4:./oak.jpg". '
                           "Any image or video; matches material/object/texture names by glob or /regex/.")] = None,
     priority: Annotated[str, typer.Option(help="economy|standard|rush (cloud)")] = "standard",
+    fast: Annotated[bool, typer.Option("--fast", help="Fast mode (= --priority rush): fan out wider on faster GPUs; costs a bit more")] = False,
     cloud: Annotated[bool, typer.Option("--cloud", help="Render in the Renda cloud")] = False,
     wait: Annotated[bool, typer.Option("--wait/--no-wait", help="Cloud: wait for the job and download outputs")] = True,
     max_minutes: Annotated[Optional[float], typer.Option("--max-minutes", help="Cloud: refuse if the estimate exceeds this many render-minutes")] = None,
@@ -327,7 +328,7 @@ def render(
     raw, base = load_input(input)
     raw = apply_overrides(raw, engine=engine, res=res, quality=quality, samples=samples, frames=frames, fmt=fmt,
                           transparent=transparent, turntable=turntable, textures=texture)
-    _run(raw, base, output, priority=priority, cloud=cloud, wait=wait, max_minutes=max_minutes, json_out=json_out)
+    _run(raw, base, output, priority="rush" if fast else priority, cloud=cloud, wait=wait, max_minutes=max_minutes, json_out=json_out)
 
 
 @command
@@ -345,6 +346,7 @@ def splat(
     engine: Annotated[Optional[str], typer.Option(help="Engine for the training views (auto|blender-cycles|blender-eevee|mitsuba|threejs)")] = None,
     dataset: Annotated[bool, typer.Option("--dataset", help="Also return the views + exact COLMAP model (zip)")] = False,
     priority: Annotated[str, typer.Option(help="economy|standard|rush (cloud)")] = "standard",
+    fast: Annotated[bool, typer.Option("--fast", help="Fast mode (= --priority rush): fan out wider on faster GPUs; costs a bit more")] = False,
     cloud: Annotated[bool, typer.Option("--cloud", help="Bake in the Renda cloud (needed for standard/high without a CUDA GPU)")] = False,
     wait: Annotated[bool, typer.Option("--wait/--no-wait", help="Cloud: wait for the job and download outputs")] = True,
     max_minutes: Annotated[Optional[float], typer.Option("--max-minutes", help="Cloud: refuse if the estimate exceeds this many render-minutes")] = None,
@@ -362,7 +364,11 @@ def splat(
     o["splatBake"] = {**o.get("splatBake", {}), **sb}
     o.pop("passes", None)
     raw.pop("animation", None)
-    _run(raw, base, output, priority=priority, cloud=cloud, wait=wait, max_minutes=max_minutes, json_out=json_out)
+    _run(raw, base, output, priority="rush" if fast else priority, cloud=cloud, wait=wait, max_minutes=max_minutes, json_out=json_out)
+
+
+def _mins(seconds: float) -> str:
+    return f"{seconds / 60:.1f} min" if seconds >= 90 else f"{seconds:.0f} s"
 
 
 def _run(raw: dict, base: Path, output: Path, *, priority: str, cloud: bool, wait: bool, max_minutes: float | None,
@@ -479,6 +485,7 @@ def bake(
     texture_format: Annotated[str, typer.Option("--texture-format", help="jpg|png|webp")] = "jpg",
     glb: Annotated[bool, typer.Option("--glb", help="Plain conversion to GLB, no baking")] = False,
     priority: Annotated[str, typer.Option(help="economy|standard|rush (cloud)")] = "standard",
+    fast: Annotated[bool, typer.Option("--fast", help="Fast mode (= --priority rush): fan out wider on faster GPUs; costs a bit more")] = False,
     cloud: Annotated[bool, typer.Option("--cloud", help="Bake in the Renda cloud")] = False,
     wait: Annotated[bool, typer.Option("--wait/--no-wait", help="Cloud: wait for the job and download the GLB")] = True,
     max_minutes: Annotated[Optional[float], typer.Option("--max-minutes", help="Cloud: refuse if the estimate exceeds this many render-minutes")] = None,
@@ -501,7 +508,7 @@ def bake(
         if samples:
             b["samples"] = samples
         o["bake"] = b
-    _run(raw, base, output, priority=priority, cloud=cloud, wait=wait, max_minutes=max_minutes, json_out=json_out)
+    _run(raw, base, output, priority="rush" if fast else priority, cloud=cloud, wait=wait, max_minutes=max_minutes, json_out=json_out)
 
 
 @command
@@ -519,6 +526,7 @@ def video(
     name: Annotated[Optional[str], typer.Option(help="Output file stem")] = None,
     duration: Annotated[Optional[float], typer.Option(help="Composition length in seconds, for the estimate")] = None,
     priority: Annotated[str, typer.Option(help="economy|standard|rush")] = "standard",
+    fast: Annotated[bool, typer.Option("--fast", help="Fast mode (= --priority rush): fan out wider on faster GPUs; costs a bit more")] = False,
     wait: Annotated[bool, typer.Option("--wait/--no-wait", help="Wait for the video and download it")] = True,
     json_out: JsonOpt = False,
 ):
@@ -547,7 +555,7 @@ def video(
     if variables:
         resolved, input_jobs = resolve_variables(client, variables, Path.cwd(), wait=lambda j: _wait_job(client, j, json_out))
         pkg["variables"] = resolved
-    job = client.create_job(pkg, kind="hyperframes", priority=priority)
+    job = client.create_job(pkg, kind="hyperframes", priority="rush" if fast else priority)
     if not wait:
         emit(json_out, {**job, "inputJobs": input_jobs}, lambda: console.print(f"queued job [bold]{job['id']}[/] — `renda jobs {job['id']}`"))
         return
@@ -722,6 +730,7 @@ def init(
 def estimate(
     input: Annotated[Path, typer.Argument(help="Scene file or .renda.json package")],
     priority: Annotated[str, typer.Option(help="economy|standard|rush")] = "standard",
+    fast: Annotated[bool, typer.Option("--fast", help="Fast mode (= --priority rush): fan out wider on faster GPUs; costs a bit more")] = False,
     engine: Annotated[Optional[str], typer.Option(help="Engine override")] = None,
     res: Annotated[Optional[str], typer.Option(help="Resolution WxH")] = None,
     quality: Annotated[Optional[str], typer.Option(help="draft|standard|final")] = None,
@@ -748,7 +757,7 @@ def estimate(
         if api_key():
             try:
                 # local paths aren't uploaded for an estimate; the server only needs formats + settings
-                data = _client().estimate(raw)
+                data = _client().estimate(raw, "rush" if fast else priority)
                 data["source"] = "cloud"
             except CloudError as e:
                 if e.code in ("unauthenticated", "network_error"):
@@ -767,7 +776,7 @@ def estimate(
                 tris = load_stage(root).triangle_count()
         except Exception:
             pass
-        p = plan(pkg, files, priority, triangles=tris)
+        p = plan(pkg, files, "rush" if fast else priority, triangles=tris)
         lo, hi = estimate_cost(p)
         single = bool((p.splat_bake or {}).get("single_container"))
         data = {"source": "local", "engine": p.engine, "hardware": p.hardware, "frames": len(p.frames),
@@ -785,6 +794,11 @@ def estimate(
             n = e.get("containers", e.get("chunks", 1))
             out.print(f"  [dim]--priority {pr:<8}[/] ${pc[0]:.4f}–${pc[1]:.4f}, wall ~{w[0]:.0f}–{w[1]:.0f}s "
                       f"on {e.get('hardware', '?')} × {n}")
+        prs = data.get("priorities") or {}
+        if "rush" in prs and "standard" in prs:
+            f, st = prs["rush"], prs["standard"]
+            out.print(f"  fast (--fast): ${f['estCostUsd'][1]:.4f} in ~{_mins(f['estWallSeconds'][1])}  vs  standard: "
+                      f"${st['estCostUsd'][1]:.4f} in ~{_mins(st['estWallSeconds'][1])}  [dim](upper estimates)[/]")
         for w in data.get("warnings", []):
             console.print(f"[yellow]warning[/]: {w}")
 

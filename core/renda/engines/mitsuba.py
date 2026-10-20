@@ -212,6 +212,11 @@ class MitsubaEngine(Engine):
                      "rfilter": _rfilter(pkg, for_oidn=use_oidn), "sample_border": True},
             "sampler": {"type": "independent", "sample_count": spp_sub, "seed": pkg.render.seed},
         }
+        out_w, out_h = width, height
+        if plan.tiles and plan.active_tile is not None:  # fast-mode tile: same camera/sampling, crop window only
+            x0, y0, x1, y1 = plan.tiles[plan.active_tile]
+            sensor["film"].update({"crop_offset_x": x0, "crop_offset_y": y0, "crop_width": x1 - x0, "crop_height": y1 - y0})
+            out_w, out_h = x1 - x0, y1 - y0
         if thin_lens:
             sensor["aperture_radius"] = float(first.aperture_radius)
             sensor["focus_distance"] = float(first.focus_distance)
@@ -229,7 +234,7 @@ class MitsubaEngine(Engine):
             # OptixDenoiser aborts the whole process (uncatchable) when the driver's weights file is absent,
             # as on Modal's GPUs, so check for it first.
             if use_optix:
-                denoiser = mi.OptixDenoiser(input_size=[width, height], albedo=False, normals=False, temporal=False)
+                denoiser = mi.OptixDenoiser(input_size=[out_w, out_h], albedo=False, normals=False, temporal=False)
             elif not use_oidn and spp < 128 and not variant.startswith("cuda"):
                 warnings.append(f"mitsuba: no denoiser available (install pyoidn); {variant} output is undenoised at {spp} spp")
 

@@ -142,6 +142,16 @@ def build_tasks(job: Any, plan: Any, scene_formats: Sequence[str], output_format
         return []  # the training container renders the views itself
     local_dir = bake_views_dir(asset_root or "/assets", job.jobId) if training else None
     prefix = f"work/{job.jobId}/frames/" if video else job.outputPrefix
+    tiles = get(plan, "tiles")
+    if tiles:  # fast-mode still: one container per tile, each under its own prefix; the coordinator stitches
+        return [
+            ChunkTask(
+                job_id=job.jobId, chunk=i, frames=[1], runner=runner, package=job.package,
+                inputs={k: str(v) for k, v in job.inputs.items()}, plan=with_active_tile(plan, i),
+                callback_url=str(job.callbackUrl), upload_prefix=tile_prefix(job.jobId, i), final=False,
+            )
+            for i in range(len(tiles))
+        ]
     return [
         ChunkTask(
             job_id=job.jobId,
@@ -158,6 +168,26 @@ def build_tasks(job: Any, plan: Any, scene_formats: Sequence[str], output_format
         )
         for i, frames in enumerate(plan_chunks(plan))
     ]
+
+
+def with_active_tile(plan: Any, index: int) -> Any:
+    """The plan a tile's render container receives: identical, with `active_tile` set."""
+    import dataclasses
+
+    if dataclasses.is_dataclass(plan) and not isinstance(plan, type):
+        return dataclasses.replace(plan, active_tile=index)
+    return {**dict(plan), "active_tile": index}
+
+
+def tile_prefix(job_id: str, index: int) -> str:
+    return f"work/{job_id}/tiles/{index:02d}/"
+
+
+def tile_owned(box: Sequence[int], width: int, height: int, overlap: int) -> list[int]:
+    """Region of a padded tile box that lands in the stitched frame (mirrors core.planner.tile_owned)."""
+    x0, y0, x1, y1 = box
+    return [x0 + (overlap if x0 > 0 else 0), y0 + (overlap if y0 > 0 else 0),
+            x1 - (overlap if x1 < width else 0), y1 - (overlap if y1 < height else 0)]
 
 
 def build_train_task(job: Any, plan: Any, asset_root: Path | str) -> TrainTask:

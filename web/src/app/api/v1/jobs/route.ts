@@ -8,6 +8,8 @@ const Body = z.object({
   package: z.unknown(),
   kind: z.enum(["scene", "hyperframes"]).default("scene"),
   priority: z.enum(["economy", "standard", "rush"]).default("standard"),
+  /** Fast mode: alias for priority "rush" (wider fan-out on faster GPUs, costs a bit more). */
+  fast: z.boolean().optional(),
   idempotencyKey: z.string().min(1).max(200).optional(),
 });
 
@@ -21,7 +23,7 @@ export const POST = api(async (req) => {
     userId: user?.id ?? null,
     kind: b.kind,
     package: b.package,
-    priority: b.priority,
+    priority: b.fast ? "rush" : b.priority,
     idempotencyKey: b.idempotencyKey ?? req.headers.get("idempotency-key") ?? undefined,
   });
   return Response.json(job, { status: 201 });

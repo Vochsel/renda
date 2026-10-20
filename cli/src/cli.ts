@@ -69,6 +69,7 @@ Render
   renda bake <file|pkg.renda.json> [--mode unlit|ao|lightmap] [--size 2048] [--engine auto|blender-cycles|mitsuba|threejs]
                bake lighting into the textures and download a .glb   (--glb: plain conversion, no bake)
                [--frames a-b] [--format png|mp4|…] [-o dir] [--no-wait] [--max-minutes N] [--local]
+               [--fast]  fast mode: wider fan-out on faster GPUs, costs a bit more (= --priority rush)
                [--texture "material=/Wood.*/i,slot=baseColor,scale=4:./oak.jpg"]  (repeatable; any image or video)
   renda splat <file|pkg> [--preset fast|standard|high] [--format spz|ply|splat] [--views N] [--steps N]
         [--coverage auto|sphere|hemisphere|orbit] [--fan-out | --no-fan-out]
@@ -160,6 +161,12 @@ class Ctx {
 type Handler = (ctx: Ctx, args: string[]) => Promise<void>;
 
 const minutes = (s: number) => `${(s / 60).toFixed(1)} min`;
+
+/** `--fast` is fast mode, an alias for `--priority rush`. */
+function priorityOf(ctx: Ctx): "economy" | "standard" | "rush" {
+  if (bool(ctx.flags, "fast")) return "rush";
+  return (str(ctx.flags, "priority") as "economy" | "standard" | "rush" | undefined) ?? "standard";
+}
 
 const COMMANDS: Record<string, Handler> = {
   // ---------------- setup ----------------
@@ -393,9 +400,13 @@ const COMMANDS: Record<string, Handler> = {
     const { pkg, baseDir } = await buildPackage(ctx, file);
     const { client } = await ctx.authed(true);
     const { package: uploadedPkg } = await uploadLocalPaths(client, pkg as any, baseDir);
-    const est: any = await client.estimate(uploadedPkg as any);
+    const est: any = await client.estimate(uploadedPkg as any, "scene", priorityOf(ctx));
     const [lo, hi] = est.estCostUsd ?? [0, 0];
-    ctx.out.ok({ estimate: est }, `${est.engine ?? "?"} on ${est.hardware ?? "?"}: ~${minutes(est.estSeconds?.[0] ?? 0)}–${minutes(est.estSeconds?.[1] ?? 0)}, $${lo.toFixed(3)}–$${hi.toFixed(3)}`,
+    const f = est.priorities?.rush, st = est.priorities?.standard;
+    const compare = f && st
+      ? `\nfast (--fast): $${f.estCostUsd[1].toFixed(3)} in ~${minutes(f.estWallSeconds[1])}  vs  standard: $${st.estCostUsd[1].toFixed(3)} in ~${minutes(st.estWallSeconds[1])} (upper estimates)`
+      : "";
+    ctx.out.ok({ estimate: est }, `${est.engine ?? "?"} on ${est.hardware ?? "?"}: ~${minutes(est.estSeconds?.[0] ?? 0)}–${minutes(est.estSeconds?.[1] ?? 0)}, $${lo.toFixed(3)}–$${hi.toFixed(3)}${compare}`,
       [`renda render ${file}${hi > 0.5 ? " --max-minutes " + Math.ceil((est.estSeconds?.[1] ?? 60) / 60) : ""}`]);
   },
 
@@ -520,7 +531,7 @@ async function submitAndFinish(ctx: Ctx, pkg: any, baseDir: string) {
         "Lower --res/--quality/--frames, or raise --max-minutes.", [], { estimate: est });
     }
   }
-  let job = await client.createJob({ package: uploadedPkg as any, priority: (str(ctx.flags, "priority") as any) ?? "standard" });
+  let job = await client.createJob({ package: uploadedPkg as any, priority: priorityOf(ctx) });
   ctx.out.info(`job ${job.id} ${job.status}`);
   if (ctx.flags.wait !== false) job = await waitJob(ctx, client, job);
   await finish(ctx, job, trial?.claimUrl);
@@ -644,7 +655,7 @@ async function runLocal(ctx: Ctx, file: string, command: "render" | "bake" | "sp
   if (!uvx) throw new CliError("uv_missing", "Local rendering uses the Python CLI via uvx, which isn't installed.", EXIT.error, UV_INSTALL_HINT, [`uvx renda ${command} ${file}`]);
   const pass: string[] = ["renda", command, file];
   for (const [k, v] of Object.entries(ctx.flags)) {
-    if (["local", "wait", "json", "max-minutes", "priority"].includes(k)) continue;
+    if (["local", "wait", "json", "max-minutes", "priority", "fast"].includes(k)) continue;
     if (k === "texture") {  // repeatable, and values contain commas: pass each one
       for (const t of ctx.lists.texture ?? []) pass.push("--texture", t);
       continue;

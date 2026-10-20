@@ -58,6 +58,14 @@ def configure_engine(scene, job: dict) -> None:
     r = scene.render
     r.resolution_x, r.resolution_y = job["resolution"]
     r.resolution_percentage = 100
+    border = job.get("border")
+    if border:  # fast-mode tile: same camera and sampling, only this region, output cropped to it
+        w, h = job["resolution"]
+        x0, y0, x1, y1 = border
+        r.use_border = True
+        r.use_crop_to_border = True
+        r.border_min_x, r.border_max_x = x0 / w, x1 / w
+        r.border_min_y, r.border_max_y = 1 - y1 / h, 1 - y0 / h  # Blender's border origin is bottom-left
     r.film_transparent = bool(job["transparent_film"])
     r.use_persistent_data = True  # keep BVH/textures between frames: big win for animations
     if eng == "cycles":

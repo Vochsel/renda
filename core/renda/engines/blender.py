@@ -214,6 +214,8 @@ class BlenderEngine(Engine):
             "engine": self.flavour,
             "frames": frames,
             "resolution": list(pkg.render.resolution),
+            # fast-mode tile: render only this [x0, y0, x1, y1] box of the full frame (pixels, top-left origin)
+            "border": (list(plan.tiles[plan.active_tile]) if plan.tiles and plan.active_tile is not None else None),
             "samples": samples_for(self.name, pkg.render.quality, pkg.render.samples),
             "adaptive_threshold": ADAPTIVE_THRESHOLD[pkg.render.quality],
             "denoise": pkg.render.denoise,
