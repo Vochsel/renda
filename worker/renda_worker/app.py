@@ -188,16 +188,28 @@ if not modal.is_local():
 
 # ---------------------------------------------------------------- wiring helpers
 
+_STORAGE = None
+
+
+def _storage():
+    # One R2 client per container: reusing its connection pool saves a TLS handshake per upload.
+    global _STORAGE
+    if _STORAGE is None:
+        from renda_worker.storage import R2Storage
+
+        _STORAGE = R2Storage()
+    return _STORAGE
+
+
 def _deps(job_id: str, callback_url: str, **kw):
     from renda_worker.core_api import RendaCore
     from renda_worker.events import EventSink
     from renda_worker.pipeline import Deps
-    from renda_worker.storage import R2Storage
 
-    events = EventSink(job_id, callback_url, os.environ["RENDA_WORKER_SECRET"])
+    events = EventSink(job_id, callback_url, os.environ["RENDA_WORKER_SECRET"], background=True)
     return Deps(
         core=RendaCore(),
-        storage=R2Storage(),
+        storage=_storage(),
         events=events,
         asset_root=Path(ASSET_ROOT),
         is_canceled=lambda: bool(cancel_flags.get(job_id, False)),
@@ -297,6 +309,20 @@ def _use_kernel_cache() -> None:
     os.environ["__GL_SHADER_DISK_CACHE_SIZE"] = str(2 << 30)
     # gsplat is precompiled; if torch ever falls back to JIT-building an extension, keep it too.
     os.environ["TORCH_EXTENSIONS_DIR"] = f"{CACHE_ROOT}/torch_extensions"
+    # Dr.Jit (Mitsuba) caches compiled CUDA/LLVM kernels in ~/.drjit, which a fresh container doesn't have
+    # (measured: a 1280×720 Mitsuba still rendered in 4.1 s warm vs 6.6 s cold). It has no env override,
+    # so point the directory at the Volume.
+    drjit = Path.home() / ".drjit"
+    try:
+        Path(f"{CACHE_ROOT}/drjit").mkdir(parents=True, exist_ok=True)
+        if not drjit.is_symlink():
+            if drjit.exists():
+                import shutil
+
+                shutil.rmtree(drjit, ignore_errors=True)
+            drjit.symlink_to(f"{CACHE_ROOT}/drjit")
+    except OSError:
+        pass  # caching is an optimisation; never fail a render over it
 
 
 @app.function(image=blender_image, gpu=_L40S.gpu, secrets=SECRETS,

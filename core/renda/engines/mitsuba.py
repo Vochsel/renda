@@ -283,7 +283,7 @@ class MitsubaEngine(Engine):
                 save_beauty(rgba, ctx.out_dir / frame_filename("beauty", f, "png"), "png", True, None, tm_mode, exposure)
             else:
                 files.append(save_beauty(rgba, ctx.out_dir / frame_filename("beauty", f, ext), ext, pkg.output.transparent, bgc,
-                                         tm_mode, exposure))
+                                         tm_mode, exposure, fast=pkg.output.is_video))
             pass_ext = "exr" if pkg.output.format == "exr" else "png"
             for p in passes:
                 if p == "alpha":

@@ -191,3 +191,40 @@ def test_all_usage_is_reported_before_done(make_deps, recorder):
     pipeline.run_scene_job(JobRequest.model_validate(body), deps)
     types = [e["type"] for e in recorder.events]
     assert types.index("done") > max(i for i, t in enumerate(types) if t == "usage")
+
+
+def test_single_chunk_video_encodes_in_the_render_container(make_deps, recorder):
+    core = FakeCore(frames=range(1, 4), chunks=[[1, 2, 3]], engine="blender-eevee", hardware="gpu-l4", output="mp4")
+    deps = _wire(make_deps(core))
+
+    def no_encode_container(task):
+        raise AssertionError("one chunk must not use a separate encode container")
+
+    deps.run_encode = no_encode_container
+    body = job_body()
+    body["package"]["output"] = {"format": "mp4", "keepFrames": True}
+    out = pipeline.run_scene_job(JobRequest.model_validate(body), deps)
+
+    assert out["status"] == "succeeded", out
+    video = out["outputs"][0]
+    assert video["key"] == "outputs/job_1/teapot.mp4" and video["contentType"] == "video/mp4"
+    assert deps.storage.objects[video["key"]][0].startswith(b"mp4:frame_0001.png,frame_0002.png,frame_0003.png")
+    assert [o["key"] for o in out["outputs"][1:]] == [f"outputs/job_1/frames/frame_000{i}.png" for i in (1, 2, 3)]
+    assert not any(k.startswith("work/") for k in deps.storage.objects)  # frames never round-trip through R2
+    assert {e["chunk"] for e in recorder.of("usage")} == {0, "orchestrate"}
+    assert out["timings"]["chunks"][0]["encode"] >= 0
+
+
+def test_background_events_keep_order_and_flush_before_usage():
+    from renda_worker.events import EventSink
+
+    sent = []
+    sink = EventSink("job_1", "https://api.test/e", "s3cret", poster=lambda u, b, h: sent.append(b) or 200,
+                     sleep=lambda s: None, background=True)
+    sink.status("planning", progress=0.0)
+    sink.warning("w1")
+    sink.usage("cpu", 1.0, "orchestrate")  # flushes the queue first
+    sink.done([], cached=False)
+    import json
+
+    assert [json.loads(b)["type"] for b in sent] == ["status", "warning", "usage", "done"]

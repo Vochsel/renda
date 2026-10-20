@@ -90,6 +90,9 @@ def rasterize(splats: Splats, cam: ResolvedCamera, width: int, height: int, back
 # -- gsplat (CUDA) ----------------------------------------------------------------------------
 
 
+_GPU_SPLATS = None  # (splats, tensors) of the last splat set uploaded to the GPU
+
+
 def _rasterize_gsplat(s: Splats, cam: ResolvedCamera, width: int, height: int) -> SplatLayer:
     import torch
     from gsplat import rasterization
@@ -97,10 +100,16 @@ def _rasterize_gsplat(s: Splats, cam: ResolvedCamera, width: int, height: int) -
     dev = torch.device("cuda")
     view, k = camera_matrices(cam, width, height)
     t = lambda a: torch.from_numpy(np.ascontiguousarray(a, dtype=np.float32)).to(dev)  # noqa: E731
-    coeffs = s.sh_dc[:, None, :] if s.sh_rest is None else np.concatenate([s.sh_dc[:, None, :], s.sh_rest], 1)
+    global _GPU_SPLATS
+    if _GPU_SPLATS is None or _GPU_SPLATS[0] is not s:
+        # Upload once per splat set, not once per frame (a turntable reuses the same tensors).
+        coeffs = s.sh_dc[:, None, :] if s.sh_rest is None else np.concatenate([s.sh_dc[:, None, :], s.sh_rest], 1)
+        with torch.no_grad():
+            _GPU_SPLATS = (s, (t(s.means), t(s.rotations), torch.exp(t(s.scales)), torch.sigmoid(t(s.opacities)), t(coeffs)))
+    means, quats, scales, opacities, colors_in = _GPU_SPLATS[1]
     with torch.no_grad():
         colors, alphas, _ = rasterization(
-            t(s.means), t(s.rotations), torch.exp(t(s.scales)), torch.sigmoid(t(s.opacities)), t(coeffs),
+            means, quats, scales, opacities, colors_in,
             t(view)[None], t(k)[None], width, height, near_plane=NEAR, far_plane=1e10,
             sh_degree=s.sh_degree, render_mode="RGB+ED",
             rasterize_mode="antialiased" if s.antialiased else "classic",
@@ -257,9 +266,7 @@ def ray_directions(cam: ResolvedCamera, width: int, height: int) -> np.ndarray:
 def env_background(env_rgb: np.ndarray, cam: ResolvedCamera, width: int, height: int, up_axis: str,
                    rotation_deg: float = 0.0, intensity: float = 1.0) -> np.ndarray:
     """Equirect (renda/hdri.py convention, Y-up) seen through `cam` → (H,W,3) display RGB."""
-    from ..images import linear_to_srgb, tonemap
-
-    d = ray_directions(cam, width, height)
+    d = ray_directions(cam, width, height).astype(np.float32)
     if up_axis == "Z":  # stage Z-up → env Y-up
         d = np.stack([d[..., 0], d[..., 2], -d[..., 1]], -1)
     a = math.radians(rotation_deg)
@@ -270,7 +277,23 @@ def env_background(env_rgb: np.ndarray, cam: ResolvedCamera, width: int, height:
     h, w = env_rgb.shape[:2]
     u = ((phi / (2 * math.pi) + 0.5) * w).astype(np.int64) % w
     v = np.clip((theta / math.pi * h).astype(np.int64), 0, h - 1)
-    return linear_to_srgb(tonemap(env_rgb[v, u, :3] * intensity))
+    # Tonemapping is per-pixel, so tonemap the (static) map once and index it per frame instead of
+    # tonemapping every frame's full image (it dominated gsplat turntable frame time).
+    return _display_env(env_rgb, intensity)[v, u]
+
+
+_DISPLAY_ENV: dict = {}
+
+
+def _display_env(env_rgb: np.ndarray, intensity: float) -> np.ndarray:
+    from ..images import linear_to_srgb, tonemap
+
+    key = (id(env_rgb), env_rgb.shape, float(intensity))
+    if key not in _DISPLAY_ENV:
+        if len(_DISPLAY_ENV) > 4:
+            _DISPLAY_ENV.clear()
+        _DISPLAY_ENV[key] = linear_to_srgb(tonemap(env_rgb[..., :3] * intensity))
+    return _DISPLAY_ENV[key]
 
 
 def read_env(path) -> np.ndarray:
