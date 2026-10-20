@@ -7,7 +7,7 @@ import { useEffect, useRef, useState } from "react";
  * with Spark. Slow orbit until the visitor grabs it. Bounds come from the core loader so we don't load the mesh.
  */
 const HERO = {
-  src: "/splats/porsche-hero.spz",
+  src: "/splats/porsche-hero-v2.spz",
   center: [0.0, 0.78, 0.22] as const,
   radius: 2.55,
 };
