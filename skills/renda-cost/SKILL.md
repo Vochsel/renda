@@ -47,6 +47,8 @@ upper bound is above about $1, or above what they said they'd spend:
 ## Cheap-by-default habits
 
 - Draft first, look, then final (the `renda` skill workflow). A draft is usually under 5% of a final.
+  With `engine: auto`, drafts of mesh formats (glTF, USD, STL, OBJ, STEP, …) run on three.js on CPU — the cheapest
+  rate and no wait for a GPU; `.blend/.fbx/.abc` drafts use Eevee.
 - For video, check one still frame before rendering all frames.
 - Reuse uploads: assets are content-addressed, so re-uploading the same file is instant and free.
 - Batch variations as separate small jobs rather than one huge one; unchanged ones hit the cache.

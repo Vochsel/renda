@@ -16,13 +16,35 @@ def P(**kw):
     ("a.blend", "draft", "blender-eevee"),
     ("a.fbx", "final", "blender-cycles"),
     ("a.json", "standard", "threejs"),
-    ("a.stl", "draft", "blender-workbench"),
+    ("a.stl", "draft", "threejs"),
+    ("a.step", "draft", "threejs"),
     ("a.obj", "standard", "mitsuba"),
     ("a.glb", "standard", "blender-cycles"),
-    ("a.usdz", "draft", "blender-eevee"),
+    ("a.glb", "draft", "threejs"),
+    ("a.usdz", "draft", "threejs"),
 ])
 def test_auto_engine(root, quality, engine):
     assert plan(P(root=root, render={"quality": quality}), None).engine == engine
+
+
+def test_draft_preview_runs_on_cpu_and_falls_back_to_gpu_engines():
+    p = plan(P(root="a.stl", render={"quality": "draft"}), None)
+    assert (p.engine, p.hardware) == ("threejs", "cpu")
+    # no browser engine on this machine/image → previous GPU choice
+    assert plan(P(root="a.stl", render={"quality": "draft"}), None, available={"blender-workbench", "mitsuba"}).engine == "blender-workbench"
+    assert plan(P(root="a.glb", render={"quality": "draft"}), None, available={"blender-eevee", "mitsuba"}).engine == "blender-eevee"
+
+
+def test_auto_engine_matches_shared_fixture():
+    """Same table as web/test/estimate.test.ts, so the web estimate picks the engine the worker will."""
+    import json
+    from pathlib import Path
+
+    from renda.planner import choose_engine
+
+    cases = json.loads((Path(__file__).parents[2] / "spec/fixtures/estimator/auto-engine.json").read_text())["cases"]
+    for c in cases:
+        assert choose_engine(c["format"], c["quality"], None, mixed=c.get("mixed", False))[0] == c["engine"], c
 
 
 def test_auto_engine_respects_availability():

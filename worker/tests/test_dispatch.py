@@ -96,3 +96,23 @@ def test_glb_outputs_and_export_runner():
     assert dispatch.runner_for("export", Hardware.CPU, ["gltf"]) == "cpu"
     assert dispatch.runner_for("export", Hardware.CPU, ["blend"]) == "blender-cpu"
     assert dispatch.runner_for("blender-cycles", Hardware.GPU_L4, ["gltf"]) == "l4"
+
+
+def test_autoscaler_knobs_and_gpu_fallback(monkeypatch):
+    import importlib
+
+    from renda_worker import hardware
+
+    monkeypatch.setenv("RENDA_SCALEDOWN_GPU_L4", "90")
+    monkeypatch.setenv("RENDA_BUFFER_GPU_L4", "1")
+    monkeypatch.setenv("RENDA_L4_FALLBACK_GPUS", "A10G,L4")
+    h = importlib.reload(hardware)
+    try:
+        l4 = h.SHAPES[h.Hardware.GPU_L4]
+        assert (l4.scaledown_s, l4.buffer_containers, l4.min_containers) == (90, 1, 0)
+        assert h.gpu_request(l4, h.L4_FALLBACK_GPUS) == ["L4", "A10G"]  # primary not repeated
+        assert h.gpu_request(h.SHAPES[h.Hardware.CPU], h.L4_FALLBACK_GPUS) is None
+        assert h.gpu_request(l4, []) == "L4"
+    finally:
+        monkeypatch.undo()
+        importlib.reload(hardware)

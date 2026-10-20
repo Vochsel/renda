@@ -6,7 +6,8 @@ preemption (chunks are idempotent). web/src/lib/pricing.ts sells render-minutes 
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, replace
 from enum import Enum
 
 
@@ -28,20 +29,51 @@ class Shape:
     scaledown_s: int
 
 
+    min_containers: int = 0
+    buffer_containers: int = 0
+
+
+def _tuned(name: str, shape: Shape) -> Shape:
+    """Deploy-time autoscaler overrides, e.g. RENDA_SCALEDOWN_GPU_L4=60, RENDA_BUFFER_GPU_L4=1.
+
+    Idle containers inside the scaledown window are billed to us, and at low traffic the next job
+    rarely lands inside it, so defaults are short and nothing is kept warm. Raise them when traffic
+    makes warm hits likely (see renda-ops for the break-even maths).
+    """
+    def num(kind: str, current: int) -> int:
+        raw = os.environ.get(f"RENDA_{kind}_{name}")
+        return int(raw) if raw not in (None, "") else current
+
+    return replace(shape, scaledown_s=num("SCALEDOWN", shape.scaledown_s), min_containers=num("MIN", shape.min_containers),
+                   buffer_containers=num("BUFFER", shape.buffer_containers))
+
+
 # GPU containers get just enough CPU to feed the GPU and load scenes; CPU containers are
 # sized for Cycles/Mitsuba-LLVM scaling (near-linear to ~8 physical cores, worse beyond).
-# Short scaledown on GPUs: idle GPU time is the most expensive thing we can waste.
+# Cold starts measure ~6–12 s median (snapshot restore), so short scaledowns cost little latency.
 SHAPES: dict[Hardware, Shape] = {
-    Hardware.CPU: Shape(gpu=None, cpu_cores=8.0, memory_mib=16384, timeout_s=60 * 60, max_containers=200, scaledown_s=60),
-    Hardware.GPU_L4: Shape(gpu="L4", cpu_cores=4.0, memory_mib=16384, timeout_s=60 * 60, max_containers=50, scaledown_s=30),
-    Hardware.GPU_L40S: Shape(gpu="L40S", cpu_cores=8.0, memory_mib=32768, timeout_s=2 * 60 * 60, max_containers=20, scaledown_s=20),
+    Hardware.CPU: _tuned("CPU", Shape(gpu=None, cpu_cores=8.0, memory_mib=16384, timeout_s=60 * 60, max_containers=200, scaledown_s=20)),
+    Hardware.GPU_L4: _tuned("GPU_L4", Shape(gpu="L4", cpu_cores=4.0, memory_mib=16384, timeout_s=60 * 60, max_containers=50, scaledown_s=15)),
+    Hardware.GPU_L40S: _tuned("GPU_L40S", Shape(gpu="L40S", cpu_cores=8.0, memory_mib=32768, timeout_s=2 * 60 * 60, max_containers=20, scaledown_s=10)),
 }
 
 # Small shapes for the non-render steps.
-ORCHESTRATE = Shape(gpu=None, cpu_cores=0.25, memory_mib=1024, timeout_s=6 * 60 * 60, max_containers=500, scaledown_s=120)
-ENCODE = Shape(gpu=None, cpu_cores=4.0, memory_mib=8192, timeout_s=60 * 60, max_containers=100, scaledown_s=60)
-HYPERFRAMES = Shape(gpu=None, cpu_cores=4.0, memory_mib=8192, timeout_s=2 * 60 * 60, max_containers=100, scaledown_s=60)
-THREEJS = Shape(gpu=None, cpu_cores=2.0, memory_mib=4096, timeout_s=30 * 60, max_containers=100, scaledown_s=60)
+ORCHESTRATE = _tuned("ORCHESTRATE", Shape(gpu=None, cpu_cores=0.25, memory_mib=1024, timeout_s=6 * 60 * 60, max_containers=500, scaledown_s=60))
+ENCODE = _tuned("ENCODE", Shape(gpu=None, cpu_cores=4.0, memory_mib=8192, timeout_s=60 * 60, max_containers=100, scaledown_s=15))
+HYPERFRAMES = _tuned("HYPERFRAMES", Shape(gpu=None, cpu_cores=4.0, memory_mib=8192, timeout_s=2 * 60 * 60, max_containers=100, scaledown_s=20))
+THREEJS = _tuned("THREEJS", Shape(gpu=None, cpu_cores=2.0, memory_mib=4096, timeout_s=30 * 60, max_containers=100, scaledown_s=20))
+
+# GPUs the Blender/Mitsuba L4 runner may fall back to when no L4 is free (cold starts waited 25–166 s for
+# an L4 in testing). Cycles ships kernels for every arch and Dr.Jit JITs per device, so an A10G renders
+# the same image. Not used for splat runners: gsplat is compiled for sm_89 (L4/L40S) only.
+L4_FALLBACK_GPUS = [g for g in os.environ.get("RENDA_L4_FALLBACK_GPUS", "A10G").split(",") if g.strip()]
+
+
+def gpu_request(shape: Shape, fallback: list[str] | None = None) -> str | list[str] | None:
+    """Modal `gpu=` value: the shape's GPU, then any fallbacks in order."""
+    if shape.gpu is None or not fallback:
+        return shape.gpu
+    return [shape.gpu, *[g.strip() for g in fallback if g.strip() and g.strip() != shape.gpu]]
 
 
 def parse(value: str) -> Hardware:
