@@ -27,6 +27,7 @@ from .events import EventSink
 from .hyperframes import build_render_command, localize_variables
 from .models import HyperframesPackage, JobRequest
 from .storage import Storage, content_type
+from .telemetry import capture_exception
 
 log = logging.getLogger("renda.pipeline")
 
@@ -288,6 +289,7 @@ def run_scene_job(job: JobRequest, deps: Deps) -> dict[str, Any]:
         return {"status": "canceled"}
     except Exception as exc:
         log.exception("job %s failed", job.jobId)
+        capture_exception(exc, job_id=job.jobId, kind="scene", priority=job.priority)
         ev.failed(f"{type(exc).__name__}: {exc}")
         return {"status": "failed", "error": str(exc)}
     finally:
@@ -583,6 +585,7 @@ def run_hyperframes_job(job: JobRequest, deps: Deps, run: Runner = _subprocess_r
         return {"status": "canceled"}
     except Exception as exc:
         log.exception("hyperframes job %s failed", job.jobId)
+        capture_exception(exc, job_id=job.jobId, kind="hyperframes")
         ev.failed(f"{type(exc).__name__}: {exc}")
         return {"status": "failed", "error": str(exc)}
     finally:

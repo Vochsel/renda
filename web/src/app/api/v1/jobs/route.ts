@@ -3,6 +3,7 @@ import { api, readJson } from "@/lib/http";
 import { authenticate } from "@/lib/auth";
 import { rateLimit } from "@/lib/ratelimit";
 import { listJobs, serializeJob, submitJob } from "@/lib/jobs";
+import { clientOf, track } from "@/lib/posthog";
 
 const Body = z.object({
   package: z.unknown(),
@@ -25,6 +26,21 @@ export const POST = api(async (req) => {
     package: b.package,
     priority: b.fast ? "rush" : b.priority,
     idempotencyKey: b.idempotencyKey ?? req.headers.get("idempotency-key") ?? undefined,
+  });
+  const pkg = (b.package ?? {}) as { output?: { format?: unknown }; render?: { engine?: unknown }; extends?: unknown };
+  track("job_submitted", { userId: user?.id, orgId: org.id }, {
+    job_id: job.id,
+    kind: job.kind,
+    priority: job.priority,
+    status: job.status,
+    cached: job.cached,
+    format: typeof pkg.output?.format === "string" ? pkg.output.format : undefined,
+    engine_requested: typeof pkg.render?.engine === "string" ? pkg.render.engine : undefined,
+    layered: pkg.extends !== undefined,
+    hardware: job.hardware,
+    estimate_usd: (job.estimate as { costUsd?: number } | undefined)?.costUsd,
+    client: clientOf(req),
+    trial: org.isTrial,
   });
   return Response.json(job, { status: 201 });
 });

@@ -5,6 +5,7 @@ import { authenticateKey, bearer } from "@/lib/auth";
 import { ApiError } from "@/lib/errors";
 import { appUrl } from "@/lib/env";
 import { clientIp, FORWARDED_IP_HEADER, signForwardedIp } from "@/lib/clientip";
+import { track } from "@/lib/posthog";
 
 export const maxDuration = 800;
 
@@ -14,9 +15,11 @@ export const maxDuration = 800;
  */
 async function handle(req: Request): Promise<Response> {
   const key = bearer(req);
+  let actor: { userId?: string | null; orgId?: string | null } = {};
   if (key) {
     try {
-      await authenticateKey(key);
+      const a = await authenticateKey(key);
+      actor = { userId: a.user?.id, orgId: a.org.id };
     } catch (e) {
       if (e instanceof ApiError) {
         return Response.json(e.toBody(), {
@@ -41,12 +44,28 @@ async function handle(req: Request): Promise<Response> {
     if (!url.startsWith(base)) return fetch(input, init);
     const headers = new Headers(init?.headers);
     headers.set(FORWARDED_IP_HEADER, forwarded);
+    headers.set("user-agent", "renda-mcp/0.1.0 (remote)");
     return fetch(input, { ...init, headers });
   };
   registerRendaTools(server, { client: new RendaClient({ baseUrl: base, apiKey: key ?? undefined, fetch: fetchWithIp }), mode: "remote" });
   const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
   await server.connect(transport);
+  if (req.method === "POST") await trackToolCalls(req.clone(), actor);
   return transport.handleRequest(req);
+}
+
+/** Which tools agents actually use (names only, never arguments). */
+async function trackToolCalls(req: Request, actor: { userId?: string | null; orgId?: string | null }) {
+  try {
+    const body = await req.json();
+    for (const m of Array.isArray(body) ? body : [body]) {
+      if (m?.method === "tools/call" && typeof m.params?.name === "string") {
+        track("mcp_tool_called", actor, { tool: m.params.name, transport: "remote", authenticated: Boolean(actor.orgId) });
+      }
+    }
+  } catch {
+    // not JSON / not ours to judge: the transport reports protocol errors itself
+  }
 }
 
 export { handle as GET, handle as POST, handle as DELETE };

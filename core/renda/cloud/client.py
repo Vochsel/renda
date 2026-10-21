@@ -77,7 +77,7 @@ class RendaClient:
         self.base_url = (base_url or api_url()).rstrip("/")
         self.key = key if key is not None else api_key()
         self.http = httpx.Client(timeout=timeout, follow_redirects=True,
-                                 headers={"user-agent": f"renda-cli/{_version()}"})
+                                 headers={"user-agent": f"renda-py/{_version()}"})
 
     # low level
     def request(self, method: str, path: str, body: Any = None, auth: bool = True, params: dict | None = None) -> Any:

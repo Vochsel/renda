@@ -140,7 +140,7 @@ uv pip install -e '../core[mitsuba]'
 ### Against Modal
 
 ```bash
-modal secret create renda-worker RENDA_WORKER_TOKEN=... RENDA_WORKER_SECRET=...
+modal secret create renda-worker RENDA_WORKER_TOKEN=... RENDA_WORKER_SECRET=... [POSTHOG_KEY=phc_...]   # POSTHOG_KEY optional: job exceptions → PostHog error tracking
 modal secret create renda-r2 R2_ACCOUNT_ID=... R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=... R2_BUCKET=renda
 
 modal serve renda_worker/app.py        # dev URLs: https://<ws>--renda-submit-dev.modal.run

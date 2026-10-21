@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { captureError, track } from "./posthog";
 import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import { db, schema } from "./db";
 import type { JobOutput } from "./db/schema";
@@ -346,13 +347,37 @@ export async function applyWorkerEvent(ev: WorkerEvent) {
       const outputs: JobOutput[] = ev.outputs.map(toJobOutput);
       await db().update(jobs).set({ status: "succeeded", progress: 1, outputs, cached: Boolean(ev.cached), finishedAt: new Date(), startedAt: job.startedAt ?? new Date() })
         .where(eq(jobs.id, job.id));
+      await trackFinished(job, "succeeded", { cached: Boolean(ev.cached), outputs: outputs.length }).catch(() => {});
       return { ok: true };
     }
     case "failed":
       if (TERMINAL.has(job.status)) return { ignored: true };
       await db().update(jobs).set({ status: "failed", error: ev.error, finishedAt: new Date() }).where(eq(jobs.id, job.id));
+      await trackFinished(job, "failed", { error: ev.error.slice(0, 300) }).catch(() => {});
+      // Render failures are product errors too: one error-tracking issue per kind of failure.
+      captureError(new Error(`job failed: ${ev.error.split("\n")[0].slice(0, 200)}`), {
+        userId: job.createdBy, orgId: job.orgId, job_id: job.id, engine: job.engine, hardware: job.hardware, source: "worker",
+      });
       return { ok: true };
   }
+}
+
+/** Billed totals come from the usage events (reported before `done`); the stopwatch is the job's own. */
+async function trackFinished(job: JobRow, status: "succeeded" | "failed", extra: Record<string, unknown>) {
+  const [fresh] = await db().select().from(jobs).where(eq(jobs.id, job.id)).catch(() => [job]);
+  const j = fresh ?? job;
+  track(`job_${status}`, { userId: j.createdBy, orgId: j.orgId }, {
+    job_id: j.id,
+    kind: j.kind,
+    priority: j.priority,
+    engine: j.engine,
+    hardware: j.hardware,
+    billed_seconds: Math.round((j.secondsCpu + j.secondsGpuL4 + j.secondsGpuL40s) * 10) / 10,
+    cost_usd: j.costUsd,
+    estimate_usd: (j.estimate as { costUsd?: number } | null)?.costUsd,
+    wall_seconds: j.startedAt ? Math.round((Date.now() - j.startedAt.getTime()) / 100) / 10 : undefined,
+    ...extra,
+  });
 }
 
 /**

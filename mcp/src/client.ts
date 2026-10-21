@@ -141,6 +141,8 @@ export interface RendaClientOptions {
   baseUrl?: string;
   apiKey?: string;
   fetch?: typeof fetch;
+  /** Sent as User-Agent from Node (browsers ignore it). Lets the API tell CLI, MCP and scripts apart. */
+  userAgent?: string;
 }
 
 /** Production API. Override with RENDA_API_URL. (Domain may move to renda.online.) */
@@ -150,10 +152,12 @@ export class RendaClient {
   baseUrl: string;
   apiKey?: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly userAgent: string;
 
-  constructor({ baseUrl = DEFAULT_API_URL, apiKey, fetch: fetchImpl }: RendaClientOptions = {}) {
+  constructor({ baseUrl = DEFAULT_API_URL, apiKey, fetch: fetchImpl, userAgent = "renda-mcp/0.1.0" }: RendaClientOptions = {}) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.apiKey = apiKey;
+    this.userAgent = userAgent;
     this.fetchImpl = fetchImpl ?? globalThis.fetch.bind(globalThis);
   }
 
@@ -163,7 +167,7 @@ export class RendaClient {
       throw new RendaApiError(401, "unauthenticated", "No Renda API key configured.",
         "Start a free trial (renda_trial / `renda trial`), or call renda_signup with the user's email, ask the user for the 6-digit code from the email, then renda_verify. Or set RENDA_API_KEY.");
     }
-    const headers: Record<string, string> = { accept: "application/json" };
+    const headers: Record<string, string> = { accept: "application/json", "user-agent": this.userAgent };
     if (body !== undefined) headers["content-type"] = "application/json";
     if (auth && this.apiKey) headers.authorization = `Bearer ${this.apiKey}`;
     let res: Response;

@@ -136,7 +136,7 @@ class Ctx {
   }
   async client(): Promise<RendaClient> {
     await this.load();
-    return new RendaClient({ baseUrl: this.apiUrl, apiKey: this.deps.env.RENDA_API_KEY || this.creds.apiKey, fetch: this.deps.fetch });
+    return new RendaClient({ baseUrl: this.apiUrl, apiKey: this.deps.env.RENDA_API_KEY || this.creds.apiKey, fetch: this.deps.fetch, userAgent: `renda-cli/${VERSION}` });
   }
   async save(c: Credentials) {
     await saveCredentials({ apiUrl: this.apiUrl, ...c }, this.deps.credentialsFile);

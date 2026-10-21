@@ -5,6 +5,7 @@ import { env, envOptional, appUrl } from "./env";
 import { ApiError } from "./errors";
 import { createApiKey } from "./accounts";
 import { workos } from "./workos";
+import { identify, track } from "./posthog";
 
 const { orgs, billing, trialRequests, memberships } = schema;
 
@@ -91,6 +92,7 @@ export async function createTrial(ip: string | null) {
   await db().insert(billing).values({ orgId: org.id, freeSecondsRemaining: trialSeconds() });
   await db().insert(trialRequests).values({ ipHash, orgId: org.id });
   const key = await createApiKey(org.id, null, "anonymous trial");
+  track("trial_started", { orgId: org.id });
   return { apiKey: key.apiKey, orgId: org.id, claimUrl: claimUrlFor(token), freeSecondsLeft: trialSeconds(), expiresAt };
 }
 
@@ -118,6 +120,8 @@ export async function claimTrial(token: string, user: { id: string; workosUserId
     .returning();
   if (!claimed) throw new ApiError("claim_invalid"); // lost a race with another claim
   await db().insert(memberships).values({ orgId: org.id, userId: user.id }).onConflictDoNothing();
+  identify({ userId: user.id, orgId: org.id }, { email: user.email }, { name, claimed_trial: true });
+  track("trial_claimed", { userId: user.id, orgId: org.id });
   const topUp = Math.max(0, Number(env("FREE_SECONDS")) - trialSeconds());
   await db()
     .update(billing)

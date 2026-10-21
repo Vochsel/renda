@@ -1,5 +1,6 @@
 import { ZodError } from "zod";
 import { ApiError } from "./errors";
+import { captureError } from "./posthog";
 
 type Handler<C> = (req: Request, ctx: C) => Promise<Response>;
 
@@ -19,6 +20,8 @@ export function api<C>(handler: Handler<C>): Handler<C> {
         return Response.json(err.toBody(), { status: err.status });
       }
       console.error(e);
+      const url = new URL(req.url);
+      captureError(e, { route: url.pathname, method: req.method });
       const err = new ApiError("internal");
       return Response.json(err.toBody(), { status: 500 });
     }

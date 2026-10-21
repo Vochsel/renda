@@ -19,7 +19,7 @@ export function CreateKeyForm() {
         <Alert>
           <AlertTitle>Copy this key now — it won&apos;t be shown again</AlertTitle>
           <AlertDescription className="mt-2 flex flex-wrap items-center gap-2">
-            <code className="bg-muted rounded px-2 py-1 font-mono text-xs break-all">{state.apiKey}</code>
+            <code data-ph-mask className="bg-muted rounded px-2 py-1 font-mono text-xs break-all">{state.apiKey}</code>
             <Button size="sm" variant="outline" onClick={() => { void navigator.clipboard.writeText(state.apiKey!); setCopied(true); }}>
               {copied ? "Copied" : "Copy"}
             </Button>

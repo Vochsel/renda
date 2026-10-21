@@ -3,6 +3,7 @@ import { db, schema } from "./db";
 import { env } from "./env";
 import { generateApiKey } from "./apikeys";
 import { workos } from "./workos";
+import { identify, track } from "./posthog";
 
 const { orgs, users, memberships, apiKeys, billing } = schema;
 
@@ -51,12 +52,15 @@ export async function ensureAccount(u: WorkosUserLike, workosOrgId?: string | nu
     .insert(billing)
     .values({ orgId: org.id, freeSecondsRemaining: Number(env("FREE_SECONDS")) })
     .onConflictDoNothing();
+  identify({ userId: user.id, orgId: org.id }, { email: user.email, $set_once: { signed_up_at: new Date().toISOString() } }, { name: org.name });
+  track("signed_up", { userId: user.id, orgId: org.id });
   return { user, org };
 }
 
 export async function createApiKey(orgId: string, userId: string | null, name: string) {
   const k = generateApiKey();
   const [row] = await db().insert(apiKeys).values({ orgId, userId, name, prefix: k.prefix, hash: k.hash }).returning();
+  track("api_key_created", { userId, orgId }, { name });
   return { apiKey: k.key, id: row.id, prefix: row.prefix, name: row.name };
 }
 

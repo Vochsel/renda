@@ -74,6 +74,14 @@ get 30 free minutes. A full account by email works from a terminal too: `renda s
 
 Read [ARCHITECTURE.md](ARCHITECTURE.md) for how it fits together.
 
+## Telemetry
+
+The CLIs, MCP server and local rendering send no telemetry. They identify themselves to the hosted API with a
+User-Agent (`renda-cli/…`, `renda-mcp/…`, `renda-py/…`) and nothing else. The hosted service at renda.vochsel.com uses
+PostHog for usage analytics and error tracking: page views, job lifecycle events (format, engine, hardware,
+duration, cost), stack traces and the error messages of failed jobs. Package contents and render outputs are never sent. Self-hosted
+deployments send nothing unless you set `NEXT_PUBLIC_POSTHOG_KEY`.
+
 ## License
 
 Renda is open source under two licenses:
