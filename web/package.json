@@ -22,7 +22,7 @@
     "@rendahq/spec": "workspace:*",
     "@sparkjsdev/spark": "2.3.1",
     "@workos-inc/authkit-nextjs": "^4.4.0",
-    "@workos-inc/node": "^10.14.0",
+    "@workos-inc/node": "^11.0.0",
     "class-variance-authority": "^0.7.1",
     "cn": "^0.5.0",
     "drizzle-orm": "^0.45.4",
@@ -41,17 +41,17 @@
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.10",
     "@tailwindcss/turbopack": "^4",
-    "@types/node": "^24",
+    "@types/node": "^26",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/three": "0.180.0",
     "drizzle-kit": "^0.31.11",
-    "eslint": "^9",
+    "eslint": "^10",
     "eslint-config-next": "16.4.2",
     "shadcn": "^4.22.1",
     "tailwindcss": "^4",
-    "typescript": "^5",
-    "vitest": "^3.2.7"
+    "typescript": "^7",
+    "vitest": "^5.0.5"
   },
   "packageManager": "pnpm@10.14.0",
   "license": "AGPL-3.0-only"
