@@ -27,7 +27,8 @@ CORE_DIR = WORKER_DIR.parent / "core"
 
 BLENDER_VERSION = "4.5.14"  # 4.5 LTS
 BLENDER_SERIES = ".".join(BLENDER_VERSION.split(".")[:2])
-NODE_MAJOR = 22
+NODE_VERSION = "22.23.4"  # pinned: a version change rebuilds the image layer (Modal caches by command)
+NODE_MAJOR = NODE_VERSION.split(".")[0]
 HYPERFRAMES_VERSION = "0.8.173"
 # Gaussian splats: gsplat's CUDA kernels are compiled into the image (no prebuilt cp311 wheels exist),
 # for Ada GPUs (L4/L40S = sm_89).
@@ -69,7 +70,7 @@ def _llvm(image: modal.Image, distro: str = "bookworm") -> modal.Image:
 def _node(image: modal.Image) -> modal.Image:
     return image.apt_install("curl", "ca-certificates", "gnupg").run_commands(
         f"curl -fsSL https://deb.nodesource.com/setup_{NODE_MAJOR}.x | bash -",
-        "apt-get install -y --no-install-recommends nodejs && rm -rf /var/lib/apt/lists/*",
+        f"apt-get install -y --no-install-recommends nodejs={NODE_VERSION}-1nodesource1 && rm -rf /var/lib/apt/lists/*",
     )
 
 
