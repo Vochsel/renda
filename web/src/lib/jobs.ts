@@ -18,6 +18,7 @@ import { outputPrefix, presignGet } from "./r2";
 import { costUsd as priceOf, HARDWARE, type Hardware } from "./pricing";
 import { liveCost, METER_WRITE_INTERVAL_MS, type LiveCost } from "./live";
 import { workerJobCredentials } from "./worker-auth";
+import { supportEmail } from "./contact";
 
 const { jobs } = schema;
 type JobRow = typeof jobs.$inferSelect;
@@ -297,7 +298,7 @@ export async function sweepStaleJobs(now = Date.now()) {
     const quiet = (job.lastEventAt ?? job.createdAt).getTime() < now - quietMinutes * 60_000;
     const reason = quiet ? `no word from the render worker for ${quietMinutes} minutes` : `still running after ${maxHours} hours`;
     await cancelWorkerCall(job.id, job.modalCallId);
-    const row = await finishJob(job, { status: "failed", error: `Timed out: ${reason}. Retry, or contact support with the job id.` });
+    const row = await finishJob(job, { status: "failed", error: `Timed out: ${reason}. Retry, or contact support (${supportEmail()}) with the job id.` });
     if (!row) continue;
     failed.push(job.id);
     // Infrastructure failures: these never produce a worker `failed` event, so report them here.

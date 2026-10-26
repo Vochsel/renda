@@ -4,6 +4,7 @@ import { env } from "@/lib/env";
 import { stripe } from "@/lib/stripe";
 import { activateMeteredSubscription, setSubscription } from "@/lib/billing";
 import { captureError, track } from "@/lib/posthog";
+import { recordTermsAcceptance } from "@/lib/terms";
 
 const idOf = (v: string | { id: string } | null | undefined) => (typeof v === "string" ? v : v?.id ?? null);
 
@@ -26,6 +27,7 @@ export async function POST(req: Request) {
         if (sub) await setSubscription(customer, sub.id, sub.status);
         const orgId = await setPaymentMethod(customer, true);
         track("payment_method_added", { orgId });
+        if (orgId) await recordTermsAcceptance({ orgId }, "checkout"); // Checkout shows the Terms notice (lib/billing.ts)
       }
       break;
     }

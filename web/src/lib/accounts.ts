@@ -5,6 +5,8 @@ import { generateApiKey } from "./apikeys";
 import { workos } from "./workos";
 import { identify, track } from "./posthog";
 import { claimFreeGrant } from "./freegrants";
+import { recordTermsAcceptance, type AcceptanceVia } from "./terms";
+import { TERMS_VERSION } from "./legal";
 
 const { orgs, users, memberships, apiKeys, billing } = schema;
 
@@ -25,7 +27,7 @@ export async function upsertUser(u: WorkosUserLike) {
  * Find or create the user's org. New orgs get a WorkOS organization (so SSO/teams work later),
  * a membership on both sides, and the free-tier balance.
  */
-export async function ensureAccount(u: WorkosUserLike, workosOrgId?: string | null): Promise<Account> {
+export async function ensureAccount(u: WorkosUserLike, workosOrgId?: string | null, via: AcceptanceVia = "signup"): Promise<Account> {
   const user = await upsertUser(u);
   const existing = await db()
     .select({ org: orgs })
@@ -55,7 +57,12 @@ export async function ensureAccount(u: WorkosUserLike, workosOrgId?: string | nu
     .onConflictDoNothing();
   identify({ userId: user.id, orgId: org.id }, { email: user.email, $set_once: { signed_up_at: new Date().toISOString() } }, { name: org.name });
   track("signed_up", { userId: user.id, orgId: org.id });
-  return { user, org };
+  // Account creation: every sign-up surface says "By continuing you agree to the Terms and Privacy Policy"
+  // (and the magic-code API response carries the links for the agent to relay).
+  const acceptedAt = new Date();
+  await recordTermsAcceptance({ userId: user.id, orgId: org.id }, via, acceptedAt);
+  const terms = { termsVersion: TERMS_VERSION, termsAcceptedAt: acceptedAt };
+  return { user: { ...user, ...terms }, org: { ...org, ...terms } };
 }
 
 export async function createApiKey(orgId: string, userId: string | null, name: string) {

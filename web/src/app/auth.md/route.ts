@@ -25,6 +25,9 @@ POST ${base}/api/v1/auth/device → {"deviceCode", "userCode", "verificationUri"
 Show the human verificationUriComplete, then poll POST ${base}/api/v1/auth/device/token {"deviceCode"} every \`interval\` seconds:
 428 {"error":"authorization_pending"} until approved, then {"apiKey"}. CLI: \`renda login\`.
 
+## Terms
+Creating or claiming an account, or adding a card, means the human agrees to the Terms of Service (${base}/legal/terms) and Privacy Policy (${base}/legal/privacy). Tell them when you sign them up; the trial and magic-code responses include a \`terms\` object with these links.
+
 ## Storing keys
 Keys are shown once. The CLIs and MCP server share ~/.config/renda/credentials.json (mode 600); $RENDA_API_KEY overrides it.
 Revoke keys in the dashboard: ${base}/dashboard/keys.

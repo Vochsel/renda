@@ -7,6 +7,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { TermsNotice } from "@/components/terms-notice";
 import { addCardAction, portalAction } from "./actions";
 
 export default async function BillingPage({ searchParams }: PageProps<"/dashboard/billing">) {
@@ -31,11 +32,14 @@ export default async function BillingPage({ searchParams }: PageProps<"/dashboar
             <CardDescription>Payment method</CardDescription>
             <CardTitle className="text-lg">{billing.hasPaymentMethod ? "Card on file" : "None"}</CardTitle>
           </CardHeader>
-          <CardContent className="flex gap-2">
+          <CardContent className="flex flex-col items-start gap-2">
             {billing.hasPaymentMethod ? (
               <form action={portalAction}><Button variant="outline">Manage in Stripe</Button></form>
             ) : (
-              <form action={addCardAction}><Button>Add a card</Button></form>
+              <>
+                <form action={addCardAction}><Button>Add a card</Button></form>
+                <TermsNotice action="adding a card" />
+              </>
             )}
           </CardContent>
         </Card>

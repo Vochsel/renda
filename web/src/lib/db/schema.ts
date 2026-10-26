@@ -16,6 +16,15 @@ export const orgs = pgTable("orgs", {
   claimTokenHash: text("claim_token_hash").unique(),
   trialExpiresAt: timestamp("trial_expires_at", { withTimezone: true }),
   claimedAt: timestamp("claimed_at", { withTimezone: true }),
+  /** Version of the Terms (lib/legal.ts TERMS_VERSION) accepted for this workspace, and when. */
+  termsVersion: text("terms_version"),
+  termsAcceptedAt: timestamp("terms_accepted_at", { withTimezone: true }),
+  /**
+   * Account deletion (lib/account-deletion.ts): the row stays as an anonymised tombstone so usage_events and
+   * billing (invoicing/tax records) keep their foreign key; purgedAt is set once its R2 objects are gone.
+   */
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  purgedAt: timestamp("purged_at", { withTimezone: true }),
   createdAt: createdAt(),
 });
 
@@ -32,6 +41,8 @@ export const users = pgTable("users", {
   workosUserId: text("workos_user_id").notNull().unique(),
   email: text("email").notNull(),
   name: text("name"),
+  termsVersion: text("terms_version"),
+  termsAcceptedAt: timestamp("terms_accepted_at", { withTimezone: true }),
   createdAt: createdAt(),
 });
 
@@ -73,8 +84,14 @@ export const assets = pgTable("assets", {
   // Set once this org's uploaded bytes have been hashed and matched sha256 (see lib/assets.ts).
   // Until then the asset can't be used: knowing a hash isn't proof of having the file.
   verifiedAt: timestamp("verified_at", { withTimezone: true }),
+  /** Last registration or use in a job; the retention sweep deletes registrations unused for 30 days. */
+  lastUsedAt: timestamp("last_used_at", { withTimezone: true }).notNull().defaultNow(),
   createdAt: createdAt(),
-}, (t) => [primaryKey({ columns: [t.orgId, t.sha256] })]);
+}, (t) => [
+  primaryKey({ columns: [t.orgId, t.sha256] }),
+  index("assets_sha256_idx").on(t.sha256),
+  index("assets_last_used_idx").on(t.lastUsedAt),
+]);
 
 /** Fixed-window request counters for rate limiting (keys are hashed; see lib/ratelimit.ts). */
 export const rateLimits = pgTable("rate_limits", {
@@ -140,16 +157,21 @@ export const jobs = pgTable("jobs", {
   createdAt: createdAt(),
   startedAt: timestamp("started_at", { withTimezone: true }),
   finishedAt: timestamp("finished_at", { withTimezone: true }),
+  /** Set once the job's R2 prefix has been deleted (by the customer, retention, or account deletion). */
+  outputsDeletedAt: timestamp("outputs_deleted_at", { withTimezone: true }),
 }, (t) => [
   index("jobs_org_created_idx").on(t.orgId, t.createdAt),
   uniqueIndex("jobs_org_idem_idx").on(t.orgId, t.idempotencyKey),
   index("jobs_cache_key_idx").on(t.cacheKey),
+  index("jobs_outputs_expiry_idx").on(t.finishedAt).where(sql`${t.outputsDeletedAt} is null`),
 ]);
 
+// Billing records, kept for invoicing and tax after account deletion (which anonymises the org and job rows
+// instead of deleting them), so these foreign keys restrict rather than cascade.
 export const usageEvents = pgTable("usage_events", {
-  jobId: text("job_id").notNull().references(() => jobs.id, { onDelete: "cascade" }),
+  jobId: text("job_id").notNull().references(() => jobs.id, { onDelete: "restrict" }),
   chunk: text("chunk").notNull().$type<string>(), // frame-chunk index, or "orchestrate" | "encode" | "hyperframes"
-  orgId: text("org_id").notNull().references(() => orgs.id, { onDelete: "cascade" }),
+  orgId: text("org_id").notNull().references(() => orgs.id, { onDelete: "restrict" }),
   hardware: text("hardware").notNull(),
   seconds: doublePrecision("seconds").notNull(),
   freeSeconds: doublePrecision("free_seconds").notNull().default(0),

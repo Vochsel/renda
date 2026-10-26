@@ -1,6 +1,8 @@
 import { api } from "@/lib/http";
 import { createTrial, trialLimits } from "@/lib/trials";
 import { clientIp } from "@/lib/clientip";
+import { appUrl } from "@/lib/env";
+import { termsNotice } from "@/lib/legal";
 
 /**
  * Anonymous, claimable trial: an API key with a few free render-minutes, no signup.
@@ -20,7 +22,9 @@ export const POST = api(async (req) => {
       next: [
         "Render something: POST /api/v1/jobs (or `renda render <file>`).",
         "Share claimUrl with the user; unclaimed trials expire at expiresAt.",
+        "Tell the user that using Renda means agreeing to the Terms and Privacy Policy (links in `terms`).",
       ],
+      terms: termsNotice(appUrl()),
     },
     { status: 201 },
   );

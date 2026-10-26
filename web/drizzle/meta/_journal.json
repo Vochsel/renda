@@ -43,6 +43,13 @@
       "when": 1793013421864,
       "tag": "0005_launch_limits",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793014656318,
+      "tag": "0006_data_lifecycle",
+      "breakpoints": true
     }
   ]
 }

@@ -10,5 +10,7 @@ export async function GET(req: Request) {
   if (!secret || got.length !== want.length || !timingSafeEqual(got, want)) {
     return Response.json({ error: { code: "unauthorized", message: "Cron only." } }, { status: 401 });
   }
-  return Response.json(await sweepStaleJobs());
+  const result = await sweepStaleJobs();
+  await import("@/lib/retention").then((m) => m.runRetention()).catch((e) => console.error("retention sweep", e));
+  return Response.json(result);
 }

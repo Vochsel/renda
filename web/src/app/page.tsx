@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { SiteHeader } from "@/components/site-header";
+import { SiteFooter } from "@/components/site-footer";
+import { TermsNotice } from "@/components/terms-notice";
 import { PageToc, type TocItem } from "@/components/page-toc";
 import { SplatHero } from "@/components/splat-hero";
 import { CopyButton } from "@/components/copy-button";
@@ -125,6 +127,7 @@ export default function Home() {
             <p className="text-muted-foreground text-xs">
               Free trial, no signup. Claim it to keep the workspace and get {FREE_MINUTES} free minutes.
             </p>
+            <TermsNotice action="using Renda" />
           </div>
         </section>
 
@@ -212,14 +215,7 @@ export default function Home() {
         </section>
         </div>
       </main>
-      <footer className="text-muted-foreground mx-auto flex w-full max-w-5xl flex-wrap gap-x-5 gap-y-2 px-4 py-8 text-xs">
-        <span>Apache-2.0 · AGPL-3.0 (cloud)</span>
-        <Link href="/docs" className="hover:text-foreground">Docs</Link>
-        <Link href="/benchmarks" className="hover:text-foreground">Benchmarks</Link>
-        <Link href="/llms.txt" className="hover:text-foreground">llms.txt</Link>
-        <Link href="/auth.md" className="hover:text-foreground">auth.md</Link>
-        <Link href="/api/v1/openapi.json" className="hover:text-foreground">OpenAPI</Link>
-      </footer>
+      <SiteFooter />
     </>
   );
 }

@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { api, readJson } from "@/lib/http";
 import { ApiError } from "@/lib/errors";
-import { env } from "@/lib/env";
+import { appUrl, env } from "@/lib/env";
+import { termsNotice } from "@/lib/legal";
 import { workos } from "@/lib/workos";
 import { clientIp } from "@/lib/clientip";
 import { rateLimit } from "@/lib/ratelimit";
@@ -44,12 +45,13 @@ export const POST = api(async (req) => {
       throw new ApiError("invalid_code");
     }
   }
-  const account = await ensureAccount(user, workosOrgId);
+  const account = await ensureAccount(user, workosOrgId, "magic_code");
   const key = await createApiKey(account.org.id, account.user.id, keyName ?? "agent (magic auth)");
   return Response.json({
     apiKey: key.apiKey,
     user: { id: account.user.id, email: account.user.email },
     org: { id: account.org.id, name: account.org.name },
-    next: "Store apiKey securely (it is shown once) and send it as `Authorization: Bearer <apiKey>`.",
+    next: "Store apiKey securely (it is shown once) and send it as `Authorization: Bearer <apiKey>`. Tell the user that using Renda means agreeing to the Terms and Privacy Policy (see `terms`).",
+    terms: termsNotice(appUrl()),
   });
 });

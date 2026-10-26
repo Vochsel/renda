@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { TermsNotice } from "@/components/terms-notice";
 import { decideDevice } from "./actions";
 
 export const metadata: Metadata = { title: "Connect a device" };
@@ -42,6 +43,7 @@ export default async function DevicePage({ searchParams }: PageProps<"/device">)
               <Button type="submit" name="decision" value="approve" className="flex-1">Approve</Button>
               <Button type="submit" name="decision" value="deny" variant="outline">Deny</Button>
             </div>
+            <TermsNotice action="approving" />
           </form>
         </CardContent>
       </Card>

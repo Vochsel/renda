@@ -1,5 +1,9 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { SiteHeader } from "@/components/site-header";
+import { SiteFooter } from "@/components/site-footer";
+import { TermsNotice } from "@/components/terms-notice";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { pricingTable } from "@/lib/pricing";
@@ -41,8 +45,18 @@ export default function PricingPage() {
           {p.notes.map((n) => <li key={n}>{n}</li>)}
           <li>The engine picks the cheapest hardware that meets your priority. Use <span className="font-mono">priority: &quot;economy&quot;</span> to always take the cheapest.</li>
           <li>Machine-readable: <a className="underline" href="/api/v1/pricing">/api/v1/pricing</a></li>
+          <li>
+            Usage is billed monthly in arrears. Renders that fail because of a fault on our side aren&apos;t charged; see the{" "}
+            <Link className="underline" href="/legal/refunds">refund policy</Link>.
+          </li>
         </ul>
+        <div className="mt-8 flex flex-col items-start gap-2">
+          {/* No prefetch: signed out, /sign-up redirects to WorkOS, which a background fetch can't follow. */}
+          <Button asChild><Link href="/sign-up" prefetch={false}>Create an account</Link></Button>
+          <TermsNotice action="creating an account" />
+        </div>
       </main>
+      <SiteFooter />
     </>
   );
 }

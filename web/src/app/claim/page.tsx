@@ -3,6 +3,7 @@ import { withAuth } from "@workos-inc/authkit-nextjs";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { TermsNotice } from "@/components/terms-notice";
 import { claimAction } from "./actions";
 
 export const metadata: Metadata = { title: "Claim your Renda trial" };
@@ -30,9 +31,10 @@ export default async function ClaimPage({ searchParams }: PageProps<"/claim">) {
               </AlertDescription>
             </Alert>
           ) : (
-            <form action={claimAction}>
+            <form action={claimAction} className="space-y-3">
               <input type="hidden" name="token" value={token} />
               <Button type="submit" className="w-full">Claim workspace</Button>
+              <TermsNotice action="claiming" />
             </form>
           )}
         </CardContent>
