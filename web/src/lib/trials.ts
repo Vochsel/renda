@@ -1,11 +1,13 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
-import { and, eq, gt, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db, schema } from "./db";
 import { env, envOptional, appUrl } from "./env";
 import { ApiError } from "./errors";
 import { createApiKey } from "./accounts";
 import { workos } from "./workos";
 import { identify, track } from "./posthog";
+import { countHit } from "./ratelimit";
+import { claimFreeGrant } from "./freegrants";
 
 const { orgs, billing, trialRequests, memberships } = schema;
 
@@ -69,19 +71,32 @@ function hashIp(ip: string): string {
   return createHmac("sha256", key).update(ip).digest("hex");
 }
 
+/**
+ * The rate-limited unit for an address: IPv4 as is, IPv6 by its /64 (one subscriber's allocation; anything
+ * finer is free to rotate through).
+ */
+export function networkOf(ip: string): string {
+  const addr = ip.trim().toLowerCase().replace(/^\[|\]$/g, "");
+  if (!addr.includes(":")) return addr;
+  if (/^::ffff:\d+\.\d+\.\d+\.\d+$/.test(addr)) return addr.slice(7); // IPv4-mapped
+  const [head, tail = ""] = addr.split("::");
+  const h = head ? head.split(":") : [];
+  const t = tail ? tail.split(":") : [];
+  const full = addr.includes("::") ? [...h, ...Array(Math.max(0, 8 - h.length - t.length)).fill("0"), ...t] : h;
+  return `${full.slice(0, 4).map((g) => g.replace(/^0+(?=.)/, "")).join(":")}::/64`;
+}
+
 export function claimUrlFor(token: string): string {
   return `${appUrl()}/claim?token=${encodeURIComponent(token)}`;
 }
 
 /** Create an unclaimed org with a few free render-minutes and an API key. */
 export async function createTrial(ip: string | null) {
-  const ipHash = hashIp(ip ?? "unknown");
-  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const [{ n }] = await db()
-    .select({ n: sql<number>`count(*)::int` })
-    .from(trialRequests)
-    .where(and(eq(trialRequests.ipHash, ipHash), gt(trialRequests.createdAt, since)));
-  if (n >= trialLimits.perNetworkPerDay()) throw new ApiError("trial_rate_limited");
+  const network = networkOf(ip ?? "unknown");
+  const ipHash = hashIp(network);
+  // Atomic count per network per day: parallel requests can't all slip through on a stale count.
+  const hit = await countHit("trial_network", network, 24 * 60 * 60);
+  if (hit.count > trialLimits.perNetworkPerDay()) throw new ApiError("trial_rate_limited");
 
   const token = randomBytes(24).toString("base64url");
   const expiresAt = new Date(Date.now() + trialLimits.ttlMs());
@@ -96,7 +111,7 @@ export async function createTrial(ip: string | null) {
   return { apiKey: key.apiKey, orgId: org.id, claimUrl: claimUrlFor(token), freeSecondsLeft: trialSeconds(), expiresAt };
 }
 
-/** Attach a trial org to a signed-in user. Tops the free tier up to FREE_SECONDS. */
+/** Attach a trial org to a signed-in user. Tops the free tier up to FREE_SECONDS, once per person. */
 export async function claimTrial(token: string, user: { id: string; workosUserId: string; email: string }) {
   const [org] = await db().select().from(orgs).where(eq(orgs.claimTokenHash, hashToken(token))).limit(1);
   if (!org || !isActiveTrial(org) || isExpiredTrial(org)) throw new ApiError("claim_invalid");
@@ -122,8 +137,8 @@ export async function claimTrial(token: string, user: { id: string; workosUserId
   await db().insert(memberships).values({ orgId: org.id, userId: user.id }).onConflictDoNothing();
   identify({ userId: user.id, orgId: org.id }, { email: user.email }, { name, claimed_trial: true });
   track("trial_claimed", { userId: user.id, orgId: org.id });
-  const topUp = Math.max(0, Number(env("FREE_SECONDS")) - trialSeconds());
-  await db()
+  const topUp = (await claimFreeGrant(user.email, org.id)) ? Math.max(0, Number(env("FREE_SECONDS")) - trialSeconds()) : 0;
+  if (topUp > 0) await db()
     .update(billing)
     .set({ freeSecondsRemaining: sql`${billing.freeSecondsRemaining} + ${topUp}`, updatedAt: new Date() })
     .where(eq(billing.orgId, org.id));

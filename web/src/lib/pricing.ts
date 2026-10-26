@@ -36,6 +36,7 @@ export function pricingTable() {
       "Billed per second of container time spent on your job (scene load + render + encode).",
       "Queue time and cold start before Renda code runs are not billed.",
       "Identical re-renders (same package, asset hashes and engine version) are served from cache for $0.",
+      "Usage is charged monthly in arrears. Each workspace has a monthly spending limit ($100 unless you change it); jobs that would pass it are refused, and running ones stopped.",
     ],
   };
 }

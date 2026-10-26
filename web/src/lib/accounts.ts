@@ -4,6 +4,7 @@ import { env } from "./env";
 import { generateApiKey } from "./apikeys";
 import { workos } from "./workos";
 import { identify, track } from "./posthog";
+import { claimFreeGrant } from "./freegrants";
 
 const { orgs, users, memberships, apiKeys, billing } = schema;
 
@@ -50,7 +51,7 @@ export async function ensureAccount(u: WorkosUserLike, workosOrgId?: string | nu
   await db().insert(memberships).values({ orgId: org.id, userId: user.id }).onConflictDoNothing();
   await db()
     .insert(billing)
-    .values({ orgId: org.id, freeSecondsRemaining: Number(env("FREE_SECONDS")) })
+    .values({ orgId: org.id, freeSecondsRemaining: (await claimFreeGrant(u.email, org.id)) ? Number(env("FREE_SECONDS")) : 0 })
     .onConflictDoNothing();
   identify({ userId: user.id, orgId: org.id }, { email: user.email, $set_once: { signed_up_at: new Date().toISOString() } }, { name: org.name });
   track("signed_up", { userId: user.id, orgId: org.id });
@@ -78,5 +79,8 @@ export async function revokeApiKey(orgId: string, keyId: string) {
 
 export async function getBilling(orgId: string) {
   const [row] = await db().select().from(billing).where(eq(billing.orgId, orgId));
-  return row ?? { orgId, stripeCustomerId: null, hasPaymentMethod: false, freeSecondsRemaining: 0, updatedAt: new Date() };
+  return row ?? {
+    orgId, stripeCustomerId: null, hasPaymentMethod: false, freeSecondsRemaining: 0, updatedAt: new Date(),
+    stripeSubscriptionId: null, subscriptionStatus: null, activeJobs: 0, monthlyLimitUsd: null,
+  };
 }

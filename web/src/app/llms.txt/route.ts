@@ -79,6 +79,7 @@ Skills: \`npx skills add ${GITHUB_REPO}\` · Claude Code plugin: \`/plugin marke
 - Every API error is {"error": {"code", "message", "hint"}}; the CLI maps it to {"status":"error","reason","hint","next"}. Follow the hint.
 - 402 payment_required (exit 4): run \`renda billing\` and give the URL to the user so they can add a card. Don't retry until they confirm.
 - trial_limit: the trial caps resolution at 1920px; ask the user to open the claim link (\`renda claim\`).
+- Limits that protect the user's money: 402 insufficient_free_minutes (job bigger than the free minutes left), 402 spend_limit (would pass the monthly limit; the user can raise it: PUT /api/v1/billing/limit {monthlyLimitUsd}), 402 payment_failed (card declined or subscription canceled: give the user the GET /api/v1/billing/portal url), 422 job_over_budget (estimate above the maxCostUsd you sent), 429 concurrency_limit (too many jobs running at once; wait for one to finish). Running jobs are stopped, with a clear error, if they pass the free balance, the monthly limit or maxCostUsd.
 - Prices, USD per render-minute, metered per second (queue time and cold starts aren't billed):
 ${HARDWARE.map((h) => `  - ${HARDWARE_LABEL[h]} (${h}): $${PRICE_PER_MINUTE[h]}`).join("\n")}
 
@@ -86,7 +87,7 @@ ${HARDWARE.map((h) => `  - ${HARDWARE_LABEL[h]} (${h}): $${PRICE_PER_MINUTE[h]}`
 - Trial: POST ${base}/api/v1/auth/trial → {apiKey, claimUrl, freeSecondsLeft, expiresAt}
 - Email: POST /api/v1/auth/magic/start {email} → POST /api/v1/auth/magic/verify {email, code} → {apiKey}
 - Upload: POST /api/v1/uploads {filename, size, sha256} → PUT bytes to uploadUrl (skip when exists) → use asset://<sha256>
-- Estimate: POST /api/v1/estimate {package} · Submit: POST /api/v1/jobs {package, kind?, priority?, fast?, idempotencyKey?} (fast: true = priority rush: more parallel on faster GPUs, costs a bit more; the estimate's priorities.rush shows its price and wall time) · Poll: GET /api/v1/jobs/{id} (while running, live.costUsd is the cost so far — ticks up every few seconds)
+- Estimate: POST /api/v1/estimate {package} · Submit: POST /api/v1/jobs {package, kind?, priority?, fast?, idempotencyKey?, maxCostUsd?} (fast: true = priority rush: more parallel on faster GPUs, costs a bit more; the estimate's priorities.rush shows its price and wall time) · Poll: GET /api/v1/jobs/{id} (while running, live.costUsd is the cost so far — ticks up every few seconds)
 - Past renders: GET /api/v1/outputs?limit=30&kind=image|video|model → {items:[{jobId, name, url, thumbUrl, width, height, …}], nextCursor} (pass cursor=nextCursor for the next page)
 - Layered packages: the API flattens https:// and your asset:// layers itself (local paths must be flattened/uploaded client-side). POST /api/v1/packages/flatten {package} → {package, provenance, layers}.
 - Send \`Authorization: Bearer <apiKey>\` on everything except auth routes.

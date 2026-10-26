@@ -12,6 +12,8 @@ const Body = z.object({
   /** Fast mode: alias for priority "rush" (wider fan-out on faster GPUs, costs a bit more). */
   fast: z.boolean().optional(),
   idempotencyKey: z.string().min(1).max(200).optional(),
+  /** Refuse the job if it's estimated above this many USD, and stop it if it runs past it. */
+  maxCostUsd: z.number().positive().optional(),
 });
 
 export const POST = api(async (req) => {
@@ -26,6 +28,7 @@ export const POST = api(async (req) => {
     package: b.package,
     priority: b.fast ? "rush" : b.priority,
     idempotencyKey: b.idempotencyKey ?? req.headers.get("idempotency-key") ?? undefined,
+    maxCostUsd: b.maxCostUsd,
   });
   const pkg = (b.package ?? {}) as { output?: { format?: unknown }; render?: { engine?: unknown }; extends?: unknown };
   track("job_submitted", { userId: user?.id, orgId: org.id }, {

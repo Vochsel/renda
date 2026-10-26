@@ -1,28 +1,174 @@
 import type Stripe from "stripe";
-import { and, eq, gte, lt, sql } from "drizzle-orm";
+import { and, eq, gt, gte, isNotNull, lt, sql } from "drizzle-orm";
 import { db, schema } from "./db";
-import { appUrl, env } from "./env";
+import { appUrl, env, envOptional } from "./env";
 import { ApiError } from "./errors";
-import { costUsd, round4, type Hardware } from "./pricing";
+import { costUsd, PRICE_PER_MINUTE, round4, type Hardware } from "./pricing";
 import { stripe, stripeConfigured } from "./stripe";
+import { captureError } from "./posthog";
 
 const { billing, usageEvents, orgs } = schema;
+export type BillingRow = typeof billing.$inferSelect;
 
-export async function assertCanRender(orgId: string) {
-  const [b] = await db().select().from(billing).where(eq(billing.orgId, orgId));
-  if (!b || (!b.hasPaymentMethod && b.freeSecondsRemaining <= 0)) throw new ApiError("payment_required");
+function envNumber(name: string, fallback: number): number {
+  const v = Number(envOptional(name));
+  return Number.isFinite(v) && v > 0 ? v : fallback;
 }
 
-/** Atomically take up to `seconds` from the free balance; returns how many were free. */
-export async function consumeFreeSeconds(orgId: string, seconds: number): Promise<number> {
+/** Spend and concurrency limits; env overrides so production can tune them without a release. */
+export const billingLimits = {
+  /** Jobs running at once in a workspace that can't be charged to a card (trials, free tier). */
+  activeJobsFree: () => envNumber("MAX_ACTIVE_JOBS_FREE", 2),
+  activeJobsPaid: () => envNumber("MAX_ACTIVE_JOBS_PAID", 20),
+  /** Monthly spend cap for workspaces that haven't set their own. */
+  defaultMonthlyUsd: () => envNumber("DEFAULT_MONTHLY_LIMIT_USD", 100),
+  /** Running time allowed past a free balance before a free-tier job is stopped (heartbeat lag). */
+  freeOverrunGraceSeconds: () => envNumber("FREE_OVERRUN_GRACE_SECONDS", 30),
+};
+
+// Stripe subscription states in which renders can't be charged to the card on file.
+const BLOCKING_SUBSCRIPTION = new Set(["past_due", "unpaid", "canceled", "incomplete_expired", "paused"]);
+// States of a subscription that is still ours to reuse (a new one would bill the same meters twice).
+const OPEN_SUBSCRIPTION = new Set(["active", "trialing", "past_due", "unpaid", "incomplete", "paused"]);
+
+type CardState = Pick<BillingRow, "hasPaymentMethod" | "subscriptionStatus">;
+
+/** Can usage be charged to the card on file right now? */
+export function cardBillable(b: CardState): boolean {
+  return b.hasPaymentMethod && !BLOCKING_SUBSCRIPTION.has(b.subscriptionStatus ?? "");
+}
+
+export function monthlyLimitUsd(b: Pick<BillingRow, "monthlyLimitUsd">): number {
+  return b.monthlyLimitUsd ?? billingLimits.defaultMonthlyUsd();
+}
+
+export type BudgetEstimate = { estSeconds: [number, number]; estCostUsd: [number, number] };
+
+/**
+ * May a job with this estimate start? Pure; throws the error an agent can act on. Uses the low end of the
+ * estimate so it never blocks a job that would fit; running jobs are re-checked by `checkRunningBudget`.
+ */
+export function checkBudget(
+  b: CardState & Pick<BillingRow, "freeSecondsRemaining" | "monthlyLimitUsd">,
+  spentThisMonthUsd: number,
+  est: BudgetEstimate,
+  maxCostUsd?: number | null,
+): void {
+  if (maxCostUsd != null && est.estCostUsd[0] > maxCostUsd) {
+    throw new ApiError("job_over_budget", undefined, { estimatedCostUsd: est.estCostUsd, maxCostUsd });
+  }
+  if (cardBillable(b)) {
+    const limit = monthlyLimitUsd(b);
+    if (spentThisMonthUsd + est.estCostUsd[0] > limit) {
+      throw new ApiError("spend_limit", undefined, { monthlyLimitUsd: limit, spentThisMonthUsd: round4(spentThisMonthUsd), estimatedCostUsd: est.estCostUsd });
+    }
+    return;
+  }
+  if (b.freeSecondsRemaining <= 0) throw new ApiError(b.hasPaymentMethod ? "payment_failed" : "payment_required");
+  if (est.estSeconds[0] > b.freeSecondsRemaining) {
+    throw new ApiError("insufficient_free_minutes", undefined, {
+      estimatedSeconds: est.estSeconds, freeSecondsLeft: Math.floor(b.freeSecondsRemaining),
+    });
+  }
+}
+
+export type RunningCheck = { stop: false } | { stop: true; reason: string };
+
+/**
+ * Should a running job be stopped? Pure. `running` is the job's billed + in-flight seconds and cost so far;
+ * `pendingSeconds` is in-flight time not yet deducted from the free balance.
+ */
+export function checkRunningBudget(
+  b: CardState & Pick<BillingRow, "freeSecondsRemaining" | "monthlyLimitUsd">,
+  spentThisMonthUsd: number,
+  running: { pendingSeconds: number; pendingCostUsd: number; jobCostUsd: number },
+  maxCostUsd?: number | null,
+): RunningCheck {
+  if (maxCostUsd != null && running.jobCostUsd > maxCostUsd) {
+    return { stop: true, reason: `Stopped: the job reached its maxCostUsd of $${maxCostUsd}.` };
+  }
+  if (cardBillable(b)) {
+    const limit = monthlyLimitUsd(b);
+    if (spentThisMonthUsd + running.pendingCostUsd > limit) {
+      return { stop: true, reason: `Stopped: the workspace reached its monthly spending limit of $${limit}. Raise it with PUT /api/v1/billing/limit.` };
+    }
+    return { stop: false };
+  }
+  if (running.pendingSeconds > b.freeSecondsRemaining + billingLimits.freeOverrunGraceSeconds()) {
+    return { stop: true, reason: "Stopped: free render minutes ran out. Add a card (POST /api/v1/billing/checkout) to keep rendering." };
+  }
+  return { stop: false };
+}
+
+export async function getBillingRow(orgId: string): Promise<BillingRow> {
+  const [b] = await db().select().from(billing).where(eq(billing.orgId, orgId));
+  if (!b) throw new ApiError("payment_required");
+  return b;
+}
+
+/** Billed (non-free) spend this calendar month (UTC), from recorded usage. */
+export async function spentThisMonthUsd(orgId: string, now = new Date()): Promise<number> {
+  const { from, to } = monthRange(now);
+  const [r] = await db().select({ cost: sql<number>`coalesce(sum(${usageEvents.costUsd}), 0)` }).from(usageEvents)
+    .where(and(eq(usageEvents.orgId, orgId), gte(usageEvents.createdAt, from), lt(usageEvents.createdAt, to)));
+  return Number(r?.cost ?? 0);
+}
+
+/** Take one of the org's concurrent-job slots, or throw concurrency_limit. Atomic (row lock + recheck). */
+export async function acquireJobSlot(orgId: string, b: CardState): Promise<void> {
+  const max = cardBillable(b) ? billingLimits.activeJobsPaid() : billingLimits.activeJobsFree();
+  const taken = await db().update(billing).set({ activeJobs: sql`${billing.activeJobs} + 1` })
+    .where(and(eq(billing.orgId, orgId), lt(billing.activeJobs, max))).returning({ n: billing.activeJobs });
+  if (!taken.length) throw new ApiError("concurrency_limit", undefined, { maxActiveJobs: max });
+}
+
+export async function releaseJobSlot(orgId: string): Promise<void> {
+  await db().update(billing).set({ activeJobs: sql`greatest(${billing.activeJobs} - 1, 0)` }).where(eq(billing.orgId, orgId));
+}
+
+/** Self-heal slot counters from the jobs table (a lost release would otherwise block an org forever). */
+export async function recountActiveJobs(): Promise<void> {
+  await db().execute(sql`
+    update billing b set active_jobs = c.n
+    from (select b2.org_id, (select count(*)::int from jobs j where j.org_id = b2.org_id
+            and j.status in ('queued', 'planning', 'rendering', 'encoding')) as n from billing b2) c
+    where b.org_id = c.org_id and b.active_jobs <> c.n`);
+}
+
+const SECONDS_SQL_COLUMN: Record<Hardware, string> = { cpu: "seconds_cpu", "gpu-l4": "seconds_gpu_l4", "gpu-l40s": "seconds_gpu_l40s" };
+
+export type RecordedUsage = { freeSeconds: number; billedSeconds: number; costUsd: number };
+
+/**
+ * Record one chunk's usage exactly once. The usage row, its free/billed split, the free balance and the job's
+ * totals change in one statement, so a crash or retry can't leave a chunk recorded but unbilled.
+ * Returns null for a duplicate (job, chunk).
+ */
+export async function recordUsage(jobId: string, orgId: string, chunk: string, hardware: Hardware, seconds: number): Promise<RecordedUsage | null> {
+  const col = sql.raw(SECONDS_SQL_COLUMN[hardware]);
+  const perMinute = PRICE_PER_MINUTE[hardware];
   const res = await db().execute(sql`
-    with old as (select free_seconds_remaining as f from billing where org_id = ${orgId} for update)
-    update billing b set free_seconds_remaining = greatest(old.f - ${seconds}, 0), updated_at = now()
-    from old where b.org_id = ${orgId}
-    returning old.f as before, b.free_seconds_remaining as after`);
-  const row = res.rows[0] as { before: number; after: number } | undefined;
-  if (!row) return 0;
-  return Number(row.before) - Number(row.after);
+    with old as (
+      select free_seconds_remaining as f from billing where org_id = ${orgId} for update
+    ), split as (
+      select least(greatest(coalesce((select f from old), 0), 0), ${seconds}::float8) as free
+    ), ins as (
+      insert into usage_events (job_id, chunk, org_id, hardware, seconds, free_seconds, billed_seconds, cost_usd)
+      select ${jobId}, ${chunk}, ${orgId}, ${hardware}, ${seconds}::float8, split.free, ${seconds}::float8 - split.free,
+        round(((${seconds}::float8 - split.free) / 60 * ${perMinute}::float8)::numeric, 4)::float8
+      from split
+      on conflict do nothing
+      returning free_seconds, billed_seconds, cost_usd
+    ), bal as (
+      update billing set free_seconds_remaining = billing.free_seconds_remaining - ins.free_seconds, updated_at = now()
+      from ins where billing.org_id = ${orgId} returning 1
+    ), job as (
+      update jobs set ${col} = jobs.${col} + ${seconds}::float8, cost_usd = jobs.cost_usd + ins.cost_usd
+      from ins where jobs.id = ${jobId} returning 1
+    )
+    select free_seconds, billed_seconds, cost_usd from ins`);
+  const r = res.rows[0] as { free_seconds: number; billed_seconds: number; cost_usd: number } | undefined;
+  return r ? { freeSeconds: Number(r.free_seconds), billedSeconds: Number(r.billed_seconds), costUsd: Number(r.cost_usd) } : null;
 }
 
 /** Split metered seconds into free/billed and compute cost. Pure, for tests. */
@@ -74,26 +220,37 @@ export function meterEventName(hardware: Hardware): string {
 
 const PRICE_ENV: Record<Hardware, string> = { cpu: "STRIPE_PRICE_CPU", "gpu-l4": "STRIPE_PRICE_GPU_L4", "gpu-l40s": "STRIPE_PRICE_GPU_L40S" };
 
-/** After a card is attached: make it the default and start the metered subscription (idempotent). */
-export async function activateMeteredSubscription(customerId: string, setupIntentId?: string) {
+/**
+ * After a card is attached: make it the default and start the metered subscription (idempotent). Reuses any
+ * open subscription, including past_due ones (Stripe retries their invoice on the new default card).
+ */
+export async function activateMeteredSubscription(customerId: string, setupIntentId?: string): Promise<{ id: string; status: string } | null> {
   if (setupIntentId) {
     const si = await stripe().setupIntents.retrieve(setupIntentId);
     const pm = typeof si.payment_method === "string" ? si.payment_method : si.payment_method?.id;
     if (pm) await stripe().customers.update(customerId, { invoice_settings: { default_payment_method: pm } });
   }
-  const existing = await stripe().subscriptions.list({ customer: customerId, status: "active", limit: 1 });
-  if (existing.data.length) return existing.data[0].id;
+  const existing = await stripe().subscriptions.list({ customer: customerId, status: "all", limit: 20 });
+  const open = existing.data.find((s) => OPEN_SUBSCRIPTION.has(s.status));
+  if (open) return { id: open.id, status: open.status };
   const items = (Object.keys(PRICE_ENV) as Hardware[])
     .map((h) => process.env[PRICE_ENV[h]])
     .filter((p): p is string => Boolean(p))
     .map((price) => ({ price }));
   if (!items.length) return null;
   const sub = await stripe().subscriptions.create({ customer: customerId, items }, { idempotencyKey: `renda-sub-${customerId}` });
-  return sub.id;
+  return { id: sub.id, status: sub.status };
+}
+
+/** Store the metered subscription's id and status (webhooks). Returns the org, if any. */
+export async function setSubscription(customerId: string, subscriptionId: string, status: string): Promise<string | null> {
+  const rows = await db().update(billing).set({ stripeSubscriptionId: subscriptionId, subscriptionStatus: status, updatedAt: new Date() })
+    .where(eq(billing.stripeCustomerId, customerId)).returning({ orgId: billing.orgId });
+  return rows[0]?.orgId ?? null;
 }
 
 /** Report billed seconds to the Stripe Billing Meter. Idempotent per (job, chunk). */
-export async function reportMeter(orgId: string, jobId: string, chunk: string, hardware: Hardware, billedSeconds: number) {
+export async function reportMeter(orgId: string, jobId: string, chunk: string, hardware: Hardware, billedSeconds: number, at?: Date) {
   if (billedSeconds <= 0 || !stripeConfigured()) return false;
   const [b] = await db().select().from(billing).where(eq(billing.orgId, orgId));
   if (!b?.stripeCustomerId) return false;
@@ -101,10 +258,42 @@ export async function reportMeter(orgId: string, jobId: string, chunk: string, h
     event_name: meterEventName(hardware),
     identifier: `${jobId}:${chunk}`,
     payload: { stripe_customer_id: b.stripeCustomerId, value: String(Math.ceil(billedSeconds)), hardware },
+    ...(at ? { timestamp: Math.floor(at.getTime() / 1000) } : {}),
   });
   await db().update(usageEvents).set({ reportedToStripe: true })
     .where(and(eq(usageEvents.jobId, jobId), eq(usageEvents.chunk, chunk)));
   return true;
+}
+
+// Stripe only accepts meter events up to 35 days old.
+const METER_MAX_AGE_MS = 34 * 24 * 60 * 60 * 1000;
+
+/**
+ * Re-send billed usage Stripe never confirmed (a Stripe error or a timeout after the row was written). Run from
+ * the sweep. The meter identifier is the same (job:chunk), so Stripe drops a resend of one it already has.
+ */
+export async function reconcileUsage(limit = 200, now = Date.now()): Promise<number> {
+  if (!stripeConfigured()) return 0;
+  const rows = await db()
+    .select({ jobId: usageEvents.jobId, chunk: usageEvents.chunk, orgId: usageEvents.orgId, hardware: usageEvents.hardware,
+      billedSeconds: usageEvents.billedSeconds, createdAt: usageEvents.createdAt })
+    .from(usageEvents)
+    .innerJoin(billing, eq(billing.orgId, usageEvents.orgId))
+    .where(and(
+      eq(usageEvents.reportedToStripe, false), gt(usageEvents.billedSeconds, 0), isNotNull(billing.stripeCustomerId),
+      lt(usageEvents.createdAt, new Date(now - 2 * 60_000)), gt(usageEvents.createdAt, new Date(now - METER_MAX_AGE_MS)),
+    ))
+    .orderBy(usageEvents.createdAt)
+    .limit(limit);
+  let sent = 0;
+  for (const r of rows) {
+    try {
+      if (await reportMeter(r.orgId, r.jobId, r.chunk, r.hardware as Hardware, r.billedSeconds, r.createdAt)) sent += 1;
+    } catch (e) {
+      captureError(e, { orgId: r.orgId, job_id: r.jobId, chunk: r.chunk, source: "usage_reconcile" });
+    }
+  }
+  return sent;
 }
 
 export async function usageSummary(orgId: string, from: Date, to: Date) {

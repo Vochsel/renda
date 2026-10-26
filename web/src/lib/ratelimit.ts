@@ -38,10 +38,11 @@ function hashKey(bucket: string, key: string): string {
   return createHmac("sha256", salt).update(`${bucket}\0${key}`).digest("hex");
 }
 
-/** Count one request against `bucket` for `key`; throws 429 (with retryAfter) once over the limit. */
-export async function rateLimit(bucket: Bucket, key: string, now = new Date()): Promise<void> {
-  if (envOptional("RATE_LIMIT_DISABLED") === "1") return;
-  const { count, seconds } = limitFor(bucket);
+/**
+ * Atomically count one hit for `key` in `bucket`'s current fixed window of `seconds`; returns the count so far
+ * (this hit included) and when the window ends. Concurrent callers each see a distinct count.
+ */
+export async function countHit(bucket: string, key: string, seconds: number, now = new Date()): Promise<{ count: number; resetAt: number }> {
   const windowMs = seconds * 1000;
   const start = new Date(Math.floor(now.getTime() / windowMs) * windowMs);
   const { rateLimits } = schema;
@@ -57,8 +58,16 @@ export async function rateLimit(bucket: Bucket, key: string, now = new Date()): 
   if (Math.random() < 0.01) {
     void db().delete(rateLimits).where(lt(rateLimits.windowStart, new Date(now.getTime() - 86_400_000))).catch(() => {});
   }
-  if (row && row.count > count) {
-    const retryAfter = Math.max(1, Math.ceil((start.getTime() + windowMs - now.getTime()) / 1000));
+  return { count: row?.count ?? 1, resetAt: start.getTime() + windowMs };
+}
+
+/** Count one request against `bucket` for `key`; throws 429 (with retryAfter) once over the limit. */
+export async function rateLimit(bucket: Bucket, key: string, now = new Date()): Promise<void> {
+  if (envOptional("RATE_LIMIT_DISABLED") === "1") return;
+  const { count, seconds } = limitFor(bucket);
+  const hit = await countHit(bucket, key, seconds, now);
+  if (hit.count > count) {
+    const retryAfter = Math.max(1, Math.ceil((hit.resetAt - now.getTime()) / 1000));
     throw new ApiError("rate_limited", undefined, { retryAfter }, `Back off and retry after ${retryAfter}s.`);
   }
 }

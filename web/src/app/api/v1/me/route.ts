@@ -2,6 +2,7 @@ import { api } from "@/lib/http";
 import { authenticate } from "@/lib/auth";
 import { getBilling } from "@/lib/accounts";
 import { isActiveTrial, trialLimits } from "@/lib/trials";
+import { billingLimits, cardBillable, monthlyLimitUsd, spentThisMonthUsd } from "@/lib/billing";
 
 export const GET = api(async (req) => {
   const { org, user } = await authenticate(req);
@@ -10,7 +11,15 @@ export const GET = api(async (req) => {
     user: user ? { id: user.id, email: user.email, name: user.name } : null,
     org: { id: org.id, name: org.name },
     balance: { freeSecondsLeft: Math.max(0, Math.floor(b.freeSecondsRemaining)) },
-    billing: { hasPaymentMethod: b.hasPaymentMethod },
+    billing: {
+      hasPaymentMethod: b.hasPaymentMethod,
+      subscriptionStatus: b.subscriptionStatus,
+      canChargeCard: cardBillable(b),
+      monthlyLimitUsd: monthlyLimitUsd(b),
+      spentThisMonthUsd: Math.round((await spentThisMonthUsd(org.id)) * 100) / 100,
+      activeJobs: b.activeJobs,
+      maxActiveJobs: cardBillable(b) ? billingLimits.activeJobsPaid() : billingLimits.activeJobsFree(),
+    },
     trial: isActiveTrial(org)
       ? {
           active: true,

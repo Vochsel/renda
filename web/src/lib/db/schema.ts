@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
-  bigint, boolean, doublePrecision, index, jsonb, pgTable, primaryKey, real, text, timestamp, uniqueIndex,
+  bigint, boolean, doublePrecision, index, integer, jsonb, pgTable, primaryKey, real, text, timestamp, uniqueIndex,
 } from "drizzle-orm/pg-core";
 
 const id = (prefix: string) =>
@@ -131,6 +131,10 @@ export const jobs = pgTable("jobs", {
   modalCallId: text("modal_call_id"),
   idempotencyKey: text("idempotency_key"),
   estimate: jsonb("estimate"),
+  /** Submitter's cap for this job; the job is stopped once billed + running cost passes it. */
+  maxCostUsd: doublePrecision("max_cost_usd"),
+  /** Last accepted worker event (status, meter, heartbeat, …): the sweep fails jobs that go quiet. */
+  lastEventAt: timestamp("last_event_at", { withTimezone: true }),
   /** For layered submissions: the package as sent plus which layer set each field of `package`. */
   source: jsonb("source").$type<{ submitted: unknown; layers: string[]; provenance: Record<string, string> }>(),
   createdAt: createdAt(),
@@ -160,5 +164,19 @@ export const billing = pgTable("billing", {
   stripeCustomerId: text("stripe_customer_id").unique(),
   hasPaymentMethod: boolean("has_payment_method").notNull().default(false),
   freeSecondsRemaining: doublePrecision("free_seconds_remaining").notNull(),
+  /** The metered subscription and its Stripe status (past_due / unpaid / canceled stop card-paid renders). */
+  stripeSubscriptionId: text("stripe_subscription_id"),
+  subscriptionStatus: text("subscription_status"),
+  /** Jobs between submit and a terminal status; caps concurrency. Recounted by the sweep. */
+  activeJobs: integer("active_jobs").notNull().default(0),
+  /** Monthly spend cap in USD; null = the deployment default (DEFAULT_MONTHLY_LIMIT_USD). */
+  monthlyLimitUsd: doublePrecision("monthly_limit_usd"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** One free-tier grant per person: keyed hash of the normalised email (plus-tags and Gmail dots removed). */
+export const freeGrants = pgTable("free_grants", {
+  emailHash: text("email_hash").primaryKey(),
+  orgId: text("org_id").references(() => orgs.id, { onDelete: "set null" }),
+  createdAt: createdAt(),
 });

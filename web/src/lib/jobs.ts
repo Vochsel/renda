@@ -1,24 +1,30 @@
 import { createHash } from "node:crypto";
 import { captureError, track } from "./posthog";
-import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
 import { db, schema } from "./db";
 import type { JobOutput } from "./db/schema";
 import { appUrl, env, envOptional } from "./env";
 import { ApiError } from "./errors";
-import { assertCanRender, consumeFreeSeconds, reportMeter, splitUsage } from "./billing";
+import {
+  acquireJobSlot, checkBudget, checkRunningBudget, getBillingRow, recordUsage, reconcileUsage, recountActiveJobs,
+  releaseJobSlot, reportMeter, spentThisMonthUsd,
+} from "./billing";
 import { estimateHyperframes, estimatePriorities, estimateScene, type Priority } from "./estimate";
 import { flattenForOrg } from "./layers";
 import { parseJobPackage } from "./packages";
 import { ensureVerifiedAssets } from "./assets";
 import { assertWithinTrialLimits } from "./trials";
 import { outputPrefix, presignGet } from "./r2";
-import { HARDWARE, type Hardware } from "./pricing";
+import { costUsd as priceOf, HARDWARE, type Hardware } from "./pricing";
 import { liveCost, METER_WRITE_INTERVAL_MS, type LiveCost } from "./live";
 
-const { jobs, usageEvents } = schema;
+const { jobs } = schema;
 type JobRow = typeof jobs.$inferSelect;
 
 export const TERMINAL = new Set(["succeeded", "failed", "canceled"]);
+const ACTIVE = ["queued", "planning", "rendering", "encoding"] as const;
+/** Calls to the Modal submit/cancel endpoints give up after this. */
+const WORKER_FETCH_TIMEOUT_MS = 30_000;
 
 export type Job = {
   id: string;
@@ -95,6 +101,8 @@ export type SubmitInput = {
   package: unknown;
   priority: Priority;
   idempotencyKey?: string;
+  /** Refuse the job if it's estimated above this, and stop it if it runs past it. */
+  maxCostUsd?: number;
   /** The submitting org; anonymous trials get resolution/priority limits. */
   org?: Pick<typeof schema.orgs.$inferSelect, "isTrial" | "claimedAt">;
 };
@@ -131,7 +139,6 @@ export async function submitJob(input: SubmitInput): Promise<Job> {
   // Registered by this org via POST /uploads *and* bytes uploaded + hash-verified (lib/assets.ts).
   const verified = await ensureVerifiedAssets(input.orgId, parsed.uris.assetShas);
 
-  await assertCanRender(input.orgId);
   const estimate = estimateFor(parsed, input.priority);
   const name = parsed.kind === "scene" ? parsed.pkg.name ?? null : parsed.pkg.name ?? parsed.pkg.composition ?? null;
 
@@ -156,11 +163,22 @@ export async function submitJob(input: SubmitInput): Promise<Job> {
     }
   }
 
-  const [row] = await db().insert(jobs).values({
-    orgId: input.orgId, createdBy: input.userId, kind: parsed.kind, priority: input.priority, package: parsed.raw, name,
-    cacheKey, idempotencyKey: input.idempotencyKey, estimate, engine: estimate.engine, hardware: estimate.hardware,
-    warnings: estimate.warnings, source,
-  }).returning();
+  // Cache hits above are free; anything that renders must fit the budget and take a concurrency slot.
+  const bill = await getBillingRow(input.orgId);
+  checkBudget(bill, await spentThisMonthUsd(input.orgId), estimate, input.maxCostUsd);
+  await acquireJobSlot(input.orgId, bill);
+
+  let row: JobRow;
+  try {
+    [row] = await db().insert(jobs).values({
+      orgId: input.orgId, createdBy: input.userId, kind: parsed.kind, priority: input.priority, package: parsed.raw, name,
+      cacheKey, idempotencyKey: input.idempotencyKey, estimate, engine: estimate.engine, hardware: estimate.hardware,
+      warnings: estimate.warnings, source, maxCostUsd: input.maxCostUsd ?? null, lastEventAt: new Date(),
+    }).returning();
+  } catch (e) {
+    await releaseJobSlot(input.orgId);
+    throw e;
+  }
 
   const inputs: Record<string, string> = {};
   await Promise.all(verified.map(async ({ sha, key }) => { inputs[`asset://${sha}`] = await presignGet(key, 6 * 3600); }));
@@ -169,6 +187,7 @@ export async function submitJob(input: SubmitInput): Promise<Job> {
     const res = await fetch(env("MODAL_SUBMIT_URL"), {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${env("RENDA_WORKER_TOKEN")}` },
+      signal: AbortSignal.timeout(WORKER_FETCH_TIMEOUT_MS),
       body: JSON.stringify({
         jobId: row.id,
         kind: parsed.kind,
@@ -185,9 +204,33 @@ export async function submitJob(input: SubmitInput): Promise<Job> {
     return serializeJob(updated);
   } catch (e) {
     console.error("submit failed", e);
-    await db().update(jobs).set({ status: "failed", error: "Could not reach the render backend.", finishedAt: new Date() }).where(eq(jobs.id, row.id));
+    captureError(e, { userId: input.userId, orgId: input.orgId, job_id: row.id, source: "worker_submit" });
+    await finishJob(row, { status: "failed", error: "Could not reach the render backend." });
     throw new ApiError("worker_unavailable", undefined, { jobId: row.id });
   }
+}
+
+/**
+ * Move a job to a terminal status, once: a no-op (null) if it already finished. Frees its concurrency slot.
+ * Every terminal transition goes through here so slots can't leak.
+ */
+async function finishJob(job: Pick<JobRow, "id" | "orgId">, set: Partial<typeof jobs.$inferInsert> & { status: "succeeded" | "failed" | "canceled" }) {
+  const [row] = await db().update(jobs).set({ finishedAt: new Date(), ...set })
+    .where(and(eq(jobs.id, job.id), inArray(jobs.status, [...ACTIVE]))).returning();
+  if (row) await releaseJobSlot(job.orgId);
+  return row ?? null;
+}
+
+/** Best-effort cancel of the job's Modal call tree. */
+async function cancelWorkerCall(jobId: string, callId: string | null) {
+  const cancelUrl = envOptional("MODAL_CANCEL_URL");
+  if (!cancelUrl) return;
+  await fetch(cancelUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${env("RENDA_WORKER_TOKEN")}` },
+    signal: AbortSignal.timeout(WORKER_FETCH_TIMEOUT_MS),
+    body: JSON.stringify({ jobId, callId }),
+  }).catch((e) => console.warn("worker cancel", jobId, e));
 }
 
 export async function getJob(orgId: string, id: string): Promise<JobRow> {
@@ -220,43 +263,50 @@ export async function listActiveJobs(orgId: string, limit = 20) {
 export async function cancelJob(orgId: string, id: string): Promise<JobRow> {
   const job = await getJob(orgId, id);
   if (TERMINAL.has(job.status)) throw new ApiError("conflict", `Job is already ${job.status}.`);
-  const cancelUrl = envOptional("MODAL_CANCEL_URL");
-  if (cancelUrl) {
-    await fetch(cancelUrl, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${env("RENDA_WORKER_TOKEN")}` },
-      body: JSON.stringify({ jobId: job.id, callId: job.modalCallId }),
-    }).catch((e) => console.warn("cancel", e));
-  }
-  const [row] = await db().update(jobs).set({ status: "canceled", finishedAt: new Date() }).where(eq(jobs.id, id)).returning();
-  return row;
+  await cancelWorkerCall(job.id, job.modalCallId);
+  // It may have finished while we cancelled; then it keeps its real status.
+  return (await finishJob(job, { status: "canceled" })) ?? getJob(orgId, id);
+}
+
+function envMinutes(name: string, fallback: number): number {
+  const v = Number(envOptional(name));
+  return Number.isFinite(v) && v > 0 ? v : fallback;
 }
 
 /**
- * Fail jobs the worker has stopped reporting on (container crash loops, lost callbacks) so nothing sits in
- * "rendering" forever. Run from the cron route. The Modal call is cancelled best-effort.
+ * Fail jobs the worker has gone quiet on (crashed or OOM-killed orchestrator, lost callbacks) so nothing sits in
+ * "rendering" forever. A job is live while events arrive: the orchestrator heartbeats every minute, including
+ * while chunks wait for GPUs, so the cutoff is silence, not age. A hard cap past the worker's own timeouts
+ * catches anything else. Also recounts concurrency slots and re-sends unconfirmed usage to Stripe.
+ * Run from the cron route.
  */
-export async function sweepStaleJobs(maxMinutes = Number(envOptional("JOB_MAX_MINUTES") ?? 60)) {
-  const cutoff = new Date(Date.now() - maxMinutes * 60_000);
-  const stale = await db()
-    .select({ id: jobs.id, callId: jobs.modalCallId })
-    .from(jobs)
-    .where(and(inArray(jobs.status, ["queued", "planning", "rendering", "encoding"]), lt(jobs.createdAt, cutoff)));
-  const cancelUrl = envOptional("MODAL_CANCEL_URL");
+export async function sweepStaleJobs(now = Date.now()) {
+  const quietMinutes = envMinutes("JOB_STALE_MINUTES", 15);
+  const maxHours = envMinutes("JOB_MAX_HOURS", 6.5); // orchestrate's Modal timeout is 6 h
+  const stale = await db().select().from(jobs).where(and(
+    inArray(jobs.status, [...ACTIVE]),
+    or(
+      lt(sql`coalesce(${jobs.lastEventAt}, ${jobs.createdAt})`, new Date(now - quietMinutes * 60_000)),
+      lt(jobs.createdAt, new Date(now - maxHours * 3_600_000)),
+    ),
+  ));
+  const failed: string[] = [];
   for (const job of stale) {
-    if (cancelUrl) {
-      await fetch(cancelUrl, {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${env("RENDA_WORKER_TOKEN")}` },
-        body: JSON.stringify({ jobId: job.id, callId: job.callId }),
-      }).catch((e) => console.warn("sweep cancel", job.id, e));
-    }
-    await db()
-      .update(jobs)
-      .set({ status: "failed", finishedAt: new Date(), error: `Timed out: no result after ${maxMinutes} minutes. Retry, or contact support with the job id.` })
-      .where(and(eq(jobs.id, job.id), inArray(jobs.status, ["queued", "planning", "rendering", "encoding"])));
+    const quiet = (job.lastEventAt ?? job.createdAt).getTime() < now - quietMinutes * 60_000;
+    const reason = quiet ? `no word from the render worker for ${quietMinutes} minutes` : `still running after ${maxHours} hours`;
+    await cancelWorkerCall(job.id, job.modalCallId);
+    const row = await finishJob(job, { status: "failed", error: `Timed out: ${reason}. Retry, or contact support with the job id.` });
+    if (!row) continue;
+    failed.push(job.id);
+    // Infrastructure failures: these never produce a worker `failed` event, so report them here.
+    captureError(new Error(`job swept: ${quiet ? "worker went quiet" : "exceeded max runtime"}`), {
+      userId: job.createdBy, orgId: job.orgId, job_id: job.id, engine: job.engine, hardware: job.hardware, status: job.status, source: "sweep",
+    });
+    await trackFinished(row, "failed", { error: reason, swept: true }).catch(() => {});
   }
-  return stale.map((j) => j.id);
+  await recountActiveJobs().catch((e) => captureError(e, { source: "sweep_recount" }));
+  const reconciled = await reconcileUsage().catch((e) => { captureError(e, { source: "sweep_reconcile" }); return 0; });
+  return { failed, reconciled };
 }
 
 // ---- worker events -------------------------------------------------------
@@ -292,13 +342,8 @@ export type WorkerEvent =
   | { jobId: string; type: "warning"; message: string }
   | { jobId: string; type: "done"; outputs: WorkerOutput[]; cached?: boolean }
   | { jobId: string; type: "failed"; error: string }
-  | { jobId: string; type: "meter"; chunk: number | string; hardware: Hardware; elapsedSeconds: number; at?: number };
-
-const SECONDS_COLUMN: Record<Hardware, "secondsCpu" | "secondsGpuL4" | "secondsGpuL40s"> = {
-  cpu: "secondsCpu",
-  "gpu-l4": "secondsGpuL4",
-  "gpu-l40s": "secondsGpuL40s",
-};
+  | { jobId: string; type: "meter"; chunk: number | string; hardware: Hardware; elapsedSeconds: number; at?: number }
+  | { jobId: string; type: "heartbeat" };
 
 export async function applyWorkerEvent(ev: WorkerEvent) {
   const [job] = await db().select().from(jobs).where(eq(jobs.id, ev.jobId));
@@ -311,22 +356,17 @@ export async function applyWorkerEvent(ev: WorkerEvent) {
       // Usage is always recorded, even for canceled jobs: the compute was spent.
       if (!HARDWARE.includes(ev.hardware) || !(ev.seconds >= 0)) throw new ApiError("invalid_request", "bad usage event");
       const chunk = String(ev.chunk);
-      const inserted = await db().insert(usageEvents)
-        .values({ jobId: job.id, chunk, orgId: job.orgId, hardware: ev.hardware, seconds: ev.seconds })
-        .onConflictDoNothing().returning();
-      if (!inserted.length) return { duplicate: true };
-      const free = await consumeFreeSeconds(job.orgId, ev.seconds);
-      const split = splitUsage(ev.hardware, ev.seconds, free);
-      await db().update(usageEvents).set(split).where(and(eq(usageEvents.jobId, job.id), eq(usageEvents.chunk, chunk)));
-      const col = SECONDS_COLUMN[ev.hardware];
-      await db().update(jobs).set({
-        [col]: sql`${jobs[col]} + ${ev.seconds}`,
-        costUsd: sql`${jobs.costUsd} + ${split.costUsd}`,
-      }).where(eq(jobs.id, job.id));
+      const split = await recordUsage(job.id, job.orgId, chunk, ev.hardware, ev.seconds);
+      if (!split) return { duplicate: true };
       await markChunkFinal(job.id, chunk, ev.hardware, ev.seconds);
-      await reportMeter(job.orgId, job.id, chunk, ev.hardware, split.billedSeconds).catch((e) => console.error("stripe meter", e));
+      // A failure here is retried by the sweep (reconcileUsage): the row stays reported_to_stripe = false.
+      await reportMeter(job.orgId, job.id, chunk, ev.hardware, split.billedSeconds)
+        .catch((e) => captureError(e, { orgId: job.orgId, job_id: job.id, chunk, source: "stripe_meter" }));
       return { ok: true, ...split };
     }
+    case "heartbeat":
+      await touch(job.id);
+      return { ok: true };
     case "warning":
       // Deliveries can repeat (retries, replays inside the signature window): keep each message once.
       if ((job.warnings as string[] | null)?.includes(ev.message)) return { duplicate: true };
@@ -335,6 +375,7 @@ export async function applyWorkerEvent(ev: WorkerEvent) {
     case "status":
       if (TERMINAL.has(job.status)) return { ignored: true };
       await db().update(jobs).set({
+        lastEventAt: new Date(),
         status: TERMINAL.has(ev.status) ? job.status : ev.status,
         progress: ev.progress ?? job.progress,
         engine: ev.engine ?? job.engine,
@@ -343,16 +384,15 @@ export async function applyWorkerEvent(ev: WorkerEvent) {
       }).where(eq(jobs.id, job.id));
       return { ok: true };
     case "done": {
-      if (job.status === "canceled") return { ignored: true };
+      // Once a job is canceled, stopped or swept it stays that way (the customer may already have retried it).
       const outputs: JobOutput[] = ev.outputs.map(toJobOutput);
-      await db().update(jobs).set({ status: "succeeded", progress: 1, outputs, cached: Boolean(ev.cached), finishedAt: new Date(), startedAt: job.startedAt ?? new Date() })
-        .where(eq(jobs.id, job.id));
+      const row = await finishJob(job, { status: "succeeded", progress: 1, outputs, cached: Boolean(ev.cached), startedAt: job.startedAt ?? new Date() });
+      if (!row) return { ignored: true };
       await trackFinished(job, "succeeded", { cached: Boolean(ev.cached), outputs: outputs.length }).catch(() => {});
       return { ok: true };
     }
     case "failed":
-      if (TERMINAL.has(job.status)) return { ignored: true };
-      await db().update(jobs).set({ status: "failed", error: ev.error, finishedAt: new Date() }).where(eq(jobs.id, job.id));
+      if (!(await finishJob(job, { status: "failed", error: ev.error }))) return { ignored: true };
       await trackFinished(job, "failed", { error: ev.error.slice(0, 300) }).catch(() => {});
       // Render failures are product errors too: one error-tracking issue per kind of failure.
       captureError(new Error(`job failed: ${ev.error.split("\n")[0].slice(0, 200)}`), {
@@ -396,6 +436,7 @@ async function applyMeter(job: JobRow, ev: Extract<WorkerEvent, { type: "meter" 
   const updated = await db()
     .update(jobs)
     .set({
+      lastEventAt: new Date(now),
       live: sql`jsonb_build_object(
         'updatedAt', ${now}::bigint,
         'chunks', coalesce(${jobs.live}->'chunks', '{}'::jsonb) || jsonb_build_object(${chunk}::text, ${entry}::jsonb))`,
@@ -408,8 +449,43 @@ async function applyMeter(job: JobRow, ev: Extract<WorkerEvent, { type: "meter" 
            or not (coalesce(${jobs.live}->'chunks', '{}'::jsonb) ? ${chunk}::text)
            or coalesce((${jobs.live}->>'updatedAt')::bigint, 0) <= ${now - METER_WRITE_INTERVAL_MS}::bigint)`,
     ))
-    .returning({ id: jobs.id });
-  return updated.length ? { ok: true } : { throttled: true };
+    .returning({ id: jobs.id, live: jobs.live, costUsd: jobs.costUsd, maxCostUsd: jobs.maxCostUsd });
+  if (!updated.length) return { throttled: true };
+  await enforceRunningBudget(job, updated[0], now)
+    .catch((e) => captureError(e, { orgId: job.orgId, job_id: job.id, source: "budget_check" }));
+  return { ok: true };
+}
+
+/** In-flight (not yet billed) seconds and list-price cost of a job's running chunks. */
+export function pendingUsage(live: JobRow["live"]): { seconds: number; costUsd: number } {
+  let seconds = 0, cost = 0;
+  for (const c of Object.values(live?.chunks ?? {})) {
+    if (c.final || !(HARDWARE as string[]).includes(c.hardware)) continue;
+    seconds += c.elapsed;
+    cost += priceOf(c.hardware as Hardware, c.elapsed);
+  }
+  return { seconds, costUsd: cost };
+}
+
+/**
+ * Stop a running job once it would overrun the free balance, the monthly spending limit or its own maxCostUsd.
+ * Checked on each accepted meter write (at most every METER_WRITE_INTERVAL_MS per job).
+ */
+async function enforceRunningBudget(job: JobRow, now: Pick<JobRow, "live" | "costUsd" | "maxCostUsd">, at: number) {
+  const pending = pendingUsage(now.live);
+  const b = await getBillingRow(job.orgId);
+  const verdict = checkRunningBudget(b, await spentThisMonthUsd(job.orgId, new Date(at)), {
+    pendingSeconds: pending.seconds, pendingCostUsd: pending.costUsd, jobCostUsd: now.costUsd + pending.costUsd,
+  }, now.maxCostUsd);
+  if (!verdict.stop) return;
+  await cancelWorkerCall(job.id, job.modalCallId);
+  const row = await finishJob(job, { status: "failed", error: verdict.reason });
+  if (row) await trackFinished(row, "failed", { error: verdict.reason, budget_stop: true }).catch(() => {});
+}
+
+/** Record that the worker is still alive for this job (see sweepStaleJobs). */
+async function touch(jobId: string) {
+  await db().update(jobs).set({ lastEventAt: new Date() }).where(and(eq(jobs.id, jobId), inArray(jobs.status, [...ACTIVE])));
 }
 
 /** A billed chunk leaves the live set: its seconds are in the job's billed columns from here on. */

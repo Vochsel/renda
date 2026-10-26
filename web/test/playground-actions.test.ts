@@ -17,6 +17,7 @@ process.env.APP_URL = "https://renda.test";
 process.env.R2_OUTPUT_TTL_SECONDS = "3600";
 process.env.FREE_SECONDS = "1800";
 process.env.RATE_LIMIT_DISABLED = "1";
+process.env.MAX_ACTIVE_JOBS_FREE = "100"; // fake worker: submitted jobs stay queued
 
 const pg = new PGlite();
 const testDb = drizzle(pg, { schema });

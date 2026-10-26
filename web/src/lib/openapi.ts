@@ -49,6 +49,7 @@ export function openapi(baseUrl: string) {
             kind: { enum: ["scene", "hyperframes"], default: "scene" },
             priority: { enum: ["economy", "standard", "rush"], default: "standard" },
             idempotencyKey: { type: "string" },
+            maxCostUsd: { type: "number", description: "Refuse the job if its estimate is above this (422 job_over_budget), and stop it if it runs past it." },
           },
         },
         Job: {
@@ -151,6 +152,10 @@ export function openapi(baseUrl: string) {
         },
       },
       "/usage": { get: { ...authed, summary: "Usage and cost for a period (default: this month)", parameters: [{ name: "from", in: "query", schema: { type: "string", format: "date-time" } }, { name: "to", in: "query", schema: { type: "string", format: "date-time" } }], responses: { 200: ok({ type: "object" }) } } },
+      "/billing/limit": {
+        get: { ...authed, summary: "Monthly spending limit and spend so far this month (UTC)", responses: { 200: ok({ type: "object", properties: { monthlyLimitUsd: { type: "number" }, spentThisMonthUsd: { type: "number" } } }) } },
+        put: { ...authed, summary: "Set the monthly spending limit (null = default). New jobs are refused, and running ones stopped, once it's reached.", requestBody: body({ type: "object", required: ["monthlyLimitUsd"], properties: { monthlyLimitUsd: { type: ["number", "null"] } } }), responses: { 200: ok({ type: "object", properties: { monthlyLimitUsd: { type: "number" }, spentThisMonthUsd: { type: "number" } } }), 400: err } },
+      },
       "/billing/checkout": { post: { ...authed, summary: "Stripe Checkout link (setup mode) for the user to add a card", responses: { 200: ok({ type: "object", properties: { url: { type: "string" } } }) } } },
       "/billing/portal": { get: { ...authed, summary: "Stripe customer portal link", responses: { 200: ok({ type: "object", properties: { url: { type: "string" } } }) } } },
       "/pricing": { get: { summary: "Price table", responses: { 200: ok({ type: "object" }) } } },
