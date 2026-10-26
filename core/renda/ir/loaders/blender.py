@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from ...procenv import untrusted_env
 from ..rir import read_rir
 from ..stage import Stage
 
@@ -54,7 +55,8 @@ def run_blender_script(script: str, job: dict, timeout: float | None = None) -> 
     if binary:
         cmd = [binary, "--background", "--factory-startup", "--python-exit-code", "1",
                "--python", str(SCRIPTS / script), "--", str(job_path)]
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        # Blender runs the user's .blend (drivers, geometry nodes, importers): no secrets in its environment.
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=untrusted_env())
         if proc.returncode != 0:
             tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-30:])
             raise RuntimeError(f"blender {script} failed (exit {proc.returncode}):\n{tail}")
@@ -63,7 +65,8 @@ def run_blender_script(script: str, job: dict, timeout: float | None = None) -> 
         import sys
 
         cmd = [sys.executable, str(SCRIPTS / script), "--", str(job_path)]
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                              env=untrusted_env(keep_prefixes=("PYTHON", "VIRTUAL_ENV")))
         if proc.returncode != 0:
             raise RuntimeError(f"bpy {script} failed:\n{proc.stderr[-4000:]}")
     else:

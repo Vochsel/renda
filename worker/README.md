@@ -88,13 +88,31 @@ The gallery thumbnail is taken ~40% into the video (frame 0 is usually a blank p
 
 Both require `Authorization: Bearer $RENDA_WORKER_TOKEN`.
 
-- `POST renda-submit` — body `{jobId, kind, package, priority, inputs, outputPrefix?, callbackUrl}` → `{accepted, callId}`; `422` with pydantic errors on a bad body.
+- `POST renda-submit` — body `{jobId, kind, package, priority, inputs, outputPrefix?, callbackUrl, jobKey, storage}` → `{accepted, callId}`; `422` with pydantic errors on a bad body or when `jobKey`/`storage` are missing.
 - `POST renda-cancel` — body `{jobId}` → `{canceled}`. The server owns the job's `canceled` status; chunks already running still report the seconds they used.
 
-Events go to `callbackUrl`, body signed `x-renda-signature: sha256=<hmac hex>` with
-`RENDA_WORKER_SECRET`. Money-bearing events carry `idempotency-key`: `usage` → `<jobId>:<chunk>`
+Events go to `callbackUrl`, signed `x-renda-signature: v1=<hmac hex>` over `"<x-renda-timestamp>.<body>"`
+with the job's `jobKey` (web derives it as HMAC-SHA256(RENDA_WORKER_SECRET, `job:<jobId>`); the worker
+never sees the master secret). Money-bearing events carry `idempotency-key`: `usage` → `<jobId>:<chunk>`
 (chunk is an int, or `orchestrate` / `encode` / `hyperframes`), `done`/`failed` → `<jobId>:done|failed`.
 The server must dedupe on it: Modal retries a preempted chunk and the retry reuses the key.
+
+`usage`, `done` and `failed` are retried for ~10 minutes (capped exponential backoff, 60 s cap). Render,
+encode and training containers make only the quick attempts (~7.5 s) and hand anything undelivered back
+to the orchestrator in their result, which keeps retrying in the background (usage always ahead of
+`done`). The orchestrator (and HyperFrames) also send `{"jobId", "type": "heartbeat"}` every 60 s from
+start to finish, including while chunks wait for a GPU.
+
+### Credentials and isolation
+
+Only `submit`/`cancel` get the `renda-worker` secret (for `RENDA_WORKER_TOKEN`). Every function that
+touches customer content runs with no long-lived secret: R2 access comes from the job's `storage` grant
+(Cloudflare temporary credentials scoped to `outputs/<jobId>/` and `work/<jobId>/`, minted by web), and
+events are signed with `jobKey`. Blender, pbrt, ffmpeg, Chromium and the HyperFrames CLI get an
+allowlisted environment (`procenv.py`). The shared cross-job result cache (`cache/`) is off in production
+(`Deps.result_cache`): a job can't read other jobs' outputs, and one job's render must never be served to
+another customer; the web app's per-org result cache still applies. Network is not restricted: renders
+fetch user `https://` assets and post events to the web app.
 
 ## Cost controls (what's actually implemented)
 
@@ -140,15 +158,15 @@ uv pip install -e '../core[mitsuba]'
 ### Against Modal
 
 ```bash
-modal secret create renda-worker RENDA_WORKER_TOKEN=... RENDA_WORKER_SECRET=... [POSTHOG_KEY=phc_...]   # POSTHOG_KEY optional: job exceptions → PostHog error tracking
-modal secret create renda-r2 R2_ACCOUNT_ID=... R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=... R2_BUCKET=renda
+modal secret create renda-worker RENDA_WORKER_TOKEN=...   # submit/cancel only
+# optional: POSTHOG_KEY=phc_... ./deploy.sh   → job exceptions to PostHog error tracking
 
 modal serve renda_worker/app.py        # dev URLs: https://<ws>--renda-submit-dev.modal.run
 ./deploy.sh                                # prod URLs: https://<ws>--renda-submit.modal.run, …--renda-cancel.modal.run
 ```
 
-Isolated copy for development (own endpoints `renda-submit-<name>`, volumes, dicts and secrets
-`renda-worker-<name>` / `renda-r2-<name>`; production untouched): create those two secrets, then
+Isolated copy for development (own endpoints `renda-submit-<name>`, volumes, dicts and secret
+`renda-worker-<name>`; production untouched; R2 credentials come from whichever web app submits): create that secret, then
 `RENDA_APP_NAME=renda-worker-<name> ./deploy.sh`, and `modal app stop renda-worker-<name>` when done.
 The hosted preview stack runs as `renda-worker-dev` on its own bucket.
 
@@ -156,9 +174,9 @@ Splat bakes (`output.format: "splat"`): view chunks write PNGs to the assets Vol
 (`bakes/<job>/views/`), then `train_splat_l4` / `train_splat_l40s` (splat image) refine with gsplat and
 upload the splat; usage is reported under chunk `train`.
 
-Set `MODAL_SUBMIT_URL` / `MODAL_CANCEL_URL` and the same `RENDA_WORKER_TOKEN` / `RENDA_WORKER_SECRET`
-in the web app. To see events locally, tunnel the web dev server (e.g. `cloudflared tunnel --url
+Set `MODAL_SUBMIT_URL` / `MODAL_CANCEL_URL`, the same `RENDA_WORKER_TOKEN`, `RENDA_WORKER_SECRET` and
+`CLOUDFLARE_API_TOKEN` in the web app. To see events locally, tunnel the web dev server (e.g. `cloudflared tunnel --url
 http://localhost:3000`) and pass its URL as `--callback` to `scripts/submit_local.py`.
 
 R2 lifecycle rules to add on the bucket: `work/` expire after 1 day, `outputs/` after 30 days,
-`cache/` after 30 days.
+`cache/` after 30 days (only local runs still write it).

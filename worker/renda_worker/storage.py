@@ -3,7 +3,12 @@
 Keys:
   outputs/<jobId>/...         final outputs the server presigns for users (30-day lifecycle)
   work/<jobId>/frames/...     intermediate frames between render chunks and the encoder (1-day lifecycle)
-  cache/<cacheKey>.json       result-cache manifest: list of output objects for a cache key
+  cache/<cacheKey>.json       result-cache manifest (local/dev only: production jobs get credentials scoped to
+                              their own prefixes, so the shared cross-job cache is off there; see pipeline.Deps)
+
+Production containers never hold the bucket-wide R2 key. The web app mints Cloudflare R2 temporary
+credentials per job, limited to `outputs/<jobId>/` and `work/<jobId>/`, and sends them in the submit body
+(`storage`); `R2Storage.from_grant` builds a client from them.
 """
 
 from __future__ import annotations
@@ -37,7 +42,8 @@ class Storage(Protocol):
 
 
 class R2Storage:
-    def __init__(self, bucket: str | None = None, endpoint: str | None = None, access_key: str | None = None, secret_key: str | None = None):
+    def __init__(self, bucket: str | None = None, endpoint: str | None = None, access_key: str | None = None,
+                 secret_key: str | None = None, session_token: str | None = None):
         import boto3
         from botocore.config import Config
 
@@ -47,10 +53,18 @@ class R2Storage:
             endpoint_url=endpoint or os.environ.get("R2_ENDPOINT") or f"https://{os.environ['R2_ACCOUNT_ID']}.r2.cloudflarestorage.com",
             aws_access_key_id=access_key or os.environ["R2_ACCESS_KEY_ID"],
             aws_secret_access_key=secret_key or os.environ["R2_SECRET_ACCESS_KEY"],
+            aws_session_token=session_token,
             region_name="auto",
             config=Config(retries={"max_attempts": 8, "mode": "adaptive"}, s3={"addressing_style": "path"},
                           max_pool_connections=32),  # uploads run 16 threads; the default pool is 10
         )
+
+    @classmethod
+    def from_grant(cls, grant: Any) -> "R2Storage":
+        """Client for a per-job temporary credential (models.StorageGrant or its dict form)."""
+        g = grant.model_dump(mode="json") if hasattr(grant, "model_dump") else dict(grant)
+        return cls(bucket=g["bucket"], endpoint=g["endpoint"], access_key=g["accessKeyId"],
+                   secret_key=g["secretAccessKey"], session_token=g["sessionToken"])
 
     def put_file(self, path: Path, key: str, content_type_: str | None = None) -> int:
         self.s3.upload_file(str(path), self.bucket, key, ExtraArgs={"ContentType": content_type_ or content_type(path)})

@@ -18,6 +18,7 @@ from pathlib import Path
 
 import boto3
 import modal
+from jobcreds import job_credentials  # noqa: E402  (scripts/ is on sys.path when run as a script)
 
 ROOT = Path(__file__).resolve().parents[2]
 BENCH = {
@@ -83,7 +84,8 @@ def main() -> None:
             job_id = f"bench_{args.tag}_{name}_{uuid.uuid4().hex[:6]}"
             body = {"jobId": job_id, "package": pkg, "priority": args.priority,
                     "inputs": {uri: s3.generate_presigned_url("get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=3600)},
-                    "outputPrefix": f"outputs/bench-{args.tag}/{job_id}/", "callbackUrl": args.sink or "https://renda.vochsel.com/api/v1/internal/worker/events"}
+                    "outputPrefix": f"outputs/{job_id}/", "callbackUrl": args.sink or "https://renda.vochsel.com/api/v1/internal/worker/events",
+                    **job_credentials(job_id)}  # per-job jobKey + scoped R2 credentials (scripts/jobcreds.py)
             t = time.time()
             res = orchestrate.remote(body)
             wall = round(time.time() - t, 1)

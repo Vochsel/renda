@@ -20,9 +20,16 @@ denial-of-service testing), and don't access other users' data beyond what's nee
   area; the server hashes the bytes on first use and only then makes them usable (and stores one shared
   copy). Knowing a file's hash doesn't let another account use it, and nobody can place different bytes
   under someone else's hash. Upload and download URLs are presigned, single-object and short-lived.
-- **Worker channel.** The API calls the render workers with a bearer token. Workers report back with
-  HMAC-SHA256-signed, timestamped events; stale or forged events are rejected, and event handling is
-  idempotent so retries can't double-bill.
+- **Worker channel.** The API calls the render workers with a bearer token, which only the two HTTP
+  endpoints (submit, cancel) hold. Render containers parse untrusted files and run user HTML/JS, so they
+  hold no long-lived secret: each job gets its own event-signing key (HMAC-SHA256 of the master secret
+  and `job:<jobId>`) and Cloudflare R2 temporary credentials limited to `outputs/<jobId>/` and
+  `work/<jobId>/`, both minted by the API at submit. Events are timestamped (±5 minutes), must all name
+  one job, and must verify with that job's key; `done` may only point at the job's own outputs. Event
+  handling is idempotent so retries can't double-bill. Blender, pbrt, ffmpeg, headless Chromium and the
+  HyperFrames CLI run with an allowlisted environment. A compromised render can therefore read and write
+  only its own job's objects and report only on its own job. During a rollout, events signed with the
+  master secret are still accepted until `RENDA_ACCEPT_MASTER_WORKER_EVENTS=0`.
 - **Fetching URLs on your behalf.** Package layers and `https://` assets are fetched only over https, only
   from globally routable addresses (checked against the resolved address that is then connected to),
   with redirects re-validated and size and time limits.

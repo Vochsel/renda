@@ -5,6 +5,11 @@
 
 Flow: submit (HTTP) → orchestrate (0.25 core) → render_chunk_* .map() → encode_video → R2 + events.
 All job logic lives in pipeline.py; this file is resource shapes and wiring only.
+
+Secrets: only `submit`/`cancel` get the `renda-worker` secret (they check RENDA_WORKER_TOKEN). Everything that
+touches customer content (orchestrate, render chunks, training, encode, HyperFrames) runs with no long-lived
+secret at all: each job brings its own event-signing key (`jobKey`) and Cloudflare R2 temporary credentials
+scoped to outputs/<jobId>/ and work/<jobId>/ (`storage`), both minted by the web app per job (SECURITY.md).
 """
 
 from __future__ import annotations
@@ -186,17 +191,21 @@ kernel_cache_volume = modal.Volume.from_name(f"renda-kernel-cache{_SUFFIX}", cre
 cancel_flags = modal.Dict.from_name(f"renda-cancel{_SUFFIX}", create_if_missing=True)
 job_calls = modal.Dict.from_name(f"renda-calls{_SUFFIX}", create_if_missing=True)
 
-# Isolated apps get their own secrets too (renda-r2-dev, renda-worker-dev): their own bucket and signing
-# keys, so a dev/preview stack can never write production storage or sign production callbacks.
-r2_secret = modal.Secret.from_name(f"renda-r2{_SUFFIX}")
+# Isolated apps get their own secret too (renda-worker-dev): their own bearer token, so a dev/preview stack
+# can never be driven by production. R2 access and event signing come per job from whichever web app
+# submitted it.
 worker_secret = modal.Secret.from_name(f"renda-worker{_SUFFIX}")
+# Non-secret runtime config for containers that process customer content. Containers re-import this module
+# without the deploy-time env, so values travel in a from_dict secret (recomputed identically in-container
+# because the same names are then set there).
+_RUNTIME_ENV = {k: os.environ[k] for k in ("POSTHOG_KEY", "POSTHOG_HOST") if os.environ.get(k)}
 if _SUFFIX:
-    # Containers re-import this module without the deploy-time env; carry the isolated app's name in a
-    # secret so they resolve the same volumes/dicts (production keeps its secrets unchanged).
-    WORKER_SECRETS = [worker_secret, modal.Secret.from_dict({"RENDA_APP_NAME": APP_NAME})]
-else:
-    WORKER_SECRETS = [worker_secret]
-SECRETS = [r2_secret, *WORKER_SECRETS]
+    # carry the isolated app's name so containers resolve the same volumes/dicts
+    _RUNTIME_ENV["RENDA_APP_NAME"] = APP_NAME
+# POSTHOG_KEY is a write-only ingestion key (the same kind browsers embed), not a credential.
+RUNTIME_SECRETS = [modal.Secret.from_dict(_RUNTIME_ENV)] if _RUNTIME_ENV else []
+# Only the HTTP endpoints hold RENDA_WORKER_TOKEN; they parse nothing but the JSON envelope.
+ENDPOINT_SECRETS = [worker_secret, *RUNTIME_SECRETS]
 
 # Heavy imports at module scope in containers so memory snapshots capture them (core + numpy +
 # trimesh + mitsuba init is several seconds per cold start otherwise). Best effort: a module
@@ -219,28 +228,37 @@ if not modal.is_local():
 
 # ---------------------------------------------------------------- wiring helpers
 
-_STORAGE = None
+_STORAGE: dict = {}
 
 
-def _storage():
-    # One R2 client per container: reusing its connection pool saves a TLS handshake per upload.
-    global _STORAGE
-    if _STORAGE is None:
-        from renda_worker.storage import R2Storage
+def _storage(grant):
+    # One R2 client per job credential, reused while the container serves that job's chunks (its connection
+    # pool saves a TLS handshake per upload). Only the latest few are kept: credentials are per job.
+    from renda_worker.storage import R2Storage
 
-        _STORAGE = R2Storage()
-    return _STORAGE
+    if not grant:
+        raise RuntimeError("job has no storage credentials (web must send `storage`)")
+    key = grant["accessKeyId"] if isinstance(grant, dict) else grant.accessKeyId
+    if key not in _STORAGE:
+        while len(_STORAGE) >= 4:
+            _STORAGE.pop(next(iter(_STORAGE)))
+        _STORAGE[key] = R2Storage.from_grant(grant)
+    return _STORAGE[key]
 
 
-def _deps(job_id: str, callback_url: str, **kw):
+def _deps(job_id: str, callback_url: str, job_key: str | None, grant, defer_durable: bool = True, **kw):
+    """`defer_durable`: render/encode/train containers make the quick delivery attempts and hand undelivered
+    usage back to the orchestrator; the orchestrator and HyperFrames (job owners) retry for ~10 minutes."""
     from renda_worker.core_api import RendaCore
     from renda_worker.events import EventSink
     from renda_worker.pipeline import Deps
 
-    events = EventSink(job_id, callback_url, os.environ["RENDA_WORKER_SECRET"], background=True)
+    if not job_key:
+        raise RuntimeError("job has no signing key (web must send `jobKey`)")
+    events = EventSink(job_id, callback_url, job_key, background=True, defer_durable=defer_durable)
     return Deps(
         core=RendaCore(),
-        storage=_storage(),
+        storage=_storage(grant),
         events=events,
         asset_root=Path(ASSET_ROOT),
         is_canceled=lambda: bool(cancel_flags.get(job_id, False)),
@@ -260,7 +278,8 @@ def _chunk(task, started: float):
     from renda_worker.pipeline import run_chunk
 
     _reload_assets()
-    return run_chunk(task, _deps(task.job_id, task.callback_url, on_new_asset=assets_volume.commit), started=started)
+    return run_chunk(task, _deps(task.job_id, task.callback_url, task.job_key, task.storage, on_new_asset=assets_volume.commit),
+                     started=started)
 
 
 def _retries() -> modal.Retries:
@@ -287,19 +306,19 @@ _L40S = hw.SHAPES[hw.Hardware.GPU_L40S]
 
 # ---------------------------------------------------------------- render chunks
 
-@app.function(image=cpu_image, secrets=SECRETS, volumes={ASSET_ROOT: assets_volume}, retries=_retries(),
+@app.function(image=cpu_image, secrets=RUNTIME_SECRETS, volumes={ASSET_ROOT: assets_volume}, retries=_retries(),
               enable_memory_snapshot=True, **_shape_kwargs(_CPU))
 def render_chunk_cpu(task):
     return _chunk(task, time.monotonic())
 
 
-@app.function(image=blender_image, secrets=SECRETS, volumes={ASSET_ROOT: assets_volume}, retries=_retries(),
+@app.function(image=blender_image, secrets=RUNTIME_SECRETS, volumes={ASSET_ROOT: assets_volume}, retries=_retries(),
               enable_memory_snapshot=True, **_shape_kwargs(_CPU))
 def render_chunk_blender_cpu(task):
     return _chunk(task, time.monotonic())
 
 
-@app.function(image=blender_image, gpu=hw.gpu_request(_L4, hw.L4_FALLBACK_GPUS), secrets=SECRETS,
+@app.function(image=blender_image, gpu=hw.gpu_request(_L4, hw.L4_FALLBACK_GPUS), secrets=RUNTIME_SECRETS,
               volumes={ASSET_ROOT: assets_volume, CACHE_ROOT: kernel_cache_volume}, retries=_retries(),
               enable_memory_snapshot=True, **_shape_kwargs(_L4))
 def render_chunk_l4(task):
@@ -310,7 +329,7 @@ def render_chunk_l4(task):
         kernel_cache_volume.commit()  # persist newly compiled shaders/kernels for the next container
 
 
-@app.function(image=splat_image, gpu=_L4.gpu, secrets=SECRETS,
+@app.function(image=splat_image, gpu=_L4.gpu, secrets=RUNTIME_SECRETS,
               volumes={ASSET_ROOT: assets_volume, CACHE_ROOT: kernel_cache_volume}, retries=_retries(),
               enable_memory_snapshot=True, **_shape_kwargs(_L4))
 def render_chunk_splat_l4(task):
@@ -321,7 +340,7 @@ def render_chunk_splat_l4(task):
         kernel_cache_volume.commit()
 
 
-@app.function(image=splat_image, gpu=_L40S.gpu, secrets=SECRETS,
+@app.function(image=splat_image, gpu=_L40S.gpu, secrets=RUNTIME_SECRETS,
               volumes={ASSET_ROOT: assets_volume, CACHE_ROOT: kernel_cache_volume}, retries=_retries(),
               enable_memory_snapshot=True, **_shape_kwargs(_L40S))
 def render_chunk_splat_l40s(task):
@@ -358,7 +377,7 @@ def _use_kernel_cache() -> None:
         pass  # caching is an optimisation; never fail a render over it
 
 
-@app.function(image=blender_image, gpu=_L40S.gpu, secrets=SECRETS,
+@app.function(image=blender_image, gpu=_L40S.gpu, secrets=RUNTIME_SECRETS,
               volumes={ASSET_ROOT: assets_volume, CACHE_ROOT: kernel_cache_volume}, retries=_retries(),
               enable_memory_snapshot=True, **_shape_kwargs(_L40S))
 def render_chunk_l40s(task):
@@ -369,19 +388,19 @@ def render_chunk_l40s(task):
         kernel_cache_volume.commit()  # persist newly compiled shaders/kernels for the next container
 
 
-@app.function(image=threejs_image, secrets=SECRETS, volumes={ASSET_ROOT: assets_volume}, retries=_retries(),
+@app.function(image=threejs_image, secrets=RUNTIME_SECRETS, volumes={ASSET_ROOT: assets_volume}, retries=_retries(),
               **_shape_kwargs(hw.THREEJS))
 def render_chunk_threejs(task):
     return _chunk(task, time.monotonic())
 
 
-@app.function(image=filament_image, secrets=SECRETS, volumes={ASSET_ROOT: assets_volume}, retries=_retries(),
+@app.function(image=filament_image, secrets=RUNTIME_SECRETS, volumes={ASSET_ROOT: assets_volume}, retries=_retries(),
               **_shape_kwargs(hw.FILAMENT))
 def render_chunk_filament(task):
     return _chunk(task, time.monotonic())
 
 
-@app.function(image=pbrt_image, secrets=SECRETS, volumes={ASSET_ROOT: assets_volume}, retries=_retries(),
+@app.function(image=pbrt_image, secrets=RUNTIME_SECRETS, volumes={ASSET_ROOT: assets_volume}, retries=_retries(),
               **_shape_kwargs(hw.PBRT))
 def render_chunk_pbrt(task):
     return _chunk(task, time.monotonic())
@@ -391,12 +410,12 @@ def _train(task, started: float):
     from renda_worker.pipeline import run_train
 
     _reload_assets()
-    deps = _deps(task.job_id, task.callback_url, on_new_asset=assets_volume.commit)
+    deps = _deps(task.job_id, task.callback_url, task.job_key, task.storage, on_new_asset=assets_volume.commit)
     deps.refresh_volume = _reload_assets  # streaming: pick up views other containers commit
     return run_train(task, deps, started=started)
 
 
-@app.function(image=splat_image, gpu=_L4.gpu, secrets=SECRETS,
+@app.function(image=splat_image, gpu=_L4.gpu, secrets=RUNTIME_SECRETS,
               volumes={ASSET_ROOT: assets_volume, CACHE_ROOT: kernel_cache_volume}, retries=_retries(),
               **_shape_kwargs(_L4))
 def train_splat_l4(task):
@@ -407,7 +426,7 @@ def train_splat_l4(task):
         kernel_cache_volume.commit()
 
 
-@app.function(image=splat_image, gpu=_L40S.gpu, secrets=SECRETS,
+@app.function(image=splat_image, gpu=_L40S.gpu, secrets=RUNTIME_SECRETS,
               volumes={ASSET_ROOT: assets_volume, CACHE_ROOT: kernel_cache_volume}, retries=_retries(),
               **_shape_kwargs(_L40S))
 def train_splat_l40s(task):
@@ -436,15 +455,15 @@ RUNNER_FUNCTIONS = {
 
 # ---------------------------------------------------------------- encode / orchestrate / hyperframes
 
-@app.function(image=cpu_image, secrets=SECRETS, retries=_retries(), enable_memory_snapshot=True, **_shape_kwargs(hw.ENCODE))
+@app.function(image=cpu_image, secrets=RUNTIME_SECRETS, retries=_retries(), enable_memory_snapshot=True, **_shape_kwargs(hw.ENCODE))
 def encode_video(task):
     from renda_worker.pipeline import run_encode
 
     started = time.monotonic()
-    return run_encode(task, _deps(task.job_id, task.callback_url), started=started)
+    return run_encode(task, _deps(task.job_id, task.callback_url, task.job_key, task.storage), started=started)
 
 
-@app.function(image=blender_image, secrets=SECRETS, volumes={ASSET_ROOT: assets_volume},
+@app.function(image=blender_image, secrets=RUNTIME_SECRETS, volumes={ASSET_ROOT: assets_volume},
               enable_memory_snapshot=True, **_shape_kwargs(hw.ORCHESTRATE))
 def orchestrate(job_body: dict):
     """Cheap coordinator: fetch + plan on 0.25 core, fan out renders, finalize. No retries: it
@@ -461,6 +480,9 @@ def orchestrate(job_body: dict):
     deps = _deps(
         job.jobId,
         str(job.callbackUrl),
+        job.jobKey,
+        job.storage,
+        defer_durable=False,
         run_chunks=run_chunks,
         run_encode=encode_video.remote,
         run_train=lambda task: TRAIN_FUNCTIONS[task.hardware].remote(task),
@@ -475,7 +497,7 @@ def orchestrate(job_body: dict):
         cancel_flags.pop(job.jobId, None)
 
 
-@app.function(image=hyperframes_image, secrets=SECRETS, volumes={ASSET_ROOT: assets_volume}, **_shape_kwargs(hw.HYPERFRAMES))
+@app.function(image=hyperframes_image, secrets=RUNTIME_SECRETS, volumes={ASSET_ROOT: assets_volume}, **_shape_kwargs(hw.HYPERFRAMES))
 def render_hyperframes(job_body: dict):
     from renda_worker.models import JobRequest
     from renda_worker.pipeline import run_hyperframes_job
@@ -483,7 +505,9 @@ def render_hyperframes(job_body: dict):
     started = time.monotonic()
     job = JobRequest.model_validate(job_body)
     try:
-        return run_hyperframes_job(job, _deps(job.jobId, str(job.callbackUrl), on_new_asset=assets_volume.commit),
+        deps = _deps(job.jobId, str(job.callbackUrl), job.jobKey, job.storage, defer_durable=False,
+                     on_new_asset=assets_volume.commit)
+        return run_hyperframes_job(job, deps,
                                    timeout=hw.HYPERFRAMES.timeout_s - 120, started=started)
     finally:
         job_calls.pop(job.jobId, None)
@@ -502,7 +526,7 @@ def _authorize(authorization: str | None) -> None:
         raise HTTPException(status_code=401, detail="invalid worker token")
 
 
-@app.function(image=api_image, secrets=WORKER_SECRETS, scaledown_window=300, cpu=0.25, memory=256)
+@app.function(image=api_image, secrets=ENDPOINT_SECRETS, scaledown_window=300, cpu=0.25, memory=256)
 @modal.fastapi_endpoint(method="POST", label=f"renda-submit{_SUFFIX}")
 def submit(body: dict, authorization: str | None = Header(default=None)):
     """POST {jobId, kind, package, priority, inputs, outputPrefix, callbackUrl} → {accepted, callId}."""
@@ -516,13 +540,16 @@ def submit(body: dict, authorization: str | None = Header(default=None)):
         job = JobRequest.model_validate(body)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors(include_url=False, include_context=False))
+    # Containers hold no master secret or bucket-wide key, so a job without its own can't run.
+    if not job.jobKey or job.storage is None:
+        raise HTTPException(status_code=422, detail="jobKey and storage (per-job credentials) are required")
     fn = render_hyperframes if job.kind == "hyperframes" else orchestrate
     call = fn.spawn(job.model_dump(mode="json"))
     job_calls[job.jobId] = call.object_id
     return {"accepted": True, "callId": call.object_id}
 
 
-@app.function(image=api_image, secrets=WORKER_SECRETS, scaledown_window=300, cpu=0.25, memory=256)
+@app.function(image=api_image, secrets=ENDPOINT_SECRETS, scaledown_window=300, cpu=0.25, memory=256)
 @modal.fastapi_endpoint(method="POST", label=f"renda-cancel{_SUFFIX}")
 def cancel(body: dict, authorization: str | None = Header(default=None)):
     """POST {jobId} → {canceled}. Sets the cooperative flag, then cancels the call tree.

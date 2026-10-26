@@ -17,6 +17,7 @@ import { assertWithinTrialLimits } from "./trials";
 import { outputPrefix, presignGet } from "./r2";
 import { costUsd as priceOf, HARDWARE, type Hardware } from "./pricing";
 import { liveCost, METER_WRITE_INTERVAL_MS, type LiveCost } from "./live";
+import { workerJobCredentials } from "./worker-auth";
 
 const { jobs } = schema;
 type JobRow = typeof jobs.$inferSelect;
@@ -196,6 +197,7 @@ export async function submitJob(input: SubmitInput): Promise<Job> {
         inputs,
         outputPrefix: outputPrefix(row.id),
         callbackUrl: `${appUrl()}/api/v1/internal/worker/events`,
+        ...(await workerJobCredentials(row.id)), // per-job signing key + scoped R2 credentials
       }),
     });
     if (!res.ok) throw new Error(`worker ${res.status}: ${(await res.text()).slice(0, 300)}`);

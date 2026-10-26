@@ -18,6 +18,7 @@ from pathlib import Path
 
 import numpy as np
 
+from ..procenv import untrusted_env
 from .base import Capabilities, Engine, RenderContext, RenderResult, frame_filename, samples_for
 
 _Z_TO_Y = np.array([[1, 0, 0], [0, 0, 1], [0, -1, 0]], dtype=np.float64)
@@ -156,7 +157,7 @@ class PbrtEngine(Engine):
             if hdri:
                 eq = work / "env-equiarea.exr"
                 r = subprocess.run([_bin("imgtool"), "makeequiarea", str(hdri), "--outfile", str(eq)],
-                                   capture_output=True, text=True)
+                                   capture_output=True, text=True, env=untrusted_env())
                 if r.returncode != 0 or not eq.exists():
                     raise RuntimeError(f"pbrt: imgtool makeequiarea failed: {(r.stdout + r.stderr)[-400:]}")
                 up = "Rotate -90 1 0 0" if stage.up_axis != "Z" else ""  # equirect top → scene up
@@ -201,7 +202,7 @@ class PbrtEngine(Engine):
                 scene = work / f"frame_{f:05d}.pbrt"
                 scene.write_text("\n".join(head + env_lines + lines) + "\n")
                 r = subprocess.run([_bin("pbrt"), "--nthreads", str(nthreads), "--quiet", scene.name],
-                                   capture_output=True, text=True, cwd=work)
+                                   capture_output=True, text=True, cwd=work, env=untrusted_env())
                 if r.returncode != 0 or not exr.exists():
                     raise RuntimeError(f"pbrt failed (exit {r.returncode}): {(r.stdout + r.stderr)[-800:]}")
                 img, albedo, normal = _read_rgba(exr, read_hdr_image)

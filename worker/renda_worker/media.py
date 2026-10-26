@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .procenv import untrusted_env
+
 log = logging.getLogger(__name__)
 
 THUMB_MAX = 480
@@ -76,7 +78,7 @@ def video_media(path: Path, poster_frame: Path | None = None) -> Media | None:
         out = path.with_suffix(".poster.png")
         seek = ["-ss", f"{dur * 0.4:.3f}"] if (dur := video_duration(path)) else []
         subprocess.run([_ffmpeg(), "-loglevel", "error", "-y", *seek, "-i", str(path), "-frames:v", "1", str(out)],
-                       check=True, capture_output=True, timeout=120)
+                       check=True, capture_output=True, timeout=120, env=untrusted_env())
         try:
             return image_media(out)
         finally:
@@ -91,7 +93,8 @@ def video_duration(path: Path) -> float | None:
     import re
 
     try:
-        r = subprocess.run([_ffmpeg(), "-hide_banner", "-i", str(path)], capture_output=True, text=True, timeout=60)
+        r = subprocess.run([_ffmpeg(), "-hide_banner", "-i", str(path)], capture_output=True, text=True, timeout=60,
+                           env=untrusted_env())
     except Exception:
         return None
     m = re.search(r"Duration: (\d+):(\d+):(\d+(?:\.\d+)?)", r.stderr)
