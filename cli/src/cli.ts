@@ -5,7 +5,7 @@ import { createInterface } from "node:readline/promises";
 import {
   RendaApiError, RendaClient, TERMINAL_STATUSES, clearCredentials, credentialsPath, loadCredentials, saveCredentials,
   starterPackage, uploadBytes, uploadLocalPaths, validatePackage, zipDirectory, type Credentials, type Job,
-  hyperframesQuality, parseVarFlags, resolveVideoVariables, liveCostLabel,
+  hyperframesQuality, parseVarFlags, resolveVideoVariables, liveCostLabel, creditUsdOf, legacyFreeSecondsOf, usd,
 } from "@rendahq/mcp";
 import { parseTextureFlag } from "@rendahq/spec";
 import { flattenFile } from "@rendahq/spec/node";
@@ -58,11 +58,12 @@ Setup
   renda mcp add|remove [--agent …] [--remote]
 
 Account
-  renda trial                                anonymous trial: 5 free render-minutes, no signup
+  renda trial                                anonymous trial workspace ($0 credit), no signup
   renda claim                                print the link that keeps a trial workspace
   renda signup <email> · renda verify <code> email-code sign in (agent friendly)
   renda login                                browser sign in (device code)
-  renda logout · whoami · balance · usage · billing
+  renda logout · whoami · balance · usage
+  renda billing [--amount 25] [--portal]     checkout link to buy prepaid credit ($5–$1000)
 
 Render
   renda render <file|pkg.renda.json> [--res WxH] [--quality draft|standard|final] [--engine …]
@@ -147,14 +148,14 @@ class Ctx {
     const client = await this.client();
     if (client.apiKey) return { client };
     if (!autoTrial) {
-      throw new CliError("auth_required", "Not signed in.", EXIT.auth, "Start a free trial or sign in.", [
-        "renda trial   # no signup, 5 free render-minutes", "renda login   # browser", "renda signup <email>   # emailed 6-digit code",
+      throw new CliError("auth_required", "Not signed in.", EXIT.auth, "Start a trial or sign in.", [
+        "renda trial   # no signup, $0 credit", "renda login   # browser", "renda signup <email>   # emailed 6-digit code",
       ]);
     }
     const t = await client.trial();
     client.apiKey = t.apiKey;
     await this.save({ apiKey: t.apiKey, claimUrl: t.claimUrl, trialExpiresAt: t.expiresAt });
-    this.out.info(`No account configured: started a free trial (${Math.round(t.freeSecondsLeft / 60)} render-minutes). Keep it: ${t.claimUrl}`);
+    this.out.info(`No account configured: started a trial workspace (${usd(t.creditUsd ?? 0)} credit; buy credit with \`renda billing\`). Keep it: ${t.claimUrl}`);
     return { client, trial: { claimUrl: t.claimUrl } };
   }
 }
@@ -190,7 +191,7 @@ const COMMANDS: Record<string, Handler> = {
         const t = await client.trial();
         await ctx.save({ apiKey: t.apiKey, claimUrl: t.claimUrl, trialExpiresAt: t.expiresAt });
         claimUrl = t.claimUrl;
-        steps.push({ agent: "claude-code", action: "auth", where: ctx.deps.credentialsFile, ok: true, detail: `trial, ${minutes(t.freeSecondsLeft)} free` });
+        steps.push({ agent: "claude-code", action: "auth", where: ctx.deps.credentialsFile, ok: true, detail: `trial, ${usd(t.creditUsd ?? 0)} credit` });
       } else if (choice === "l") {
         await COMMANDS.login(ctx, []);
       }
@@ -212,6 +213,7 @@ const COMMANDS: Record<string, Handler> = {
     if (snippet) steps.push(await writeAgentsSnippet(deps.sys));
 
     if (claimUrl) next.push(`Give the user this link to keep the trial workspace: ${claimUrl}`);
+    if (claimUrl) next.push("renda billing   # renders are prepaid: a checkout link for the human to buy credit");
     next.push("Restart your agent so it loads the renda MCP server.", "renda render <file> --quality draft");
     out.ok({ steps, agents, claimUrl: claimUrl ?? null }, () => [
       "Renda is set up.",
@@ -253,9 +255,10 @@ const COMMANDS: Record<string, Handler> = {
     client.apiKey = undefined;
     const t = await client.trial();
     await ctx.save({ apiKey: t.apiKey, claimUrl: t.claimUrl, trialExpiresAt: t.expiresAt });
-    ctx.out.ok({ freeSecondsLeft: t.freeSecondsLeft, expiresAt: t.expiresAt, claimUrl: t.claimUrl, limits: t.limits ?? null, credentials: ctx.deps.credentialsFile },
-      `Trial started: ${minutes(t.freeSecondsLeft)} of free rendering (max ${t.limits?.maxDimension ?? "?"}px), expires ${t.expiresAt.slice(0, 10)} unless claimed.\nKeep it: ${t.claimUrl}`,
-      [`Give the user this link to keep the workspace: ${t.claimUrl}`, "renda render <file> --quality draft"]);
+    const credit = t.creditUsd ?? 0;
+    ctx.out.ok({ creditUsd: credit, expiresAt: t.expiresAt, claimUrl: t.claimUrl, limits: t.limits ?? null, credentials: ctx.deps.credentialsFile },
+      `Trial started: ${usd(credit)} credit (max ${t.limits?.maxDimension ?? "?"}px), expires ${t.expiresAt.slice(0, 10)} unless claimed.\nKeep it: ${t.claimUrl}`,
+      [`Give the user this link to keep the workspace: ${t.claimUrl}`, "renda billing   # renders are prepaid: a checkout link for the human to buy credit", "renda render <file> --quality draft"]);
   },
 
   async claim(ctx) {
@@ -324,21 +327,25 @@ const COMMANDS: Record<string, Handler> = {
   async whoami(ctx) {
     const { client } = await ctx.authed();
     const me = await client.me();
-    const trial = (me as any).trial;
+    const trial = me.trial;
+    const credit = creditUsdOf(me);
+    const legacyFree = legacyFreeSecondsOf(me); // older servers: free render-seconds instead of credit
     const next = trial?.active ? [`renda claim   # keep this trial workspace`] : [];
-    if (!me.billing.hasPaymentMethod && me.balance.freeSecondsLeft <= 0) next.push("renda billing   # add a card");
+    if (credit <= 0 && legacyFree <= 0) next.push("renda billing   # buy credit");
     ctx.out.ok({ ...me }, [
       `${me.user?.email ?? "anonymous trial"} · ${me.org.name ?? me.org.id}`,
-      `free left: ${minutes(me.balance.freeSecondsLeft)} · card: ${me.billing.hasPaymentMethod ? "yes" : "no"}${trial?.active ? ` · trial until ${String(trial.expiresAt).slice(0, 10)}` : ""}`,
+      `credit: ${usd(credit)}${legacyFree > 0 ? ` · free left: ${minutes(legacyFree)}` : ""}${trial?.active ? ` · trial until ${String(trial.expiresAt).slice(0, 10)}` : ""}`,
     ].join("\n"), next);
   },
 
   async balance(ctx) {
     const { client } = await ctx.authed();
     const me = await client.me();
-    ctx.out.ok({ freeSecondsLeft: me.balance.freeSecondsLeft, hasPaymentMethod: me.billing.hasPaymentMethod, trial: (me as any).trial ?? null },
-      `${minutes(me.balance.freeSecondsLeft)} free · ${me.billing.hasPaymentMethod ? "card on file, usage billed per second" : "no card"}`,
-      me.billing.hasPaymentMethod || me.balance.freeSecondsLeft > 0 ? [] : ["renda billing"]);
+    const credit = creditUsdOf(me);
+    const legacyFree = legacyFreeSecondsOf(me);
+    ctx.out.ok({ creditUsd: credit, freeSecondsLeft: legacyFree, trial: me.trial ?? null },
+      `${usd(credit)} credit${legacyFree > 0 ? ` · ${minutes(legacyFree)} free` : ""} · renders draw it down per second`,
+      credit > 0 || legacyFree > 0 ? [] : ["renda billing   # buy credit"]);
   },
 
   async usage(ctx) {
@@ -349,9 +356,15 @@ const COMMANDS: Record<string, Handler> = {
 
   async billing(ctx) {
     const { client } = await ctx.authed();
-    const me = await client.me();
-    const { url } = me.billing.hasPaymentMethod ? await client.billingPortal() : await client.billingCheckout();
-    ctx.out.ok({ url, hasPaymentMethod: me.billing.hasPaymentMethod }, url, ["Give this link to the account owner to open in a browser."]);
+    if (bool(ctx.flags, "portal")) {
+      const { url } = await client.billingPortal();
+      ctx.out.ok({ url, portal: true }, url, ["Give this link to the account owner to open in a browser."]);
+      return;
+    }
+    const amount = num(ctx.flags, "amount");
+    if (amount !== undefined && !(amount >= 5 && amount <= 1000)) throw new UsageError("--amount must be between 5 and 1000 (USD)");
+    const { url } = await client.billingCheckout(amount);
+    ctx.out.ok({ url }, url, ["Give this link to the account owner to open in a browser: it buys prepaid credit ($5–$1000, default $25, adjustable there), added as soon as the payment succeeds."]);
   },
 
   // ---------------- render ----------------
@@ -498,7 +511,7 @@ const COMMANDS: Record<string, Handler> = {
       for (const j of resolved.jobs) ctx.out.info(`${j.variable} ← ${j.jobId}`);
       pkg.variables = resolved.variables;
     }
-    let job = await client.createJob({ package: pkg as any, kind: "hyperframes" });
+    let job = await createJob(client, trial, { package: pkg as any, kind: "hyperframes" });
     if (ctx.flags.wait !== false) {
       announceSubmitted(ctx, job);
       job = await waitJob(ctx, client, job);
@@ -526,6 +539,24 @@ function packageOverrides(flags: Parsed["flags"]) {
   return o;
 }
 
+/**
+ * Submit a job. A trial this command just started has $0 credit, so its first job is normally refused
+ * with a 402: keep the claim link next to the billing step so both reach the human.
+ */
+async function createJob(client: RendaClient, trial: { claimUrl: string } | undefined, input: Parameters<RendaClient["createJob"]>[0]): Promise<Job> {
+  try {
+    return await client.createJob(input);
+  } catch (e) {
+    if (trial && e instanceof RendaApiError && e.status === 402) {
+      throw new CliError(e.code, `${e.message} No account was configured, so a trial workspace was started; it has $0 credit.`, EXIT.payment, e.hint, [
+        "renda billing   # prints a checkout link for the human to buy credit",
+        `Give the user this link to keep the trial workspace: ${trial.claimUrl}`,
+      ]);
+    }
+    throw e;
+  }
+}
+
 /** Upload local files, check the budget, submit, wait and download (shared by render, bake and splat). */
 async function submitAndFinish(ctx: Ctx, pkg: any, baseDir: string) {
   const { client, trial } = await ctx.authed(true);
@@ -540,7 +571,7 @@ async function submitAndFinish(ctx: Ctx, pkg: any, baseDir: string) {
         "Lower --res/--quality/--frames, or raise --max-minutes.", [], { estimate: est });
     }
   }
-  let job = await client.createJob({ package: uploadedPkg as any, priority: priorityOf(ctx) });
+  let job = await createJob(client, trial, { package: uploadedPkg as any, priority: priorityOf(ctx) });
   if (ctx.flags.wait !== false) {
     announceSubmitted(ctx, job);
     job = await waitJob(ctx, client, job);

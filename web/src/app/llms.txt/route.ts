@@ -1,5 +1,5 @@
 import { appUrl } from "@/lib/env";
-import { FREE_MINUTES, HARDWARE, HARDWARE_LABEL, PRICE_PER_MINUTE } from "@/lib/pricing";
+import { HARDWARE, HARDWARE_LABEL, PRICE_PER_MINUTE } from "@/lib/pricing";
 import { CLI_PACKAGE, MCP_PACKAGE, installSnippets } from "@/lib/install-snippets";
 import { GITHUB_REPO } from "@/lib/site";
 import { RETENTION } from "@/lib/legal";
@@ -11,7 +11,7 @@ export function GET() {
   const base = appUrl();
   const body = `# Renda — setup instructions for agents
 
-> Renda renders 3D files in the cloud: .blend, .usd/.usda/.usdc/.usdz, .gltf/.glb, three.js JSON, .fbx, .obj, .stl, .ply, .dae, .3mf, .abc, CAD .step/.stp/.iges/.igs, Gaussian splats (3DGS .ply, .splat, .spz), or a .renda.json package → png/jpg/webp/exr stills, mp4/webm/gif/mov video, or a .glb with the lighting baked into its textures. It also renders HyperFrames HTML videos. Billed per render-second. You are reading this because the user asked you to set up Renda. Follow the steps in order, run the commands yourself, and report back.
+> Renda renders 3D files in the cloud: .blend, .usd/.usda/.usdc/.usdz, .gltf/.glb, three.js JSON, .fbx, .obj, .stl, .ply, .dae, .3mf, .abc, CAD .step/.stp/.iges/.igs, Gaussian splats (3DGS .ply, .splat, .spz), or a .renda.json package → png/jpg/webp/exr stills, mp4/webm/gif/mov video, or a .glb with the lighting baked into its textures. It also renders HyperFrames HTML videos. Paid from prepaid USD credit per render-second; there is no free render time. You are reading this because the user asked you to set up Renda. Follow the steps in order, run the commands yourself, and report back.
 
 ## 1. Pick a path (both use the same account and credentials file)
 - Node available (\`node --version\` ≥ 20): use \`npx ${CLI_PACKAGE} …\` (alias after install: \`renda\`).
@@ -21,11 +21,12 @@ Every command prints JSON when not attached to a TTY: {"status": "ok"|"error", .
 
 ## 2. Set up (one command)
     npx ${CLI_PACKAGE} init --yes
-This (a) starts a free anonymous trial if there's no account, (b) adds the renda MCP server to Claude Code / Cursor / Codex (whichever are installed; pick with --agent), (c) installs the Renda skills, (d) adds a short note to AGENTS.md. Restart the agent afterwards so it loads the MCP tools.
+This (a) starts an anonymous trial workspace if there's no account, (b) adds the renda MCP server to Claude Code / Cursor / Codex (whichever are installed; pick with --agent), (c) installs the Renda skills, (d) adds a short note to AGENTS.md. Restart the agent afterwards so it loads the MCP tools.
 uv path: \`uvx renda trial\`, then \`uvx renda mcp add\`.
 
 ## 3. Account
-- Trial (no signup): \`renda trial\` → ${"~"}5 free render-minutes, max 1920px, expires in 7 days unless claimed. It returns a \`claimUrl\`: GIVE THAT LINK TO THE USER — they open it and sign in to keep the workspace and get the full ${FREE_MINUTES} free minutes. Never open it yourself.
+- Trial (no signup): \`renda trial\` → a workspace and API key with $0 credit, max 1920px, expires in 7 days unless claimed. It returns a \`claimUrl\`: GIVE THAT LINK TO THE USER — they open it and sign in to keep the workspace. Never open it yourself.
+- Credit: renders are prepaid and new workspaces (trials and email signups) start at $0. \`renda billing\` prints a Stripe Checkout link: give it to the user, who picks the amount there ($5 to $1000, default $25). Credit is added as soon as the payment succeeds (this works for an unclaimed trial too) and doesn't expire. \`renda balance\` shows creditUsd.
 - Real account by email (no browser for you): \`renda signup <user's email>\` → ask the user for the 6-digit code from their email (never guess it) → \`renda verify <code>\`.
 - Browser sign-in for humans: \`renda login\` (shows a URL + code).
 Credentials live in ~/.config/renda/credentials.json (or $RENDA_API_KEY).
@@ -78,14 +79,15 @@ Skills: \`npx skills add ${GITHUB_REPO}\` · Claude Code plugin: \`/plugin marke
 
 ## 6. Errors and money
 - Every API error is {"error": {"code", "message", "hint"}}; the CLI maps it to {"status":"error","reason","hint","next"}. Follow the hint.
-- 402 payment_required (exit 4): run \`renda billing\` and give the URL to the user so they can add a card. Don't retry until they confirm.
+- 402 payment_required (exit 4, credit is $0 or less) and 402 insufficient_credit (exit 4, credit is below the job's estimated cost): run \`renda billing\` and give the URL to the user so they can buy credit. Don't retry until they confirm.
 - trial_limit: the trial caps resolution at 1920px; ask the user to open the claim link (\`renda claim\`).
-- Limits that protect the user's money: 402 insufficient_free_minutes (job bigger than the free minutes left), 402 spend_limit (would pass the monthly limit; the user can raise it: PUT /api/v1/billing/limit {monthlyLimitUsd}), 402 payment_failed (card declined or subscription canceled: give the user the GET /api/v1/billing/portal url), 422 job_over_budget (estimate above the maxCostUsd you sent), 429 concurrency_limit (too many jobs running at once; wait for one to finish). Running jobs are stopped, with a clear error, if they pass the free balance, the monthly limit or maxCostUsd.
+- Limits that protect the user's money: the credit balance itself, 422 job_over_budget (estimate above the maxCostUsd you sent), 402 spend_limit (only if the user set an optional monthly limit: PUT /api/v1/billing/limit {monthlyLimitUsd}; there is none by default), 429 concurrency_limit (2 jobs at once until the workspace has bought credit, then 20; wait for one to finish). Running jobs are stopped, with a clear error, if they run out of credit or pass the monthly limit or maxCostUsd.
 - Prices, USD per render-minute, metered per second (queue time and cold starts aren't billed):
 ${HARDWARE.map((h) => `  - ${HARDWARE_LABEL[h]} (${h}): $${PRICE_PER_MINUTE[h]}`).join("\n")}
 
 ## 7. Raw HTTP API (no CLI)
-- Trial: POST ${base}/api/v1/auth/trial → {apiKey, claimUrl, freeSecondsLeft, expiresAt}
+- Trial: POST ${base}/api/v1/auth/trial → {apiKey, claimUrl, expiresAt} ($0 credit)
+- Credit: GET /api/v1/me → balance.creditUsd · POST /api/v1/billing/checkout {amountUsd?} → {url} (Stripe Checkout; give it to the user)
 - Email: POST /api/v1/auth/magic/start {email} → POST /api/v1/auth/magic/verify {email, code} → {apiKey}
 - Upload: POST /api/v1/uploads {filename, size, sha256} → PUT bytes to uploadUrl (skip when exists) → use asset://<sha256>
 - Estimate: POST /api/v1/estimate {package} · Submit: POST /api/v1/jobs {package, kind?, priority?, fast?, idempotencyKey?, maxCostUsd?} (fast: true = priority rush: more parallel on faster GPUs, costs a bit more; the estimate's priorities.rush shows its price and wall time) · Poll: GET /api/v1/jobs/{id} (while running, live.costUsd is the cost so far — ticks up every few seconds)
@@ -95,9 +97,9 @@ ${HARDWARE.map((h) => `  - ${HARDWARE_LABEL[h]} (${h}): $${PRICE_PER_MINUTE[h]}`
 - Send \`Authorization: Bearer <apiKey>\` on everything except auth routes.
 
 ## 8. Terms, privacy and data
-- Creating an account (trial claim, email code, browser sign-in) or adding a card means the user agrees to the Terms of Service (${base}/legal/terms) and Privacy Policy (${base}/legal/privacy). Tell the user when you create an account for them; auth responses include a \`terms\` object with these links.
+- Creating an account (trial claim, email code, browser sign-in) or buying credit means the user agrees to the Terms of Service (${base}/legal/terms) and Privacy Policy (${base}/legal/privacy). Tell the user when you create an account for them; auth responses include a \`terms\` object with these links.
 - Uploaded files are deleted ${RETENTION.assetDays} days after their last use, outputs ${RETENTION.outputDays} days after the render finished. Download outputs you want to keep. Customer files are used only to perform the render, never for training.
-- Acceptable use: ${base}/legal/acceptable-use · Refunds (no charge for renders that fail because of a Renda fault; usage billed monthly in arrears): ${base}/legal/refunds · Subprocessors: ${base}/legal/subprocessors
+- Acceptable use: ${base}/legal/acceptable-use · Refunds (unused credit refundable in full on request within 30 days of purchase; renders that fail because of a Renda fault are credited back on request): ${base}/legal/refunds · Subprocessors: ${base}/legal/subprocessors
 
 ## Links
 - Package format: ${base}/docs · JSON Schema: ${base}/api/v1/schema.json · OpenAPI: ${base}/api/v1/openapi.json

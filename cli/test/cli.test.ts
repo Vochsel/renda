@@ -49,7 +49,7 @@ async function setup(route: Route, opts: { creds?: object; sys?: Partial<Sys> } 
   return { deps, dir, home, credentialsFile, out, err, json, calls: f.calls, ran };
 }
 
-const TRIAL = { apiKey: "rnd_live_trialtrialtrialtrialtrial", claimUrl: "https://api.test/claim?token=abc", freeSecondsLeft: 300, expiresAt: "2026-10-26T00:00:00Z" };
+const TRIAL = { apiKey: "rnd_live_trialtrialtrialtrialtrial", claimUrl: "https://api.test/claim?token=abc", creditUsd: 0, freeSecondsLeft: 0, expiresAt: "2026-10-26T00:00:00Z" };
 const job = (o: object = {}) => ({ id: "job_1", kind: "scene", status: "queued", progress: 0, billedSeconds: 0, costUsd: 0, cached: false, warnings: [], outputs: [], createdAt: "2026-10-19T00:00:00Z", ...o });
 
 describe("args", () => {
@@ -68,7 +68,7 @@ describe("exit codes + JSON contract", () => {
   });
 
   it("402 → 4 with billing next step", async () => {
-    const t = await setup(({ url }) => (url.endsWith("/me") ? { status: 402, json: { error: { code: "payment_required", message: "Out of minutes", hint: "add a card" } } } : undefined), { creds: { apiKey: "rnd_live_xxxxxxxxxxxxxxxxxxxxxxxx" } });
+    const t = await setup(({ url }) => (url.endsWith("/me") ? { status: 402, json: { error: { code: "payment_required", message: "No credit left.", hint: "POST /api/v1/billing/checkout and send the url to the user." } } } : undefined), { creds: { apiKey: "rnd_live_xxxxxxxxxxxxxxxxxxxxxxxx" } });
     expect(await run(["whoami"], t.deps)).toBe(4);
     expect(t.json().next[0]).toContain("renda billing");
   });
@@ -80,6 +80,44 @@ describe("exit codes + JSON contract", () => {
     expect(t.json().claimUrl).toBe(TRIAL.claimUrl);
     const saved = JSON.parse(await readFile(t.credentialsFile, "utf8"));
     expect(saved).toMatchObject({ apiKey: TRIAL.apiKey, claimUrl: TRIAL.claimUrl, apiUrl: "https://api.test" });
+  });
+});
+
+describe("billing", () => {
+  const KEY = { apiKey: "rnd_live_xxxxxxxxxxxxxxxxxxxxxxxx" };
+
+  it("whoami and balance show creditUsd and suggest renda billing at $0", async () => {
+    const t = await setup(({ url }) => (url.endsWith("/me") ? { json: { user: null, org: { id: "o" }, balance: { creditUsd: 0, freeSecondsLeft: 0 }, billing: {} } } : undefined), { creds: KEY });
+    expect(await run(["balance"], t.deps)).toBe(0);
+    expect(t.json()).toMatchObject({ creditUsd: 0 });
+    expect(t.json().next[0]).toContain("renda billing");
+  });
+
+  it("whoami with credit has no billing step; human output shows the balance", async () => {
+    const t = await setup(({ url }) => (url.endsWith("/me") ? { json: { user: { id: "u", email: "a@b.co" }, org: { id: "o" }, balance: { creditUsd: 12.5, freeSecondsLeft: 0 }, billing: {} } } : undefined), { creds: KEY });
+    t.deps.io.isTTY = true;
+    expect(await run(["whoami"], t.deps)).toBe(0);
+    expect(t.out.join("")).toContain("credit: $12.50");
+    expect(t.out.join("")).not.toContain("renda billing");
+  });
+
+  it("billing --amount posts amountUsd to checkout and rejects out-of-range amounts", async () => {
+    const t = await setup(({ url }) => (url.endsWith("/billing/checkout") ? { json: { url: "https://checkout.stripe.test/c" } } : undefined), { creds: KEY });
+    expect(await run(["billing", "--amount", "50"], t.deps)).toBe(0);
+    expect(t.json().url).toBe("https://checkout.stripe.test/c");
+    expect(t.calls.at(-1)!.body).toEqual({ amountUsd: 50 });
+    expect(await run(["billing", "--amount", "2"], t.deps)).toBe(2);
+  });
+
+  it("a render that starts a $0 trial exits 4 with both the billing step and the claim link", async () => {
+    const t = await setup(({ method, url }) => {
+      if (url.endsWith("/auth/trial")) return { status: 201, json: TRIAL };
+      if (method === "POST" && url.endsWith("/jobs")) return { status: 402, json: { error: { code: "payment_required", message: "No credit left.", hint: "POST /api/v1/billing/checkout and send the url to the user." } } };
+    });
+    expect(await run(["render", "https://h.test/a.glb"], t.deps)).toBe(4);
+    const next = t.json().next.join(" ");
+    expect(next).toContain("renda billing");
+    expect(next).toContain(TRIAL.claimUrl);
   });
 });
 

@@ -4,7 +4,7 @@ A lightweight render CLI and scene-conversion layer that wraps **Blender** (Cycl
 **Mitsuba 3** and **three.js**. It renders locally, or in the Renda cloud with `--cloud`.
 
 ```bash
-uvx renda render teapot.blend --cloud          # no install: render in the Renda cloud (starts a free trial)
+uvx renda render teapot.blend --cloud          # no install: render in the Renda cloud (needs prepaid credit; starts a trial workspace)
 uv tool install "renda[all]"                   # or install it, with every local engine
 renda render teapot.blend                      # → renders/frame_0001.png
 renda render sneaker.usdz --turntable --format mp4 --res 1080x1080

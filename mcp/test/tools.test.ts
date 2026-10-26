@@ -104,7 +104,7 @@ describe("account flow", () => {
 
   it("surfaces payment_required hints as tool errors", async () => {
     const f = fakeFetch(({ url }) => {
-      if (url.endsWith("/jobs")) return { status: 402, json: { error: { code: "payment_required", message: "Out of free minutes", hint: "Call renda_billing_link" } } };
+      if (url.endsWith("/jobs")) return { status: 402, json: { error: { code: "payment_required", message: "No credit left.", hint: "Call renda_billing_link" } } };
     });
     const mcp = await connect(new RendaClient({ baseUrl: "https://x.test", apiKey: "k", fetch: f.fetch }), "remote");
     const r: any = await mcp.callTool({ name: "renda_render", arguments: { file: "https://h/a.glb" } });
@@ -277,6 +277,31 @@ describe("anonymous trial", () => {
     expect(jobCall.headers.authorization).toBe("Bearer rnd_live_trialtrialtrialtrialtrial");
     const claim: any = await mcp.callTool({ name: "renda_claim", arguments: {} });
     expect(claim.content[0].text).toContain("claim?token=t");
+  });
+
+  it("a fresh trial has $0 credit: the 402 keeps the claim link and points at renda_billing_link", async () => {
+    const f = fakeFetch(({ method, url }) => {
+      if (url.endsWith("/auth/trial")) return { status: 201, json: { apiKey: "rnd_live_trialtrialtrialtrialtrial", claimUrl: "https://renda.test/claim?token=t", creditUsd: 0, freeSecondsLeft: 0, expiresAt: "2026-10-26T00:00:00Z" } };
+      if (method === "POST" && url.endsWith("/jobs")) return { status: 402, json: { error: { code: "payment_required", message: "No credit left.", hint: "POST /api/v1/billing/checkout and send the url to the user." } } };
+    });
+    const mcp = await connect(new RendaClient({ baseUrl: "https://x.test", fetch: f.fetch }), "local");
+    const r: any = await mcp.callTool({ name: "renda_render", arguments: { file: "https://h/a.glb" } });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toContain("payment_required");
+    expect(text(r)).toContain("renda_billing_link");
+    expect(text(r)).toContain("https://renda.test/claim?token=t");
+  });
+
+  it("renda_whoami reads creditUsd; renda_billing_link passes amountUsd to checkout", async () => {
+    const f = fakeFetch(({ url }) => {
+      if (url.endsWith("/me")) return { json: { user: null, org: { id: "o" }, balance: { creditUsd: 0, freeSecondsLeft: 0 }, billing: {} } };
+      if (url.endsWith("/billing/checkout")) return { json: { url: "https://checkout.stripe.test/c" } };
+    });
+    const mcp = await connect(new RendaClient({ baseUrl: "https://x.test", apiKey: "k", fetch: f.fetch }), "remote");
+    expect(text(await mcp.callTool({ name: "renda_whoami", arguments: {} }))).toContain("renda_billing_link");
+    const b: any = await mcp.callTool({ name: "renda_billing_link", arguments: { amountUsd: 50 } });
+    expect(text(b)).toContain("https://checkout.stripe.test/c");
+    expect(f.calls.at(-1)!.body).toEqual({ amountUsd: 50 });
   });
 
   it("flattens layered packages locally, uploads every layer's files, and submits a flat package", async () => {

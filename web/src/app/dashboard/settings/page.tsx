@@ -41,8 +41,8 @@ export default async function SettingsPage() {
           <CardTitle className="text-sm">Delete account</CardTitle>
           <CardDescription>
             Permanently deletes this workspace: revokes every API key, cancels running jobs, deletes all renders and
-            uploads, and removes your sign-in. Your card subscription is cancelled and usage up to now is invoiced.
-            Billing records (usage, amounts, dates) are kept, without your files or personal details, as the law
+            uploads, and removes your sign-in. Ask for a refund of any unused credit before you delete (see the refund
+            policy). Billing records (purchases, usage, amounts, dates) are kept, without your files or personal details, as the law
             requires for tax. This can&apos;t be undone.
           </CardDescription>
         </CardHeader>

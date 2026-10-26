@@ -18,8 +18,8 @@ export default async function ClaimPage({ searchParams }: PageProps<"/claim">) {
         <CardHeader>
           <CardTitle>Claim this trial workspace</CardTitle>
           <CardDescription>
-            An agent started a Renda trial for you. Claiming it as {user.email} keeps its renders and API key, and tops
-            you up to the full free tier.
+            An agent started a Renda trial for you. Claiming it as {user.email} keeps its renders, API key and any
+            credit bought for it. Renders are paid from prepaid credit; claiming doesn&apos;t add any.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">

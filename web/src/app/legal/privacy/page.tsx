@@ -66,7 +66,7 @@ export default function PrivacyPage() {
         <li><strong>API keys.</strong> We store only a SHA-256 hash of each key, plus its name, prefix and when it was last used.</li>
         <li>
           <strong>Billing.</strong> Stripe collects and stores your card details and billing contact. We store your Stripe customer id,
-          whether a card is on file, your free-allowance balance, and per-render usage (hardware, seconds, cost).
+          your credit purchases and credit balance, and per-render usage (hardware, seconds, cost).
         </li>
         <li>
           <strong>Abuse limits.</strong> To rate-limit sign-ins, trials and API calls we store IP addresses, email addresses and keys only
@@ -124,8 +124,8 @@ export default function PrivacyPage() {
         <li><strong>An upload:</strong> <code>DELETE /api/v1/uploads/&lt;sha256&gt;</code>.</li>
         <li>
           <strong>Your whole account:</strong> dashboard → Settings → Delete account, or <code>DELETE /api/v1/me</code>. This revokes every API
-          key, cancels running renders, deletes your renders and uploads, deletes your sign-in account, and cancels your
-          subscription with a final invoice for usage so far. Stored files are deleted within a few hours.
+          key, cancels running renders, deletes your renders and uploads, and deletes your sign-in account. Ask for any refund
+          of unused credit before you delete. Stored files are deleted within a few hours.
         </li>
         <li>
           We keep the billing records described above, without your files, name or email. Analytics data already sent to

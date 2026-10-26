@@ -21,7 +21,7 @@
       "environmentVariables": [
         {
           "name": "RENDA_API_KEY",
-          "description": "Renda API key (optional: the server can start a free trial)",
+          "description": "Renda API key (optional: the server can start a trial workspace)",
           "isSecret": true,
           "isRequired": false
         },

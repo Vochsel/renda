@@ -24,7 +24,7 @@ export default function AcceptableUsePage() {
       <h2 id="service">Using the service</h2>
       <ul>
         <li>Use the compute for rendering. Don&apos;t use render jobs to mine cryptocurrency, run unrelated workloads, or reach other systems from our workers.</li>
-        <li>Don&apos;t try to get around trial limits, free allowances, rate limits or billing, for example by creating many trials or accounts.</li>
+        <li>Don&apos;t try to get around trial limits, rate limits or billing, for example by creating many trials or accounts.</li>
         <li>Don&apos;t try to access another account&apos;s data, or interfere with the service or other customers (including load or denial-of-service testing).</li>
         <li>Don&apos;t use <code>https://</code> asset URLs to probe or attack other systems.</li>
         <li>Don&apos;t resell access to the hosted service as your own product without our written agreement. Building products and agents that use Renda on your own account is fine.</li>

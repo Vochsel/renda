@@ -8,7 +8,7 @@ Layered packages (`extends`, `scene.include[].package`) are flattened automatica
 
 ## Install
 
-**One command** (detects Claude Code / Cursor / Codex, adds the server and the Renda skills, starts a free trial if needed):
+**One command** (detects Claude Code / Cursor / Codex, adds the server and the Renda skills, starts a trial workspace if needed):
 
 ```sh
 npx @rendahq/cli init          # or: npx @rendahq/cli mcp add --agent cursor
@@ -41,7 +41,8 @@ claude mcp add --transport http renda https://renda.vochsel.com/api/mcp --header
 ```
 
 No key yet? You don't need one to start. With no key, `renda_render` (or `renda_trial`) starts an
-anonymous trial (about 5 free render-minutes) and gives you a claim link to keep the workspace. For a full
+anonymous trial workspace and gives you a claim link to keep it. Renders are paid from prepaid credit and a
+trial starts at $0, so the agent also hands you a checkout link (`renda_billing_link`) to buy some. For a full
 account the agent calls `renda_signup` with your email, asks you for the 6-digit code, then calls
 `renda_verify`. Keys are saved to `~/.config/renda/credentials.json`, shared with both `renda` CLIs (npm and PyPI).
 
@@ -58,8 +59,8 @@ account the agent calls `renda_signup` with your email, asks you for the 6-digit
 |---|---|
 | `renda_trial` / `renda_claim` | anonymous trial (no signup) and its claim link for the human |
 | `renda_signup` / `renda_verify` | email + 6-digit code onboarding; saves the key locally |
-| `renda_whoami`, `renda_pricing`, `renda_usage` | account, prices, usage |
-| `renda_billing_link` | Stripe Checkout/portal URL for the human |
+| `renda_whoami`, `renda_pricing`, `renda_usage` | account and credit balance, prices, usage |
+| `renda_billing_link` | Stripe Checkout URL where the human buys credit ($5–$1000), or the portal |
 | `renda_validate_package` | local, free validation with JSON paths and fixes |
 | `renda_init_package` | starter `.renda.json` for a file |
 | `renda_upload` | local only; content-addressed upload → `asset://<sha256>` |

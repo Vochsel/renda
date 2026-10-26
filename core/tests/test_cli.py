@@ -86,7 +86,7 @@ def _mock_client(monkeypatch, handler, key=None):
 
 
 TRIAL = {"apiKey": "rnd_live_trialtrialtrialtrialtrial", "claimUrl": "https://api.test/claim?token=t",
-         "freeSecondsLeft": 300, "expiresAt": "2026-10-26T00:00:00Z"}
+         "creditUsd": 0, "freeSecondsLeft": 0, "expiresAt": "2026-10-26T00:00:00Z"}
 
 
 def test_trial_saves_key_and_never_prints_it(monkeypatch):
@@ -104,6 +104,28 @@ def test_trial_saves_key_and_never_prints_it(monkeypatch):
     assert load_credentials()["apiKey"] == TRIAL["apiKey"]
     code, claim = run("claim")
     assert code == 0 and claim["claimUrl"] == TRIAL["claimUrl"]
+    assert any("renda billing" in n for n in data["next"])
+
+
+def test_balance_reads_credit_and_billing_sends_amount(monkeypatch):
+    import httpx
+
+    seen = []
+
+    def handler(req):
+        if req.url.path.endswith("/me"):
+            return httpx.Response(200, json={"user": None, "org": {"id": "o"}, "balance": {"creditUsd": 0, "freeSecondsLeft": 0}, "billing": {}})
+        if req.url.path.endswith("/billing/checkout"):
+            seen.append(json.loads(req.content or b"{}"))
+            return httpx.Response(200, json={"url": "https://checkout.stripe.test/c"})
+        return httpx.Response(404, json={"error": {"code": "not_found", "message": req.url.path}})
+
+    _mock_client(monkeypatch, handler, key="rnd_live_xxxxxxxxxxxxxxxxxxxxxxxx")
+    code, data = run("balance")
+    assert code == 0 and data["creditUsd"] == 0
+    assert any("renda billing" in n for n in data["next"])
+    code, data = run("billing", "--amount", "50")
+    assert code == 0 and data["url"] == "https://checkout.stripe.test/c" and seen == [{"amountUsd": 50.0}]
 
 
 def test_cloud_render_max_minutes_refuses(monkeypatch, tmp_path):

@@ -36,7 +36,7 @@ JsonOpt = Annotated[bool, typer.Option("--json", help="Machine-readable JSON out
 EXIT_OK, EXIT_ERROR, EXIT_USAGE, EXIT_AUTH, EXIT_PAYMENT = 0, 1, 2, 3, 4
 NODE_CLI = "@rendahq/cli"
 
-AUTH_NEXT = ["renda trial   # no signup, 5 free render-minutes", "renda login   # browser sign-in",
+AUTH_NEXT = ["renda trial   # no signup, $0 credit", "renda login   # browser sign-in",
              "renda signup <email>   # emailed 6-digit code"]
 
 
@@ -62,8 +62,29 @@ def _next_for(code: int) -> list[str]:
     if code == EXIT_AUTH:
         return AUTH_NEXT
     if code == EXIT_PAYMENT:
-        return ["renda billing   # prints a link for the human to add a card"]
+        nxt = ["renda billing   # prints a checkout link for the human to buy credit"]
+        try:
+            from .cloud import load_credentials
+
+            claim = load_credentials().get("claimUrl")
+        except Exception:  # noqa: BLE001 - next steps are best effort
+            claim = None
+        if claim:  # an unclaimed trial (often just auto-started, with $0 credit): the human should keep it too
+            nxt.append(f"Give the user this link to keep the trial workspace: {claim}")
+        return nxt
     return []
+
+
+def _credit_usd(me: dict) -> float:
+    """Prepaid credit in USD from GET /me (0 when an older server doesn't report it)."""
+    v = (me.get("balance") or {}).get("creditUsd")
+    return float(v) if isinstance(v, (int, float)) else 0.0
+
+
+def _legacy_free_seconds(me: dict) -> float:
+    """Free render-seconds reported by older servers; current servers always send 0."""
+    v = (me.get("balance") or {}).get("freeSecondsLeft")
+    return max(0.0, float(v)) if isinstance(v, (int, float)) else 0.0
 
 
 def _redact(s: str) -> str:
@@ -473,8 +494,8 @@ def _ensure_key(client, json_out: bool) -> str | None:
     creds.update({"apiKey": t["apiKey"], "apiUrl": client.base_url, "claimUrl": t["claimUrl"], "trialExpiresAt": t.get("expiresAt")})
     save_credentials(creds)
     if not json_out:
-        console.print(f"[dim]no account configured: started a free trial ({t.get('freeSecondsLeft', 0) / 60:.0f} render-minutes). "
-                      f"Keep it: {t['claimUrl']}[/]")
+        console.print(f"[dim]no account configured: started a trial workspace (${t.get('creditUsd', 0) or 0:.2f} credit; "
+                      f"buy credit with `renda billing`). Keep it: {t['claimUrl']}[/]")
     return t["claimUrl"]
 
 
@@ -955,16 +976,16 @@ def logout(json_out: JsonOpt = False):
 
 @command
 def whoami(json_out: JsonOpt = False):
-    """Show the signed-in account, free minutes left and billing status."""
+    """Show the signed-in account and its prepaid credit balance."""
     me = _client().me()
+    credit, legacy_free = _credit_usd(me), _legacy_free_seconds(me)
 
     def human():
-        u, org = me.get("user", {}), me.get("org", {})
-        left = me.get("balance", {}).get("freeSecondsLeft", 0) / 60
-        card = me.get("billing", {}).get("hasPaymentMethod")
-        out.print(f"{u.get('email')} · {org.get('name', '')} · {left:.1f} free min left · card: {'yes' if card else 'no'}")
+        u, org = me.get("user") or {}, me.get("org") or {}
+        extra = f" · {legacy_free / 60:.1f} free min left" if legacy_free > 0 else ""
+        out.print(f"{u.get('email') or 'anonymous trial'} · {org.get('name', '')} · credit: ${credit:.2f}{extra}")
 
-    emit(json_out, me, human)
+    emit(json_out, me, human, [] if credit > 0 or legacy_free > 0 else ["renda billing   # buy credit"])
 
 
 @command
@@ -1018,13 +1039,15 @@ def usage(
 
 @command
 def billing(
-    portal: Annotated[bool, typer.Option("--portal", help="Open the billing portal instead of adding a card")] = False,
+    amount: Annotated[Optional[float], typer.Option("--amount", min=5, max=1000, help="Suggested credit in USD (default 25; adjustable at checkout)")] = None,
+    portal: Annotated[bool, typer.Option("--portal", help="Open the billing portal (payment history) instead of buying credit")] = False,
     json_out: JsonOpt = False,
 ):
-    """Get a link to add a card (or manage billing). Share it with the account owner."""
+    """Get a checkout link to buy prepaid credit ($5–$1000). Share it with the account owner."""
     client = _client()
-    res = client.billing_portal() if portal else client.billing_checkout()
-    emit(json_out, res, lambda: out.print(res["url"]))
+    res = client.billing_portal() if portal else client.billing_checkout(amount)
+    emit(json_out, res, lambda: out.print(res["url"]),
+         None if portal else ["Give this link to the account owner: credit is added as soon as the payment succeeds."])
 
 
 @command
@@ -1032,7 +1055,7 @@ def trial(
     force: Annotated[bool, typer.Option("--force", help="Start a fresh trial even if signed in")] = False,
     json_out: JsonOpt = False,
 ):
-    """Start an anonymous trial: 5 free render-minutes, no signup. Prints a claim link for the human."""
+    """Start an anonymous trial workspace ($0 credit, no signup). Prints a claim link for the human."""
     client = _client()
     if client.key and not force:
         from .cloud import load_credentials
@@ -1048,7 +1071,9 @@ def trial(
     data = {"claimUrl": claim, "expiresAt": creds.get("trialExpiresAt"), "credentials": str(_creds_path())}
     emit(json_out, data, lambda: console.print(f"[green]trial started[/] (max {(data.get('limits') or {}).get('maxDimension', '?')}px, expires {str(data['expiresAt'])[:10]} unless claimed)\n"
                                                 f"keep it: [bold]{claim}[/]"),
-         [f"Give the user this link to keep the workspace: {claim}", "renda render <file> --cloud --quality draft"])
+         [f"Give the user this link to keep the workspace: {claim}",
+          "renda billing   # renders are prepaid: a checkout link for the human to buy credit",
+          "renda render <file> --cloud --quality draft"])
 
 
 @command
@@ -1067,13 +1092,13 @@ def claim(json_out: JsonOpt = False):
 
 @command
 def balance(json_out: JsonOpt = False):
-    """Free render-minutes left and whether a card is on file."""
+    """Prepaid credit left (USD)."""
     me = _client().me()
-    left = me.get("balance", {}).get("freeSecondsLeft", 0)
-    card = me.get("billing", {}).get("hasPaymentMethod", False)
-    emit(json_out, {"freeSecondsLeft": left, "hasPaymentMethod": card, "trial": me.get("trial")},
-         lambda: out.print(f"{left / 60:.1f} free min · {'card on file' if card else 'no card'}"),
-         [] if card or left > 0 else ["renda billing"])
+    credit, legacy_free = _credit_usd(me), _legacy_free_seconds(me)
+    emit(json_out, {"creditUsd": credit, "freeSecondsLeft": legacy_free, "trial": me.get("trial")},
+         lambda: out.print(f"${credit:.2f} credit" + (f" · {legacy_free / 60:.1f} free min" if legacy_free > 0 else "")
+                           + " · renders draw it down per second"),
+         [] if credit > 0 or legacy_free > 0 else ["renda billing   # buy credit"])
 
 
 @command

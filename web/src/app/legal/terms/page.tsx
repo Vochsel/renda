@@ -22,7 +22,7 @@ export default function TermsPage() {
       <p>
         You agree to these terms, the <Link href="/legal/privacy">Privacy Policy</Link>, the{" "}
         <Link href="/legal/acceptable-use">Acceptable Use Policy</Link> and the <Link href="/legal/refunds">Refund Policy</Link>{" "}
-        when you create an account, claim a trial workspace, add a payment method, or use the Renda website, API, CLI or MCP
+        when you create an account, claim a trial workspace, buy credit, or use the Renda website, API, CLI or MCP
         server. If you use Renda for an organisation, you confirm you may bind it, and &ldquo;you&rdquo; includes it.
       </p>
       <p>
@@ -47,8 +47,8 @@ export default function TermsPage() {
         <li>Keep your API keys secret. Anyone who has a key can use your account and incur charges. Revoke a leaked key at once in the dashboard.</li>
         <li>Give accurate account details and keep your email address current; we send notices there.</li>
         <li>
-          Anonymous trials have limited free render time, resolution and priority, and stop working at their expiry time unless a
-          person claims them. Don&apos;t create several trials to get around those limits.
+          Anonymous trials have limited resolution and priority, include no free render time, and stop working at their expiry
+          time unless a person claims them. Don&apos;t create several trials to get around those limits.
         </li>
       </ul>
 
@@ -80,8 +80,8 @@ export default function TermsPage() {
           dashboard (Settings) or through the API. Details are in the <Link href="/legal/privacy">Privacy Policy</Link>.
         </li>
         <li>
-          We keep billing records (what was rendered on which hardware, for how long, and what it cost) after deletion, without
-          your files or personal details, because we need them for invoicing and tax.
+          We keep billing records (credit bought, and what was rendered on which hardware, for how long, and what it cost) after
+          deletion, without your files or personal details, because we need them for accounting and tax.
         </li>
       </ul>
 
@@ -94,22 +94,28 @@ export default function TermsPage() {
       <h2 id="fees">7. Fees and payment</h2>
       <ul>
         <li>
-          Renders are charged per second of render time at the prices on the <Link href="/pricing">pricing page</Link> when the
-          render runs. Each account gets a free allowance first. Identical re-renders served from cache are free.
+          Renda is prepaid. You buy credit in advance through our payment processor, Stripe, and it is added to your account as
+          soon as the payment succeeds. There is no free allowance and no subscription fee.
         </li>
-        <li>Usage is billed monthly in arrears to the card on file, through our payment processor, Stripe.</li>
         <li>
-          Prices are in US dollars. <Todo>[OWNER: state whether prices include GST / other taxes, and how GST applies to Australian customers.]</Todo>
+          Renders are paid from your credit, per second of render time, at the prices on the <Link href="/pricing">pricing page</Link>{" "}
+          when the render runs. Identical re-renders served from cache are free. If your credit runs out, new renders are
+          refused and a running render is stopped.
+        </li>
+        <li>Credit doesn&apos;t expire. Unused credit can be refunded as set out in the <Link href="/legal/refunds">Refund Policy</Link>.</li>
+        <li>
+          Prices and credit are in US dollars. <Todo>[OWNER: state whether prices and credit purchases include GST / other taxes, and how GST applies to Australian customers.]</Todo>
         </li>
         <li>We will give at least 30 days&apos; notice of a price increase. The new prices apply only to renders after that date.</li>
         <li>Estimates are a guide, not a quote. You pay for the render time actually used, unless the <Link href="/legal/refunds">Refund Policy</Link> says otherwise.</li>
-        <li>If a payment fails, we may pause new renders until it is paid.</li>
+        <li>If a payment for credit is reversed or charged back, we may remove that credit and pause new renders until it is resolved.</li>
       </ul>
 
       <h2 id="suspension">8. Suspension and ending these terms</h2>
       <p>
-        You can stop using Renda and delete your account at any time. You still owe for usage up to then. We may suspend or
-        close an account if you seriously or repeatedly break these terms, don&apos;t pay, or your use puts the service or other
+        You can stop using Renda and delete your account at any time. If you want a refund of unused credit, ask for it (under
+        the <Link href="/legal/refunds">Refund Policy</Link>) before you delete the account. We may suspend or
+        close an account if you seriously or repeatedly break these terms, reverse a payment, or your use puts the service or other
         customers at risk. Where it&apos;s reasonable, we will tell you first and give you time to fix the problem and download
         your outputs.
       </p>
