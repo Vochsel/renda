@@ -3,7 +3,7 @@ import { basename, join, resolve } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { RendaPackage, LayerError, flattenPackage, formatFromPath, isLayered, safeParsePackage, type FlattenResult, type RendaPackageInput } from "@rendahq/spec";
-import { type TrialResponse, RendaApiError, TERMINAL_STATUSES, type HyperframesPackage, type Job, type RendaClient, liveCostLabel } from "./client.js";
+import { type TrialResponse, RendaApiError, TERMINAL_STATUSES, type HyperframesPackage, type Job, type RendaClient, creditUsdOf, legacyFreeSecondsOf, liveCostLabel, usd } from "./client.js";
 import { PACKAGE_GUIDE } from "./docs.js";
 import { hyperframesQuality, resolveVideoVariables, type ResolvedVariables } from "./video.js";
 import { isLocalUri, packageDir, uploadBytes, uploadFile, uploadLocalPaths, zipDirectory } from "./local.js";
@@ -207,25 +207,41 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
     return t;
   };
   const claimNote = () => (claimUrl ? ` Share this link with the user so they can keep the workspace: ${claimUrl}` : "");
+  /**
+   * Submit a job. A trial started just now has $0 credit, so its first job is normally refused with a 402
+   * (payment_required / insufficient_credit): keep the claim link in that error so the agent can pass both links on.
+   */
+  const submitJob = async (trial: TrialResponse | undefined, input: Parameters<RendaClient["createJob"]>[0]) => {
+    try {
+      return await client.createJob(input);
+    } catch (e) {
+      if (trial && e instanceof RendaApiError && e.status === 402) {
+        throw new RendaApiError(e.status, e.code, `${e.message} No account was configured, so a trial workspace was started; it has $0 credit.`,
+          `Call renda_billing_link and give the user that checkout URL to buy credit (it works for an unclaimed trial), plus this link to keep the workspace: ${trial.claimUrl}. Retry once they've paid.`);
+      }
+      throw e;
+    }
+  };
+  const trialPreface = (t: TrialResponse) => ({ trialStarted: { claimUrl: t.claimUrl, creditUsd: t.creditUsd ?? 0 } });
 
   // ---------- account ----------
   server.registerTool("renda_trial", {
     title: "Start an anonymous trial",
-    description: "Start a Renda trial with no signup: returns an API key with ~5 free render-minutes (max 1920px, no rush priority) and a claim link. Use this when the user has no account and you want to render right away. Give the claim link to the human so they can keep the workspace; unclaimed trials expire after 7 days.",
+    description: "Start a Renda trial with no signup: returns an API key for a new workspace with $0 credit (no free render time; max 1920px, no rush priority) and a claim link. Renders are prepaid, so before rendering the human buys credit through renda_billing_link (works for an unclaimed trial). Give the claim link to the human so they can keep the workspace; unclaimed trials expire after 7 days.",
     inputSchema: {},
     annotations: { openWorldHint: true },
   }, safe(async () => {
     if (client.apiKey) return ok({ alreadyAuthenticated: true, claimUrl }, "Already have an API key. Call renda_whoami or renda_render.");
     const t = await startTrial();
     return ok(
-      { freeSecondsLeft: t.freeSecondsLeft, expiresAt: t.expiresAt, claimUrl: t.claimUrl, limits: t.limits, ...(local ? { apiKeySaved: true } : { apiKey: t.apiKey }) },
-      `Tell the user: "I started a free Renda trial. Open ${t.claimUrl} to keep it." Then call renda_render.`,
+      { creditUsd: t.creditUsd ?? 0, expiresAt: t.expiresAt, claimUrl: t.claimUrl, limits: t.limits, ...(local ? { apiKeySaved: true } : { apiKey: t.apiKey }) },
+      `Tell the user: "I started a Renda trial workspace. Open ${t.claimUrl} to keep it." It has $0 credit: call renda_billing_link and give the user the checkout URL to buy credit, then call renda_render.`,
     );
   }));
 
   server.registerTool("renda_claim", {
     title: "Get the trial claim link",
-    description: "Return the link the human opens to claim (keep) an anonymous trial workspace, lifting trial limits and topping up to the full free tier. Never open it yourself; give it to the human.",
+    description: "Return the link the human opens to claim (keep) an anonymous trial workspace and its credit, lifting trial limits. Claiming adds no credit. Never open it yourself; give it to the human.",
     inputSchema: {},
     annotations: { readOnlyHint: true },
   }, safe(async () => {
@@ -236,7 +252,7 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
 
   server.registerTool("renda_signup", {
     title: "Sign up / log in to Renda",
-    description: "Start Renda signup or login by email. Renda emails the user a 6-digit code (new accounts are created automatically and get free render minutes). After calling this, ASK THE HUMAN for the code from their email — never guess or invent it — then call renda_verify.",
+    description: "Start Renda signup or login by email. Renda emails the user a 6-digit code (new accounts are created automatically, with $0 prepaid credit). After calling this, ASK THE HUMAN for the code from their email — never guess or invent it — then call renda_verify.",
     inputSchema: { email: z.string().email().describe("The human user's email address.") },
     annotations: { openWorldHint: true },
   }, safe(async ({ email }: { email: string }) => {
@@ -258,7 +274,7 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
     if (local) {
       client.apiKey = res.apiKey;
       await opts.onApiKey?.(res.apiKey);
-      return ok({ user: res.user, org: res.org, apiKeySaved: true }, "You're authenticated. Call renda_whoami to see free minutes, or renda_render to render a file.");
+      return ok({ user: res.user, org: res.org, apiKeySaved: true }, "You're authenticated. Call renda_whoami to see the credit balance (buy credit with renda_billing_link if it's $0), or renda_render to render a file.");
     }
     await opts.onApiKey?.(res.apiKey);
     return ok({ user: res.user, org: res.org, apiKey: res.apiKey },
@@ -267,39 +283,46 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
 
   server.registerTool("renda_whoami", {
     title: "Current account",
-    description: "Show the authenticated Renda user, org, remaining free render seconds, and whether a payment method is attached.",
+    description: "Show the authenticated Renda user, org, prepaid credit balance in USD (balance.creditUsd), spending limits and trial status.",
     inputSchema: {},
     annotations: { readOnlyHint: true, openWorldHint: true },
   }, safe(async () => {
     const me = await client.me();
-    const next = me.billing.hasPaymentMethod || me.balance.freeSecondsLeft > 0
-      ? "Ready to render. Call renda_render."
-      : "No free minutes left and no card attached. Call renda_billing_link and give the URL to the human.";
+    const credit = creditUsdOf(me);
+    // Older servers reported free render-seconds instead of credit; still treat those as renderable.
+    const next = credit > 0 || legacyFreeSecondsOf(me) > 0
+      ? `Ready to render (${usd(credit)} credit). Call renda_render.`
+      : "No credit left. Call renda_billing_link and give the checkout URL to the human so they can buy credit.";
     return ok(me, next);
   }));
 
   server.registerTool("renda_pricing", {
     title: "Pricing",
-    description: "Price per render-minute by hardware class (cpu, gpu-l4, gpu-l40s), free tier, and billing rules. No auth needed.",
+    description: "Price per render-minute by hardware class (cpu, gpu-l4, gpu-l40s; metered per second, drawn from prepaid credit) and billing rules. No auth needed.",
     inputSchema: {},
     annotations: { readOnlyHint: true, openWorldHint: true },
   }, safe(async () => ok(await client.pricing(), "Use renda_estimate on a package to get a cost range before large renders.")));
 
   server.registerTool("renda_usage", {
     title: "Usage",
-    description: "Render seconds used, minutes billed and cost for a date range (ISO dates; defaults to the current billing period).",
+    description: "Render seconds used, minutes billed and cost for a date range (ISO dates; defaults to the current month).",
     inputSchema: { from: z.string().optional(), to: z.string().optional() },
     annotations: { readOnlyHint: true, openWorldHint: true },
   }, safe(async ({ from, to }: { from?: string; to?: string }) => ok(await client.usage({ ...(from ? { from } : {}), ...(to ? { to } : {}) }))));
 
   server.registerTool("renda_billing_link", {
     title: "Billing link",
-    description: "Get a Stripe Checkout URL where the HUMAN adds a payment card (needed after free minutes run out). Agents cannot complete payment themselves — give the URL to the user. Set portal=true for the billing portal (invoices, card changes).",
-    inputSchema: { portal: z.boolean().optional() },
+    description: "Get a Stripe Checkout URL where the HUMAN buys prepaid render credit (USD; needed when the balance is $0, or after payment_required / insufficient_credit). They can change the amount on the page: $5–$1000, default $25. Credit is added as soon as the payment succeeds and doesn't expire. Agents cannot complete payment themselves — give the URL to the user. Set portal=true for the billing portal (payment history).",
+    inputSchema: {
+      amountUsd: z.number().min(5).max(1000).optional().describe("Suggested amount in USD (default 25); the human can change it at checkout."),
+      portal: z.boolean().optional(),
+    },
     annotations: { openWorldHint: true },
-  }, safe(async ({ portal }: { portal?: boolean }) => {
-    const { url } = portal ? await client.billingPortal() : await client.billingCheckout();
-    return ok({ url }, "Send this URL to the user and ask them to complete it, then retry the render.");
+  }, safe(async ({ amountUsd, portal }: { amountUsd?: number; portal?: boolean }) => {
+    const { url } = portal ? await client.billingPortal() : await client.billingCheckout(amountUsd);
+    return ok({ url }, portal
+      ? "Send this URL to the user."
+      : "Send this URL to the user so they can buy credit. Once they've paid, check renda_whoami (balance.creditUsd) and retry the render.");
   }));
 
   // ---------- packages ----------
@@ -492,11 +515,11 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
     const trial = local && !client.apiKey ? await startTrial() : undefined;
     const r = await resolvePackage(args);
     if ("issues" in r) return fail(`Invalid package: ${JSON.stringify(r.issues, null, 2)}`, "Fix the issues (see `fix`) and retry.");
-    let job = await client.createJob({ package: r.pkg, kind: "scene", priority: args.fast ? "rush" : args.priority, idempotencyKey: args.idempotencyKey });
+    let job = await submitJob(trial, { package: r.pkg, kind: "scene", priority: args.fast ? "rush" : args.priority, idempotencyKey: args.idempotencyKey });
     if (trial) {
       if (args.wait !== false && !TERMINAL_STATUSES.has(job.status)) job = await waitWithProgress(job.id, extra);
-      const res = await finishJob(job, args.includeImage !== false, { trialStarted: { claimUrl: trial.claimUrl, freeSecondsLeft: trial.freeSecondsLeft } });
-      res.content[0] = { type: "text", text: (res.content[0] as { text: string }).text + `\nNo account was configured, so a free trial was started.${claimNote()}` };
+      const res = await finishJob(job, args.includeImage !== false, trialPreface(trial));
+      res.content[0] = { type: "text", text: (res.content[0] as { text: string }).text + `\nNo account was configured, so a trial workspace was started.${claimNote()}` };
       return res;
     }
     if (args.wait !== false && !TERMINAL_STATUSES.has(job.status)) job = await waitWithProgress(job.id, extra);
@@ -541,10 +564,10 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
       if (args.engine || args.quality) pkg.render = { ...(pkg.render ?? {}), ...(args.engine ? { engine: args.engine } : {}), ...(args.quality ? { quality: args.quality } : {}) };
     });
     if ("issues" in r) return fail(`Invalid package: ${JSON.stringify(r.issues, null, 2)}`, "Fix the issues (see `fix`) and retry.");
-    let job = await client.createJob({ package: r.pkg, kind: "scene", priority: args.fast ? "rush" : args.priority });
+    let job = await submitJob(trial, { package: r.pkg, kind: "scene", priority: args.fast ? "rush" : args.priority });
     if (args.wait !== false && !TERMINAL_STATUSES.has(job.status)) job = await waitWithProgress(job.id, extra);
-    const res = await finishJob(job, false, trial ? { trialStarted: { claimUrl: trial.claimUrl, freeSecondsLeft: trial.freeSecondsLeft } } : undefined);
-    if (trial) res.content[0] = { type: "text", text: (res.content[0] as { text: string }).text + `\nNo account was configured, so a free trial was started.${claimNote()}` };
+    const res = await finishJob(job, false, trial ? trialPreface(trial) : undefined);
+    if (trial) res.content[0] = { type: "text", text: (res.content[0] as { text: string }).text + `\nNo account was configured, so a trial workspace was started.${claimNote()}` };
     return res;
   }));
 
@@ -595,10 +618,10 @@ export function registerRendaTools(server: McpServer, opts: RegisterOptions): vo
       delete pkg.animation;
     });
     if ("issues" in r) return fail(`Invalid package: ${JSON.stringify(r.issues, null, 2)}`, "Fix the issues (see `fix`) and retry.");
-    let job = await client.createJob({ package: r.pkg, kind: "scene", priority: args.fast ? "rush" : args.priority });
+    let job = await submitJob(trial, { package: r.pkg, kind: "scene", priority: args.fast ? "rush" : args.priority });
     if (args.wait !== false && !TERMINAL_STATUSES.has(job.status)) job = await waitWithProgress(job.id, extra, 20 * 60_000);
-    const res = await finishJob(job, false, trial ? { trialStarted: { claimUrl: trial.claimUrl, freeSecondsLeft: trial.freeSecondsLeft } } : undefined);
-    if (trial) res.content[0] = { type: "text", text: (res.content[0] as { text: string }).text + `\nNo account was configured, so a free trial was started.${claimNote()}` };
+    const res = await finishJob(job, false, trial ? trialPreface(trial) : undefined);
+    if (trial) res.content[0] = { type: "text", text: (res.content[0] as { text: string }).text + `\nNo account was configured, so a trial workspace was started.${claimNote()}` };
     return res;
   }));
 

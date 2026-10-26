@@ -10,9 +10,10 @@ Credentials are API keys (\`rnd_live_…\`), sent as \`Authorization: Bearer <ke
 
 ## 1. Anonymous trial (no human needed now)
 POST ${base}/api/v1/auth/trial
-→ 201 {"apiKey", "claimUrl", "freeSecondsLeft": 300, "expiresAt", "limits": {"maxDimension": 1920}}
+→ 201 {"apiKey", "claimUrl", "expiresAt", "limits": {"maxDimension": 1920}}
 - Rate limited per network. Unclaimed trials and their keys stop working at \`expiresAt\`.
-- Give \`claimUrl\` to the human. When they open it and sign in, the workspace (renders, key) becomes theirs and the free tier is topped up. Don't open it yourself.
+- The workspace starts with $0 credit (there is no free render time). To render, the human buys credit: POST /api/v1/billing/checkout and give them the returned url (it works before the trial is claimed).
+- Give \`claimUrl\` to the human. When they open it and sign in, the workspace (renders, key, credit) becomes theirs. Don't open it yourself.
 CLI: \`npx ${CLI_PACKAGE} trial\` / \`uvx renda trial\`.
 
 ## 2. Email code (human reads one email)
@@ -26,7 +27,7 @@ Show the human verificationUriComplete, then poll POST ${base}/api/v1/auth/devic
 428 {"error":"authorization_pending"} until approved, then {"apiKey"}. CLI: \`renda login\`.
 
 ## Terms
-Creating or claiming an account, or adding a card, means the human agrees to the Terms of Service (${base}/legal/terms) and Privacy Policy (${base}/legal/privacy). Tell them when you sign them up; the trial and magic-code responses include a \`terms\` object with these links.
+Creating or claiming an account, or buying credit, means the human agrees to the Terms of Service (${base}/legal/terms) and Privacy Policy (${base}/legal/privacy). Tell them when you sign them up; the trial and magic-code responses include a \`terms\` object with these links.
 
 ## Storing keys
 Keys are shown once. The CLIs and MCP server share ~/.config/renda/credentials.json (mode 600); $RENDA_API_KEY overrides it.
@@ -34,7 +35,7 @@ Revoke keys in the dashboard: ${base}/dashboard/keys.
 
 ## Errors
 401 unauthorized → no/invalid key: use one of the flows above. 401 trial_expired → start a new trial or sign up.
-402 payment_required → POST /api/v1/billing/checkout and give the returned url to the human.
+402 payment_required (no credit) or insufficient_credit (less credit than the job's estimate) → POST /api/v1/billing/checkout and give the returned url to the human so they can buy credit.
 `;
   return new Response(body, { headers: { "content-type": "text/markdown; charset=utf-8" } });
 }

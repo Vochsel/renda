@@ -98,7 +98,7 @@ const OPTIONS: { name: string; price: string; billing: string; setup: string; id
     name: "Renda",
     price: `$${HOURLY.renda.toFixed(2)} per L4-hour ($0.035/min); CPU $0.90/h`,
     billing: "Per second, no minimum; cached re-renders free",
-    setup: "One command (npx / uvx); 30 free minutes",
+    setup: "One command (npx / uvx); prepaid credit from $5",
     idle: "None",
     agents: "CLI, MCP, REST, skills",
     wins: "Bursty or unpredictable volume; agents; many formats/engines without installing them",
@@ -301,7 +301,7 @@ export default function BenchmarksPage() {
             />
             <p className="text-muted-foreground mt-3 text-[11px]">
               The farm row is close to Renda for small jobs ({usd(stillFarm)} vs {usd(stillRenda)} for the Cycles still) — and it depends heavily on the
-              3× speed assumption. Farms add an upload step and prepaid credits; Renda adds nothing to install.
+              3× speed assumption. Farms add an upload step and their own client software; Renda adds nothing to install.
             </p>
           </Section>
 

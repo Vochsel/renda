@@ -18,7 +18,8 @@ export default function PricingPage() {
       <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-16">
         <h1 className="text-3xl font-semibold tracking-tight">Pricing</h1>
         <p className="text-muted-foreground mt-3">
-          Pay for render-minutes, metered per second. {p.freeMinutes} free minutes to start; no subscription fee.
+          Buy credit up front, then pay for render-minutes from it, metered per second. No subscription fee, no free
+          render time.
         </p>
         <Card className="mt-8">
           <CardHeader><CardTitle>Per render-minute</CardTitle></CardHeader>
@@ -46,8 +47,12 @@ export default function PricingPage() {
           <li>The engine picks the cheapest hardware that meets your priority. Use <span className="font-mono">priority: &quot;economy&quot;</span> to always take the cheapest.</li>
           <li>Machine-readable: <a className="underline" href="/api/v1/pricing">/api/v1/pricing</a></li>
           <li>
-            Usage is billed monthly in arrears. Renders that fail because of a fault on our side aren&apos;t charged; see the{" "}
-            <Link className="underline" href="/legal/refunds">refund policy</Link>.
+            Credit is prepaid in USD: buy $5 to $1,000 at a time (default $25) and it&apos;s added as soon as the payment
+            succeeds. It doesn&apos;t expire, and a render is stopped if the credit runs out.
+          </li>
+          <li>
+            Unused credit is refundable within 30 days of purchase. Renders that fail because of a fault on our side are
+            credited back; see the <Link className="underline" href="/legal/refunds">refund policy</Link>.
           </li>
         </ul>
         <div className="mt-8 flex flex-col items-start gap-2">

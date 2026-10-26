@@ -11,9 +11,9 @@ Next.js 16 app: the public REST API (`/api/v1`), the remote MCP endpoint (`/api/
 - **Jobs**: `src/lib/jobs.ts` validates the package (`@rendahq/spec`), checks assets exist, checks balance,
   serves identical re-renders from cache for $0, then posts to the Modal worker. Worker events
   (`/api/v1/internal/worker/events`, HMAC-signed) update status and meter usage.
-- **Billing**: per-second usage per hardware class. Free seconds are consumed first (atomic SQL), the rest
-  is reported to Stripe Billing Meters (`render_seconds_cpu|gpu_l4|gpu_l40s`, idempotent per job chunk).
-  A card is attached with Checkout in setup mode; the webhook starts the metered subscription.
+- **Billing**: prepaid credit in USD, no free render time. Per-second usage per hardware class draws the
+  balance down; a running job is stopped when it runs out. Credit is bought with Stripe Checkout (payment
+  mode, $5–$1000) and added as soon as the payment succeeds.
 - **Agent discovery**: `/llms.txt`, `/api/v1/openapi.json`, `/api/v1/schema.json`, `/.well-known/mcp.json`.
 
 ## Develop

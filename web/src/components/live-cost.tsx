@@ -8,7 +8,7 @@ const TERMINAL = new Set(["succeeded", "failed", "canceled"]);
 
 export type LiveCostJob = {
   status: string;
-  /** Billed cost (final once the job is finished; can be below list price on free minutes). */
+  /** Billed cost, drawn from prepaid credit (final once the job is finished). */
   costUsd: number;
   cached?: boolean;
   live?: LiveSnapshot | null;
@@ -49,7 +49,7 @@ export function LiveCost({ job, className, suffix = true }: { job: LiveCostJob; 
   return (
     <span
       className={cn("font-mono tabular-nums", className)}
-      title={running ? "Billed so far plus running containers, at list price. The final bill can be lower (free minutes)." : undefined}
+      title={running ? "Billed so far plus running containers, at list price." : undefined}
     >
       {running && <span className="text-muted-foreground">≈ </span>}
       {fmtLiveUsd(value)}

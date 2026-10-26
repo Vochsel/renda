@@ -1,12 +1,12 @@
 ---
 name: renda-onboarding
-description: Get a user from no Renda account to their first cloud render entirely from the agent. Covers one-command setup (`npx @rendahq/cli init`), anonymous claimable trials, email signup with a 6-digit code, saving the API key, free render minutes, and handing the human a Stripe link when payment is needed. Use whenever a Renda tool or CLI says unauthenticated / no API key / payment_required, when the user wants to sign up for or log in to Renda, or before the first Renda render on a new machine.
+description: Get a user from no Renda account to their first cloud render entirely from the agent. Covers one-command setup (`npx @rendahq/cli init`), anonymous claimable trials, email signup with a 6-digit code, saving the API key, and handing the human a Stripe link to buy prepaid credit (there is no free render time). Use whenever a Renda tool or CLI says unauthenticated / no API key / payment_required / insufficient_credit, when the user wants to sign up for or log in to Renda, or before the first Renda render on a new machine.
 ---
 
 # Renda onboarding (zero to first render)
 
 The whole account flow works without a browser except two moments that need the human:
-reading a code from their email, and entering a card. Everything else is yours.
+reading a code from their email, and paying for credit. Everything else is yours.
 
 ## 1. Check whether you're already set up
 
@@ -18,14 +18,15 @@ reading a code from their email, and entering a card. Everything else is yours.
 
     npx @rendahq/cli init --yes          # or, with uv: uvx renda trial && uvx renda mcp add
 
-This starts an **anonymous trial** (about 5 free render-minutes, max 1920px, no signup), adds
+This starts an **anonymous trial** (a workspace and API key with $0 credit, max 1920px, no signup), adds
 the renda MCP server to the installed agents, installs these skills, and adds a note to
 AGENTS.md. MCP only: `renda_trial` does the same (and `renda_render` starts one on its own
-when no key is configured).
+when no key is configured). A trial includes no free render time: to render, the human buys
+credit (step 5; the checkout works for an unclaimed trial too).
 
 A trial returns a **claim link**. Give it to the human right away, in plain words:
-*"I started a free Renda trial so I could render this. Open <claimUrl> and sign in to keep
-it (and get the full free tier)."* Never open the link yourself. Unclaimed trials stop
+*"I started a Renda trial workspace for this. Open <claimUrl> and sign in to keep it, or you
+lose it and any credit on it."* Never open the link yourself. Unclaimed trials stop
 working after 7 days. `renda claim` / `renda_claim` prints the link again.
 
 Use a real account instead (step 3) when the user wants renders above 1920px or already
@@ -50,21 +51,27 @@ shows a short code to confirm in the browser).
 
 ## 4. First render
 
-New accounts get **30 free render-minutes** (trials about 5, topped up to 30 when claimed). Do a draft render straight away so the user
-sees value: `renda_render {file: "<their model>"}`. Then follow the `renda` skill.
+Renders are paid from prepaid credit. New accounts and trials start at **$0**, so check
+`renda_whoami` (`balance.creditUsd`) first; with no credit, go to step 5 before rendering. Once
+there's credit, do a draft render straight away so the user sees value (drafts usually cost
+cents): `renda_render {file: "<their model>"}`. Then follow the `renda` skill.
 
-## 5. When free minutes run out
+## 5. Buying credit
 
-A job or estimate fails with `payment_required` (CLI exit code 4):
+Needed when the balance is $0, or when a job fails with `payment_required` (balance $0 or less)
+or `insufficient_credit` (balance below the job's estimated cost). CLI exit code 4 for both.
 
-1. `renda_billing_link` → Stripe Checkout URL.
-2. Give the URL to the human: *"Your free minutes are used up. Add a card here to keep
-   rendering (billed per render-minute): <url>"*. You can't complete payment yourself, and
-   shouldn't try to fill in card forms.
-3. When they confirm, check with `renda_whoami` (`billing.hasPaymentMethod: true`) and
-   retry the render.
+1. `renda_billing_link` (CLI: `renda billing`) → Stripe Checkout URL.
+2. Give the URL to the human: *"Renda is prepaid. Buy render credit here (you pick the amount,
+   $5 to $1000, $25 by default; renders cost per render-second): <url>"*. You can't complete
+   payment yourself, and shouldn't try to fill in payment forms.
+3. Credit is added as soon as the payment succeeds. When they confirm, check with
+   `renda_whoami` (`balance.creditUsd` above $0) and retry the render.
 
-For invoices or card changes use `renda_billing_link {portal: true}`.
+Credit doesn't expire. Unused credit is refundable on request within 30 days of purchase, and
+renders that failed because of a Renda fault are credited back on request.
+
+For payment history use `renda_billing_link {portal: true}`.
 
 ## Gotchas
 

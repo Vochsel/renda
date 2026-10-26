@@ -4,7 +4,7 @@ Render 3D files and scenes in the [Renda](https://renda.vochsel.com) cloud from 
 Installs as `renda` (and `rendahq`).
 
 ```bash
-npx @rendahq/cli init                  # free trial (no signup) → MCP server + skills for Claude Code / Cursor / Codex
+npx @rendahq/cli init                  # trial workspace (no signup) → MCP server + skills for Claude Code / Cursor / Codex
 npx @rendahq/cli render model.glb      # uploads, renders, downloads to ./renders
 ```
 
@@ -12,9 +12,9 @@ npx @rendahq/cli render model.glb      # uploads, renders, downloads to ./render
 |---|---|
 | `init [--agent claude-code\|cursor\|codex\|all] [--yes] [--trial] [--remote]` | auth (trial if none), MCP config, skills, AGENTS.md note (with `--yes` or consent) |
 | `mcp` · `mcp add\|remove [--agent …] [--remote]` | run the stdio MCP server, or (un)install it |
-| `trial` · `claim` | anonymous trial (5 render-minutes, 1920px max, 7 days) and its claim link |
+| `trial` · `claim` | anonymous trial workspace ($0 credit, 1920px max, 7 days unless claimed) and its claim link |
 | `signup <email>` · `verify <code>` · `login` · `logout` | accounts (email code, or browser device flow) |
-| `whoami` · `balance` · `usage` · `billing` | account, free minutes, spend, card link |
+| `whoami` · `balance` · `usage` · `billing [--amount N] [--portal]` | account, prepaid credit, spend, checkout link to buy credit ($5–$1000) |
 | `render <file\|pkg> [--res WxH] [--quality …] [--engine …] [--frames a-b] [--format …] [-o dir] [--no-wait] [--max-minutes N] [--local]` | cloud render; `--local` hands off to `uvx renda` (Blender/Mitsuba on this machine) |
 | `estimate <file\|pkg>` · `jobs [id] [--cancel] [--download dir]` | cost before rendering; job status/outputs |
 | `validate <pkg>` · `new <file>` | package tools |

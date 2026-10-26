@@ -30,7 +30,7 @@ class FakeAPI:
                                              "uploadUrl": None if exists else f"https://r2.test/r2/{sha}"})
         if path == "/api/v1/jobs" and req.method == "POST":
             if body["package"]["scene"]["root"] == "broke":
-                return httpx.Response(402, json={"error": {"code": "payment_required", "message": "free minutes used",
+                return httpx.Response(402, json={"error": {"code": "payment_required", "message": "no credit left",
                                                            "hint": "POST /api/v1/billing/checkout"}})
             job = {"id": "job_1", "status": "succeeded", "package": body["package"], "outputs": []}
             self.jobs["job_1"] = job

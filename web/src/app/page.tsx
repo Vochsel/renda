@@ -7,7 +7,7 @@ import { SplatHero } from "@/components/splat-hero";
 import { CopyButton } from "@/components/copy-button";
 import { InstallTabs } from "@/components/install-tabs";
 import { installSnippets } from "@/lib/install-snippets";
-import { FREE_MINUTES, HARDWARE_LABEL, PRICE_PER_MINUTE } from "@/lib/pricing";
+import { HARDWARE_LABEL, PRICE_PER_MINUTE } from "@/lib/pricing";
 import { SHOWCASE, type ShowcaseItem } from "@/lib/showcase";
 import { BakeDemo } from "@/components/bake-demo";
 import { SplatDemo } from "@/components/splat-demo";
@@ -125,7 +125,7 @@ export default function Home() {
               ]}
             />
             <p className="text-muted-foreground text-xs">
-              Free trial, no signup. Claim it to keep the workspace and get {FREE_MINUTES} free minutes.
+              Trial workspace, no signup. Renders use prepaid credit (from $5); claim the workspace to keep it.
             </p>
             <TermsNotice action="using Renda" />
           </div>
@@ -209,7 +209,7 @@ export default function Home() {
                 .join("  ")}
             </p>
             <p className="text-muted-foreground mt-2 text-xs">
-              Per-second billing. Cached re-renders free. <Link href="/pricing" className="underline underline-offset-2">Pricing</Link>
+              Prepaid credit, billed per second. Cached re-renders free. <Link href="/pricing" className="underline underline-offset-2">Pricing</Link>
             </p>
           </div>
         </section>

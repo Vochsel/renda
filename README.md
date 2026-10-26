@@ -10,13 +10,13 @@ a CAD part (`.step`, `.iges`), a three.js JSON scene or a Gaussian splat capture
 `.spz`) — on its own, with meshes placed inside it, or composed from layered packages
 (`extends`, package references) — and get back a still, a turntable, or a video. Renders run in
 the cloud on [Modal](https://modal.com) and are billed per second of render time
-(shown in render-minutes). Or run the same CLI locally, for free.
+(shown in render-minutes), paid from prepaid credit. Or run the same CLI locally, for free.
 
 Node or Python, same account, same commands:
 
 ```bash
 # Node
-npx @rendahq/cli init                      # free trial (no signup) + MCP + skills for your agent
+npx @rendahq/cli init                      # trial workspace (no signup) + MCP + skills for your agent
 npx @rendahq/cli render chair.blend --res 2048x2048
 
 # Python (uv) — also renders locally with Blender/Mitsuba
@@ -38,9 +38,10 @@ npx skills add vochsel/renda                   # skills (skills.sh)
 /plugin marketplace add vochsel/renda          # Claude Code plugin: skills + MCP
 ```
 
-A trial gives about 5 free render-minutes and a claim link. Open it and sign in to keep the workspace and
-get 30 free minutes. A full account by email works from a terminal too: `renda signup you@example.com`, then
-`renda verify <code>`.
+Cloud renders draw down prepaid credit (USD, no free render time). A trial gives you a workspace with an
+API key, $0 credit and a claim link: `renda billing` prints a checkout link to buy credit ($5 to $1000,
+default $25), and opening the claim link and signing in keeps the workspace. A full account by email works
+from a terminal too: `renda signup you@example.com`, then `renda verify <code>`.
 
 ## Why
 

@@ -44,7 +44,7 @@ run's own jobs. In the 2026-10-20 suite one pi run downloaded a parallel run's b
 
 ```bash
 pnpm install && pnpm -r --filter @rendahq/spec --filter @rendahq/mcp --filter @rendahq/cli build
-export BENCH_RENDA_API_KEY=rnd_live_…        # a key with free seconds (renda condition only)
+export BENCH_RENDA_API_KEY=rnd_live_…        # a key with prepaid credit (renda condition only)
 uv run --no-project python bench/agents/run.py --workdir /tmp/renda-agent-eval --records /tmp/renda-agent-eval/records.jsonl
 ```
 

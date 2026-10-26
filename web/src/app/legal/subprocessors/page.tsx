@@ -12,7 +12,7 @@ const SUBPROCESSORS = [
   { name: "Modal Labs, Inc.", purpose: "Render compute (CPU and GPU workers)", data: "Your files and scene packages while rendering; cached input files; outputs in transit", location: "United States" },
   { name: "Cloudflare, Inc. (R2)", purpose: "File storage", data: "Uploaded files and render outputs", location: "[OWNER: bucket location]" },
   { name: "Neon, Inc.", purpose: "Database (Postgres)", data: "Account, job, usage and billing records; scene packages", location: "[OWNER: Neon region]" },
-  { name: "Stripe, Inc.", purpose: "Payments and invoicing", data: "Card and billing details, usage totals per hardware class", location: "United States" },
+  { name: "Stripe, Inc.", purpose: "Payments (buying credit) and receipts", data: "Card and billing details, credit purchase amounts", location: "United States" },
   { name: "WorkOS, Inc.", purpose: "Sign-in and user accounts", data: "Email, name, IP address and user agent at sign-in", location: "United States" },
   { name: "PostHog, Inc.", purpose: "Product analytics, error tracking, session replay", data: "Usage events, page interactions and recordings, email and workspace name of signed-in users, error reports", location: "United States" },
 ] as const;

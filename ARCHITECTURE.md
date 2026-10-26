@@ -4,7 +4,7 @@ Renda is an open-source, agent-first cloud renderer for 3D files and scenes.
 You send it a file (`.blend`, `.usd/.usda/.usdc/.usdz`, `.gltf/.glb`, `.fbx`, `.obj`, `.stl`,
 `.ply`, `.dae`, `.3mf`, `.abc`, three.js JSON scenes, Gaussian splats `.ply`/`.splat`/`.spz`) or a
 **Renda package** (`*.renda.json`) and get back images or video. Renders run on
-Modal, are billed per second (invoiced in render-minutes), and every part of the
+Modal, are paid from prepaid credit per second (priced in render-minutes), and every part of the
 product — signup, billing, rendering, results — is reachable by an agent without
 a browser.
 
@@ -242,19 +242,20 @@ class Engine(Protocol):
 
 | Method | Path | Body → Response |
 |---|---|---|
-| POST | `/auth/trial` | `{}` → `{apiKey, claimUrl, freeSecondsLeft, expiresAt, limits, next[]}` — anonymous claimable trial (a few free minutes, capped resolution, no `rush`, rate-limited per network, expires unless claimed; exact limits are deployment config and returned in `limits`/`expiresAt`) |
+| POST | `/auth/trial` | `{}` → `{apiKey, claimUrl, expiresAt, limits, next[]}` — anonymous claimable trial ($0 credit, no free render time; capped resolution, no `rush`, rate-limited per network, expires unless claimed; exact limits are deployment config and returned in `limits`/`expiresAt`) |
 | POST | `/auth/magic/start` | `{email}` → `{ok}` — WorkOS Magic Auth emails a 6-digit code (creates user if new) |
 | POST | `/auth/magic/verify` | `{email, code, keyName?}` → `{apiKey, user, org}` |
 | POST | `/auth/device` | `{}` → `{deviceCode, userCode, verificationUri, interval, expiresIn}` |
 | POST | `/auth/device/token` | `{deviceCode}` → `{apiKey}` or `428 {error:"authorization_pending"}` |
-| GET | `/me` | → `{user, org, balance:{freeSecondsLeft}, billing:{hasPaymentMethod}}` |
+| GET | `/me` | → `{user, org, balance:{creditUsd, freeSecondsLeft:0}, billing:{…}, trial}` (`freeSecondsLeft` stays 0 for old clients) |
 | POST | `/uploads` | `{filename, size, sha256, contentType?}` → `{assetUri:"asset://<sha>", uploadUrl?, exists}` |
 | POST | `/estimate` | `{package}` → `{hardware, estSeconds:[lo,hi], estCostUsd:[lo,hi], warnings}` |
 | POST | `/jobs` | `{package, kind?:"scene"|"hyperframes", priority?:"economy"|"standard"|"rush", fast?: boolean (= rush), idempotencyKey?}` → `Job` |
 | GET | `/jobs` / `/jobs/:id` | → `Job[]` / `Job` |
 | POST | `/jobs/:id/cancel` | → `Job` |
 | GET | `/usage` | `?from&to` → `{seconds:{cpu,gpu}, minutesBilled, costUsd, byDay[]}` |
-| POST | `/billing/checkout` | → `{url}` Stripe Checkout (setup mode) to attach a card |
+| POST | `/billing/checkout` | `{amountUsd?}` → `{url}` Stripe Checkout payment page to buy prepaid credit ($5–$1000, default $25, adjustable on the page; credited on payment success, works for unclaimed trials) |
+| GET/PUT | `/billing/limit` | `{monthlyLimitUsd \| null}` → optional monthly spending limit (none by default) |
 | GET | `/billing/portal` | → `{url}` |
 | GET | `/pricing` | public → price table |
 | POST | `/internal/worker/events` | worker → server, HMAC `x-renda-signature` |
@@ -275,6 +276,8 @@ type Job = {
 
 Errors: `{error: {code, message, hint?}}` — `hint` always tells an agent what to do
 next (e.g. `"code":"payment_required","hint":"POST /api/v1/billing/checkout and send the url to the user"`).
+`payment_required` (402) means the credit balance is $0 or less; `insufficient_credit` (402) means it is below
+the low end of the job's estimated cost.
 
 ### Worker contract
 
@@ -308,8 +311,12 @@ these from `jobs.outputs`; `worker/scripts/backfill_thumbs.py` fills them in for
   before our code runs are **not** billed.
 - Price per render-minute by class (defaults, `web/src/lib/pricing.ts`):
   `cpu` $0.015 · `gpu-l4` $0.035 · `gpu-l40s` $0.075.
-- Free tier: 30 render-minutes for new orgs; then card required (Stripe Checkout setup mode).
-- Stripe Billing Meters: one meter per hardware class (`render_seconds_cpu`, `render_seconds_gpu_l4`, `render_seconds_gpu_l40s`), each with its own metered price; usage is reported on each `usage` event past the free tier (idempotent by `jobId:chunk`).
+- Prepaid credit in USD, no free render time (not for trials, not on signup or claim). Usage draws the
+  balance down per second at the prices above. Credit is bought with Stripe Checkout (payment mode,
+  $5–$1000) and added when the payment succeeds; it doesn't expire. A running job is stopped when the
+  credit runs out.
+- Limits: `maxCostUsd` per job; an optional monthly spending limit (no default, the balance caps spend);
+  2 concurrent jobs until a workspace has bought credit, then 20.
 - Cached results (identical package + asset hashes + engine version) cost $0.
 
 ## 5. Cost optimisation (the worker's job)
@@ -403,13 +410,15 @@ deployments and treg.to's llms.txt setup script:
 - **One command**: `npx @rendahq/cli init` (or `uvx renda trial && uvx renda mcp add`) → trial key if none,
   MCP config for Claude Code / Cursor / Codex, skills, AGENTS.md note.
 - **Anonymous, claimable trial**: `POST /api/v1/auth/trial` (no auth) creates an unclaimed org + key with
-  `TRIAL_SECONDS`. The human opens `claimUrl` (`/claim?token=…`, WorkOS sign-in) to adopt the org; the free tier
-  tops up to `FREE_SECONDS`. Unclaimed trials expire at `expiresAt` (enforced in API-key auth). The MCP
-  `renda_render` and both CLIs start a trial automatically when no key is configured and surface the claim link.
+  $0 credit. The human opens `claimUrl` (`/claim?token=…`, WorkOS sign-in) to adopt the org (claiming adds no
+  credit). Unclaimed trials expire at `expiresAt` (enforced in API-key auth). The MCP `renda_render` and both
+  CLIs start a trial automatically when no key is configured and surface the claim link; the first job then
+  returns 402 until the human buys credit, and the error keeps the claim link next to the billing step.
 - **Full accounts without a browser**: `renda signup <email>` → human reads the 6-digit code → `renda verify <code>`.
   Humans: `renda login` (device flow).
 - **Agent-readable output**: JSON `{status, reason, message, hint, next[]}` when piped, gh-style exit codes
   (0 ok, 1 error, 2 usage, 3 auth, 4 payment), API keys never echoed into output.
-- **Payment**: `payment_required` (exit 4) → `renda billing` returns a Stripe Checkout URL for the human.
+- **Payment**: `payment_required` / `insufficient_credit` (exit 4) → `renda billing` returns a Stripe Checkout URL
+  where the human buys prepaid credit.
 - **Distribution**: npm `@rendahq/cli` + `@rendahq/mcp` (+ `/remote`, `/stdio` entries), PyPI `renda`, skills.sh
   (`npx skills add vochsel/renda`), Claude Code marketplace (`/plugin marketplace add vochsel/renda`), MCP registry.

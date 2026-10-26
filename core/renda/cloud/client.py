@@ -107,7 +107,7 @@ class RendaClient:
         return self.request("POST", "/auth/magic/verify", {"email": email, "code": code, "keyName": key_name or _key_name()}, auth=False)
 
     def trial(self) -> dict:
-        """Anonymous claimable trial: {apiKey, claimUrl, freeSecondsLeft, expiresAt}."""
+        """Anonymous claimable trial: {apiKey, claimUrl, creditUsd (0), expiresAt}; renders need prepaid credit."""
         return self.request("POST", "/auth/trial", {}, auth=False)
 
     def device_start(self) -> dict:
@@ -216,8 +216,9 @@ class RendaClient:
         params = {k: v for k, v in (("from", since), ("to", until)) if v}
         return self.request("GET", "/usage", params=params or None)
 
-    def billing_checkout(self) -> dict:
-        return self.request("POST", "/billing/checkout", {})
+    def billing_checkout(self, amount_usd: float | None = None) -> dict:
+        """Stripe Checkout page where the human buys prepaid credit ($5–$1000, default $25, adjustable there)."""
+        return self.request("POST", "/billing/checkout", {} if amount_usd is None else {"amountUsd": amount_usd})
 
     def billing_portal(self) -> dict:
         return self.request("GET", "/billing/portal")

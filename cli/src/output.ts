@@ -81,8 +81,8 @@ export class Out {
       message = e.message;
       hint = e.hint;
       exit = exitCodeFor(e);
-      if (exit === EXIT.auth) next = ["renda trial   # no signup, 5 free render-minutes", "renda login   # browser sign-in"];
-      if (exit === EXIT.payment) next = ["renda billing   # prints a link for the human to add a card"];
+      if (exit === EXIT.auth) next = ["renda trial   # no signup, $0 credit", "renda login   # browser sign-in"];
+      if (exit === EXIT.payment) next = ["renda billing   # prints a checkout link for the human to buy credit"];
     } else if (e instanceof UsageError) {
       code = "usage";
       message = e.message;

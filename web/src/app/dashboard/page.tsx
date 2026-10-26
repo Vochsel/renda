@@ -32,6 +32,8 @@ export default async function Overview() {
     live: liveCostProps(j, now).live!,
   }));
   const totalSeconds = usage.seconds.cpu + usage.seconds.gpu;
+  // Prepaid credit in USD. Read defensively: the billing row gains `creditUsd` with the prepaid-credit backend.
+  const credit = Number((billing as { creditUsd?: unknown }).creditUsd ?? 0) || 0;
 
   return (
     <div className="space-y-6">
@@ -49,8 +51,9 @@ export default async function Overview() {
       <div className="grid gap-4 sm:grid-cols-3">
         <Stat label="Render time this month" value={fmtMinutes(totalSeconds)} sub={`${fmtMinutes(usage.seconds.gpu)} GPU · ${fmtMinutes(usage.seconds.cpu)} CPU`} />
         <Stat label="Spend this month" value={fmtUsd(usage.costUsd)} sub={`${usage.minutesBilled} billed minutes`} />
-        <Stat label="Free minutes left" value={fmtMinutes(billing.freeSecondsRemaining)}
-          sub={billing.hasPaymentMethod ? "Card on file" : "No card on file"} />
+        <Stat label="Credit left" value={fmtUsd(credit)}
+          sub={credit > 0 ? "Prepaid; renders draw it down per second" : "Buy credit to render"}
+          href={{ to: "/dashboard/billing", label: credit > 0 ? "Add credit" : "Buy credit" }} />
       </div>
       {renders.items.length > 0 && (
         <Card>
@@ -100,13 +103,16 @@ export default async function Overview() {
   );
 }
 
-function Stat({ label, value, sub }: { label: string; value: string; sub: string }) {
+function Stat({ label, value, sub, href }: { label: string; value: string; sub: string; href?: { to: string; label: string } }) {
   return (
     <Card>
       <CardHeader className="pb-2"><CardDescription>{label}</CardDescription></CardHeader>
       <CardContent>
         <div className="font-mono text-2xl font-semibold">{value}</div>
-        <div className="text-muted-foreground mt-1 text-xs">{sub}</div>
+        <div className="text-muted-foreground mt-1 text-xs">
+          {sub}
+          {href && <>{" · "}<Link href={href.to} className="underline underline-offset-2">{href.label}</Link></>}
+        </div>
       </CardContent>
     </Card>
   );

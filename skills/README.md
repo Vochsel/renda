@@ -6,14 +6,14 @@ Claude Code plugin together with the `@rendahq/mcp` server.
 | Skill | Use it for |
 |---|---|
 | `renda` | Entry point: rendering any 3D file, MCP vs CLI, draft→final workflow, reading results |
-| `renda-onboarding` | Zero to first render: one-command setup, anonymous trial + claim link, email signup, free minutes, billing link |
+| `renda-onboarding` | Zero to first render: one-command setup, anonymous trial + claim link, email signup, buying credit, billing link |
 | `renda-package` | Writing `.renda.json` packages: camera, lighting, materials, engines, per-format quirks |
 | `renda-video` | Turntables, animations, HyperFrames compositions, 3D inside HyperFrames |
 | `renda-cost` | Billing model, estimates, keeping renders cheap |
 
 ## Install
 
-**Everything in one command** (MCP server + these skills for Claude Code / Cursor / Codex, plus a free trial):
+**Everything in one command** (MCP server + these skills for Claude Code / Cursor / Codex, plus a trial workspace):
 
 ```sh
 npx @rendahq/cli init          # or: uvx renda trial && uvx renda mcp add

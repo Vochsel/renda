@@ -12,7 +12,7 @@ describe("RendaClient", () => {
   });
 
   it("maps structured errors with hint", async () => {
-    const f = fakeFetch(() => ({ status: 402, json: { error: { code: "payment_required", message: "Free minutes used", hint: "POST /api/v1/billing/checkout" } } }));
+    const f = fakeFetch(() => ({ status: 402, json: { error: { code: "payment_required", message: "No credit left.", hint: "POST /api/v1/billing/checkout" } } }));
     const c = new RendaClient({ baseUrl: "https://x.test", apiKey: "k", fetch: f.fetch });
     const err = await c.createJob({ package: { scene: { root: "a.glb" } } }).catch((e) => e);
     expect(err).toBeInstanceOf(RendaApiError);

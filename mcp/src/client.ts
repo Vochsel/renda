@@ -66,10 +66,30 @@ export interface HyperframesPackage {
 }
 
 export interface Me {
-  user: { id: string; email: string; name?: string };
+  /** null for an unclaimed anonymous trial. */
+  user: { id: string; email: string; name?: string } | null;
   org: { id: string; name?: string };
-  balance: { freeSecondsLeft: number };
-  billing: { hasPaymentMethod: boolean };
+  /** Prepaid credit in USD. `freeSecondsLeft` is legacy (always 0 now; older servers had free minutes). */
+  balance: { creditUsd?: number; freeSecondsLeft?: number };
+  billing: { hasPaymentMethod?: boolean; [k: string]: unknown };
+  trial?: { active: boolean; expiresAt: string | null; limits?: { maxDimension: number; priorities: string[] }; next?: string[] } | null;
+}
+
+/** Prepaid credit left in USD (0 when the server doesn't report it). */
+export function creditUsdOf(me: Pick<Me, "balance">): number {
+  const c = me.balance?.creditUsd;
+  return typeof c === "number" && Number.isFinite(c) ? c : 0;
+}
+
+/** Legacy free render-seconds left; 0 on current servers, which have no free render time. */
+export function legacyFreeSecondsOf(me: Pick<Me, "balance">): number {
+  const f = me.balance?.freeSecondsLeft;
+  return typeof f === "number" && Number.isFinite(f) ? Math.max(0, f) : 0;
+}
+
+/** "$12.34" (or "$0.0042" under a cent). */
+export function usd(v: number): string {
+  return `$${Math.abs(v) > 0 && Math.abs(v) < 0.01 ? v.toFixed(4) : v.toFixed(2)}`;
 }
 
 export interface UploadResponse {
@@ -103,14 +123,17 @@ export interface DeviceAuth {
 
 export interface VerifyResponse {
   apiKey: string;
-  user: Me["user"];
+  user: NonNullable<Me["user"]>;
   org: Me["org"];
 }
 
 export interface TrialResponse {
   apiKey: string;
   claimUrl: string;
-  freeSecondsLeft: number;
+  /** Prepaid credit on the new workspace (trials start at $0). */
+  creditUsd?: number;
+  /** Legacy: older servers gave trials free render-seconds. */
+  freeSecondsLeft?: number;
   expiresAt: string;
   limits?: { maxDimension: number; priorities: string[] };
   next?: string[];
@@ -165,7 +188,7 @@ export class RendaClient {
     const auth = opts.auth ?? true;
     if (auth && !this.apiKey) {
       throw new RendaApiError(401, "unauthenticated", "No Renda API key configured.",
-        "Start a free trial (renda_trial / `renda trial`), or call renda_signup with the user's email, ask the user for the 6-digit code from the email, then renda_verify. Or set RENDA_API_KEY.");
+        "Start an anonymous trial (renda_trial / `renda trial`), or call renda_signup with the user's email, ask the user for the 6-digit code from the email, then renda_verify. Or set RENDA_API_KEY.");
     }
     const headers: Record<string, string> = { accept: "application/json", "user-agent": this.userAgent };
     if (body !== undefined) headers["content-type"] = "application/json";
@@ -209,7 +232,7 @@ export class RendaClient {
   magicVerify(email: string, code: string, keyName?: string) {
     return this.request<VerifyResponse>("POST", "/auth/magic/verify", { email, code, keyName }, { auth: false });
   }
-  /** Anonymous claimable trial: API key + a few free render-minutes, no signup. */
+  /** Anonymous claimable trial: workspace + API key with $0 credit, no signup. */
   trial() {
     return this.request<TrialResponse>("POST", "/auth/trial", {}, { auth: false });
   }
@@ -286,8 +309,9 @@ export class RendaClient {
     const q = new URLSearchParams(params as Record<string, string>).toString();
     return this.request<Usage>("GET", `/usage${q ? `?${q}` : ""}`);
   }
-  billingCheckout() {
-    return this.request<{ url: string }>("POST", "/billing/checkout", {});
+  /** Stripe Checkout page where the human buys prepaid credit ($5–$1000, default $25; adjustable on the page). */
+  billingCheckout(amountUsd?: number) {
+    return this.request<{ url: string }>("POST", "/billing/checkout", amountUsd === undefined ? {} : { amountUsd });
   }
   billingPortal() {
     return this.request<{ url: string }>("GET", "/billing/portal");

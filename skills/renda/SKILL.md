@@ -25,7 +25,8 @@ packages), `renda-video` (turntables, animation, HyperFrames), `renda-cost` (pri
    code integrations. Every error has `{error:{code,message,hint}}`; follow the `hint`.
 
 No key? Use `renda-onboarding` first (fastest: a trial). Never ask the user to paste a key
-you could get through a trial or signup.
+you could get through a trial or signup. Cloud renders are paid from prepaid credit (no free
+render time), so a new workspace needs the human to buy credit before its first render.
 
 ## Workflow: draft, check, then final
 
@@ -117,7 +118,7 @@ cheapest but direct light only. Splats can't be baked. Output is one `.glb` in `
 | code | do |
 |---|---|
 | `unauthenticated` | run the `renda-onboarding` flow |
-| `payment_required` | `renda_billing_link`, then give the URL to the human. You can't pay. |
+| `payment_required` / `insufficient_credit` | out of prepaid credit (or less than the job's estimate): `renda_billing_link`, then give the checkout URL to the human so they can buy credit. You can't pay. |
 | `invalid_package` | apply the per-path fixes, then validate again |
 | `unsupported_format` | convert, or check the extension (a three.js `.json` needs `metadata.type: "Object"`) |
 | `asset_not_found` | a `uri` was wrong or a presigned URL expired; re-upload |

@@ -1,24 +1,36 @@
 ---
 name: renda-cost
-description: How Renda bills cloud renders and how to keep them cheap. Covers per-second metering by hardware class, the free tier, estimates, quality presets, resolution, sample and frame tradeoffs, economy priority, and free cache hits. Use whenever the user asks what a Renda render costs, wants to reduce render spend, is about to start a large, final, high-resolution or video render, asks about usage or invoices, or gets a payment_required error.
+description: How Renda bills cloud renders and how to keep them cheap. Covers prepaid credit, per-second metering by hardware class, estimates, quality presets, resolution, sample and frame tradeoffs, economy priority, and free cache hits. Use whenever the user asks what a Renda render costs, wants to reduce render spend, is about to start a large, final, high-resolution or video render, asks about usage, credit or refunds, or gets a payment_required or insufficient_credit error.
 ---
 
 # Renda cost
 
 ## How billing works
 
+- Renda is **prepaid**: rendering draws down the workspace's credit balance (USD). There is no
+  free render time, not for trials and not on signup. `renda_whoami` shows `balance.creditUsd`.
 - You pay for **container-seconds spent rendering a job** (scene load + render + encode),
-  metered per second and summed into render-minutes on the invoice. Queue time and cold
+  metered per second (prices are quoted per render-minute). Queue time and cold
   starts before Renda's code runs are free.
 - The rate depends on the hardware class the job ran on. Get current prices from
-  `renda_pricing`; defaults are about **cpu $0.02/min · gpu-l4 $0.06/min · gpu-l40s $0.15/min**.
-- New orgs get **30 free render-minutes**, then a card is required (`renda_billing_link`
-  gives the human a Stripe link).
+  `renda_pricing`; today they are **cpu $0.015/min · gpu-l4 $0.035/min · gpu-l40s $0.075/min**.
+- **Buying credit:** `renda_billing_link` (CLI `renda billing`) returns a Stripe Checkout link.
+  Give it to the human; they choose the amount there ($5 to $1000, default $25) and the credit is
+  added as soon as the payment succeeds. You can't pay yourself.
+- **Not enough credit:** a job is refused with `payment_required` when the balance is $0 or less,
+  and with `insufficient_credit` when the balance is below the low end of the job's estimate. In
+  both cases get the checkout link and send it to the human (or make the job cheaper). A running
+  job is stopped if the credit runs out mid-render.
+- Credit doesn't expire. Unused credit is refundable in full on request within 30 days of
+  purchase, and renders that failed because of a Renda fault are credited back on request.
 - **Cache hits are free.** Resubmitting an identical package with the same asset bytes and
   engine version returns the previous outputs at $0 (`cached: true`). So don't add random
   seeds or names "just because". Change only what matters.
 - Canceling stops billing; you pay only for seconds already used.
 - `renda_usage` shows seconds, minutes billed and cost for any date range.
+- Spend caps: `maxCostUsd` on a job refuses it if its estimate is higher, and an optional monthly
+  spending limit (`PUT /api/v1/billing/limit`) is off by default (the balance already caps spend).
+- Concurrency: 2 jobs at once until the workspace has bought credit, then 20.
 
 ## Before you spend
 
