@@ -279,11 +279,13 @@ next (e.g. `"code":"payment_required","hint":"POST /api/v1/billing/checkout and 
 ### Worker contract
 
 Server → Modal: `POST {MODAL_SUBMIT_URL}` with `Authorization: Bearer {RENDA_WORKER_TOKEN}`,
-body `{jobId, kind, package, priority, inputs: {[assetUri]: presignedGetUrl}, outputPrefix, uploadUrls?: never, callbackUrl}`.
-The worker writes outputs to R2 directly (it holds R2 credentials) under `outputs/{jobId}/`.
+body `{jobId, kind, package, priority, inputs: {[assetUri]: presignedGetUrl}, outputPrefix, callbackUrl, jobKey, storage}`.
+The worker writes outputs to R2 directly under `outputs/{jobId}/`, using `storage`: Cloudflare R2 temporary
+credentials the server mints per job, scoped to `outputs/{jobId}/` and `work/{jobId}/` (no worker holds a
+bucket-wide key). `jobKey` = HMAC-SHA256(RENDA_WORKER_SECRET, `job:{jobId}`).
 
-Worker → server events (`POST callbackUrl`, body signed with HMAC-SHA256 of raw body
-using `RENDA_WORKER_SECRET`, header `x-renda-signature: sha256=<hex>`):
+Worker → server events (`POST callbackUrl`, header `x-renda-timestamp`, `x-renda-signature: v1=<hex>` =
+HMAC-SHA256 of `"<timestamp>.<raw body>"` with the job's `jobKey`; all events in a batch share one jobId):
 
 ```jsonc
 { "jobId": "...", "type": "status", "status": "rendering", "progress": 0.4, "engine": "blender-cycles", "hardware": "gpu-l4" }
@@ -291,6 +293,7 @@ using `RENDA_WORKER_SECRET`, header `x-renda-signature: sha256=<hex>`):
 { "jobId": "...", "type": "warning", "message": "mitsuba: passes [depth] unsupported, skipped" }
 { "jobId": "...", "type": "done", "outputs": [{ "key": "outputs/<id>/frame_0001.png", "contentType": "image/png", "bytes": 123 }], "cached": false }
 { "jobId": "...", "type": "failed", "error": "..." }
+{ "jobId": "...", "type": "heartbeat" }                                                        // every ~60 s while the job is active
 ```
 
 User-facing image/video outputs also carry gallery metadata the worker computes right after upload:

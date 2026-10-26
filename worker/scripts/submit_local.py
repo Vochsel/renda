@@ -82,7 +82,7 @@ def run_local(job: dict, out: Path) -> int:
 
     req = JobRequest.model_validate(job)
     deps = Deps(core=RendaCore(), storage=DirStorage(out), events=EventSink(req.jobId, str(req.callbackUrl), "local", poster=printer),
-                asset_root=out / ".assets", download=download, work_root=out / ".work")
+                asset_root=out / ".assets", download=download, work_root=out / ".work", result_cache=True)
     deps.run_chunks = lambda runner, tasks: [run_chunk(t, deps) for t in tasks]
     deps.run_encode = lambda task: run_encode(task, deps)
     result = run_scene_job(req, deps)
@@ -98,6 +98,9 @@ def run_remote(job: dict) -> int:
     bad = [u for u in job["inputs"].values() if not u.startswith("https://")]
     if bad:
         sys.exit("remote mode needs https asset urls: pass --asset-url (e.g. a presigned R2 GET) or use --local")
+    from jobcreds import job_credentials  # scripts/jobcreds.py: jobKey + scoped R2 credentials
+
+    job.update(job_credentials(job["jobId"]))
     r = requests.post(os.environ["MODAL_SUBMIT_URL"], json=job,
                       headers={"authorization": f"Bearer {os.environ['RENDA_WORKER_TOKEN']}"}, timeout=60)
     print(r.status_code, r.text)

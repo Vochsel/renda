@@ -19,6 +19,7 @@ import threading
 import time
 from pathlib import Path
 
+from ..procenv import untrusted_env
 from .base import Capabilities, Engine, RenderContext, RenderResult, frame_filename, samples_for
 
 THREE_VERSION = "0.180.0"  # Spark (splats) needs >= 0.180
@@ -299,7 +300,7 @@ class ThreeEngine(Engine):
                 args = ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"]
                 if plan.hardware.startswith("gpu"):
                     args = ["--use-angle=vulkan", "--enable-features=Vulkan", "--ignore-gpu-blocklist"]
-                browser = p.chromium.launch(args=args)
+                browser = p.chromium.launch(args=args, env=untrusted_env())  # user scene JS: no secrets
                 page = browser.new_page(viewport={"width": min(w * ss, 4096), "height": min(h * ss, 4096)})
                 page.add_init_script(f"window.RENDA_JOB = {json.dumps(job)};")
                 logs: list[str] = []
@@ -443,7 +444,7 @@ def bake_atlas(ctx: RenderContext, stage, layout, warnings: list[str]):
         try:
             with sync_playwright() as p:
                 args = ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"]
-                browser = p.chromium.launch(args=args)
+                browser = p.chromium.launch(args=args, env=untrusted_env())  # user scene JS: no secrets
                 page = browser.new_page(viewport={"width": 64, "height": 64})
                 page.add_init_script(f"window.RENDA_BAKE = {json.dumps(job)};")
                 logs: list[str] = []

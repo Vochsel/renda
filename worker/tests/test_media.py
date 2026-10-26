@@ -114,9 +114,9 @@ def test_video_job_output_gets_poster_but_intermediate_frames_do_not(make_deps, 
 
 def test_cache_restore_copies_thumbnails(make_deps, recorder):
     storage = MemoryStorage()
-    deps = _wire(make_deps(PngCore(), storage=storage))
+    deps = _wire(make_deps(PngCore(), storage=storage, result_cache=True))
     pipeline.run_scene_job(JobRequest.model_validate(job_body()), deps)
-    deps2 = _wire(make_deps(PngCore(), storage=storage))
+    deps2 = _wire(make_deps(PngCore(), storage=storage, result_cache=True))
     body = job_body()
     body["jobId"] = "job_2"
     body["outputPrefix"] = "outputs/job_2/"

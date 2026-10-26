@@ -22,7 +22,9 @@ def blender_version() -> str | None:
     b = blender_binary()
     if b:
         try:
-            out = subprocess.run([b, "--version"], capture_output=True, text=True, timeout=60).stdout
+            from ..procenv import untrusted_env
+
+            out = subprocess.run([b, "--version"], capture_output=True, text=True, timeout=60, env=untrusted_env()).stdout
             return out.splitlines()[0].replace("Blender", "").strip() if out else None
         except Exception:
             return None

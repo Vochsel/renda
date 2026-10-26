@@ -78,6 +78,9 @@ class ChunkTask:
     # Single-chunk video: encode in this container instead of a separate encode container (no R2 round
     # trip for the frames). {fps, output, output_key, keep_frames_prefix}
     encode: dict[str, Any] | None = None
+    # Per-job credentials (never the master secret / bucket-wide key): event-signing key + scoped R2 grant.
+    job_key: str | None = field(default=None, repr=False)
+    storage: dict[str, Any] | None = field(default=None, repr=False)
 
 
 @dataclass
@@ -91,6 +94,8 @@ class TrainTask:
     output_prefix: str
     callback_url: str
     hardware: str  # gpu-l4 | gpu-l40s
+    job_key: str | None = field(default=None, repr=False)
+    storage: dict[str, Any] | None = field(default=None, repr=False)
 
 
 @dataclass
@@ -102,6 +107,8 @@ class ChunkResult:
     seconds: float = 0.0
     timings: dict[str, float] = field(default_factory=dict)  # phase → seconds, for overhead analysis
     encoded: bool = False  # objects[0] is the finished video (encoded in the render container)
+    # usage events this container couldn't deliver quickly; the orchestrator retries them durably
+    undelivered: list[dict[str, Any]] = field(default_factory=list)
 
 
 def plan_chunks(plan: Any) -> list[list[int]]:
@@ -135,6 +142,13 @@ def bake_views_dir(asset_root: Path | str, job_id: str) -> str:
     return str(Path(asset_root) / "bakes" / job_id / "views")
 
 
+def job_credentials(job: Any) -> dict[str, Any]:
+    """The per-job secrets a task carries to its container: {job_key, storage} (both may be None locally)."""
+    grant = getattr(job, "storage", None)
+    return {"job_key": getattr(job, "jobKey", None),
+            "storage": grant.model_dump(mode="json") if hasattr(grant, "model_dump") else grant}
+
+
 def build_tasks(job: Any, plan: Any, scene_formats: Sequence[str], output_format: str,
                 asset_root: Path | str | None = None) -> list[ChunkTask]:
     engine = str(get(plan, "engine", "auto"))
@@ -153,6 +167,7 @@ def build_tasks(job: Any, plan: Any, scene_formats: Sequence[str], output_format
                 job_id=job.jobId, chunk=i, frames=[1], runner=runner, package=job.package,
                 inputs={k: str(v) for k, v in job.inputs.items()}, plan=with_active_tile(plan, i),
                 callback_url=str(job.callbackUrl), upload_prefix=tile_prefix(job.jobId, i), final=False,
+                **job_credentials(job),
             )
             for i in range(len(tiles))
         ]
@@ -169,6 +184,7 @@ def build_tasks(job: Any, plan: Any, scene_formats: Sequence[str], output_format
             upload_prefix=prefix,
             final=not (video or training),
             local_dir=local_dir,
+            **job_credentials(job),
         )
         for i, frames in enumerate(plan_chunks(plan))
     ]
@@ -205,6 +221,7 @@ def build_train_task(job: Any, plan: Any, asset_root: Path | str) -> TrainTask:
         output_prefix=job.outputPrefix,
         callback_url=str(job.callbackUrl),
         hardware=str(get(sb, "train_hardware", "gpu-l4")),
+        **job_credentials(job),
     )
 
 

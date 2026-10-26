@@ -71,7 +71,9 @@ def encode(frame_files: list[Path], fps: float, output_cfg: Output, out_path: Pa
         cmd = [ffmpeg_binary(), "-y", "-hide_banner", "-loglevel", "error", "-framerate", f"{fps:g}",
                "-i", str(seq / f"%06d{ext}"), *ffmpeg_args(fmt, codec, output_cfg.video.crf, output_cfg.transparent),
                str(out_path)]
-        proc = subprocess.run(cmd, capture_output=True, text=True)
+        from .procenv import untrusted_env
+
+        proc = subprocess.run(cmd, capture_output=True, text=True, env=untrusted_env())
         if proc.returncode != 0:
             raise RuntimeError(f"ffmpeg failed: {proc.stderr.strip()[-2000:]}")
     finally:

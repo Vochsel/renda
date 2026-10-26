@@ -21,7 +21,7 @@ def _wire(deps):
 
 def test_still_job_end_to_end(make_deps, recorder):
     core = FakeCore()
-    deps = _wire(make_deps(core))
+    deps = _wire(make_deps(core, result_cache=True))
     out = pipeline.run_scene_job(JobRequest.model_validate(job_body()), deps)
 
     assert out["status"] == "succeeded" and not out["cached"]
@@ -44,7 +44,7 @@ def test_cache_hit_short_circuits_without_rendering_or_billing(make_deps, record
     storage.objects["outputs/old/frame_0001.png"] = (b"png", "image/png")
     storage.put_json("cache/v1/ck1.json", {"outputs": [{"key": "outputs/old/frame_0001.png", "contentType": "image/png", "bytes": 3}]})
     core = FakeCore()
-    deps = _wire(make_deps(core, storage=storage))
+    deps = _wire(make_deps(core, storage=storage, result_cache=True))
 
     out = pipeline.run_scene_job(JobRequest.model_validate(job_body()), deps)
 

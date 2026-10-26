@@ -12,6 +12,20 @@ ASSET_URI = re.compile(r"^asset://[0-9a-f]{64}$")
 JOB_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
+class StorageGrant(BaseModel):
+    """Cloudflare R2 temporary credentials the web app mints per job, scoped to that job's prefixes."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    accessKeyId: str = Field(min_length=1)
+    secretAccessKey: str = Field(min_length=1, repr=False)
+    sessionToken: str = Field(min_length=1, repr=False)
+    bucket: str = Field(min_length=1)
+    endpoint: HttpUrl
+    prefixes: list[str] = Field(default_factory=list)
+    expiresAt: str | None = None
+
+
 class JobRequest(BaseModel):
     """Body of POST {MODAL_SUBMIT_URL}."""
 
@@ -24,6 +38,11 @@ class JobRequest(BaseModel):
     inputs: dict[str, HttpUrl] = Field(default_factory=dict, description="assetUri -> presigned GET url")
     outputPrefix: str | None = None
     callbackUrl: HttpUrl
+    # Per-job event-signing key: HMAC-SHA256(RENDA_WORKER_SECRET, "job:" + jobId), derived by web. Required by
+    # the submit endpoint; optional here so local runs and tests can build requests without one.
+    jobKey: str | None = Field(None, min_length=32, repr=False)
+    # Per-job R2 credentials (see storage.py). Required by the submit endpoint in production.
+    storage: StorageGrant | None = Field(None, repr=False)
 
     @field_validator("jobId")
     @classmethod
@@ -49,6 +68,10 @@ class JobRequest(BaseModel):
             raise ValueError("outputPrefix must live under outputs/")
         if not self.outputPrefix.endswith("/"):
             self.outputPrefix += "/"
+        if not self.outputPrefix.startswith(f"outputs/{self.jobId}/"):
+            # Scoped credentials only cover this job's prefixes; anything else would fail at upload time.
+            if self.storage is not None:
+                raise ValueError("outputPrefix must be outputs/<jobId>/ when per-job storage credentials are used")
         if self.kind == "hyperframes":
             HyperframesPackage.model_validate(self.package)
         return self

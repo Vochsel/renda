@@ -94,6 +94,8 @@ class EncodeTask:
     output_key: str
     keep_frames_prefix: str | None
     callback_url: str
+    job_key: str | None = field(default=None, repr=False)
+    storage: dict[str, Any] | None = field(default=None, repr=False)
 
 
 @dataclass
@@ -118,6 +120,10 @@ class Deps:
     on_new_asset: Callable[[], None] | None = None
     clock: Callable[[], float] = time.monotonic
     work_root: Path = field(default_factory=lambda: Path(tempfile.gettempdir()) / "renda-work")
+    # Shared cross-job result cache under cache/ in the bucket. Off in production: jobs only hold credentials
+    # for their own prefixes, and a manifest written from one job's (possibly compromised) render must never
+    # be served to another customer. Local runs (`submit_local.py --local`) and tests can turn it on.
+    result_cache: bool = False
 
 
 def _asset_cache(deps: Deps, job_package: dict, inputs: dict, defer_commit: bool = False) -> AssetCache:
@@ -138,7 +144,7 @@ def _cache_manifest_key(cache_key: str) -> str:
 
 
 def _restore_from_cache(deps: Deps, job: JobRequest, cache_key: str | None) -> list[dict] | None:
-    if not cache_key:
+    if not cache_key or not deps.result_cache:
         return None
     manifest = deps.storage.get_json(_cache_manifest_key(cache_key))
     if not manifest:
@@ -166,6 +172,9 @@ def run_scene_job(job: JobRequest, deps: Deps) -> dict[str, Any]:
     ph = Phases(deps.clock)
     t_start = deps.clock()
     meter = deps.events.start_meter("orchestrate", hw.Hardware.CPU.value, active.elapsed)
+    # Liveness for web (~60 s) from start to done/failed, on its own thread: keeps flowing while chunks
+    # are queued for a GPU, through training/encoding, and while durable events are retried.
+    heartbeat = deps.events.start_heartbeat()
     billable = True
     cache: AssetCache | None = None
     try:
@@ -223,6 +232,7 @@ def run_scene_job(job: JobRequest, deps: Deps) -> dict[str, Any]:
             for res in deps.run_chunks(runner_name, group):
                 _check_cancel(deps)
                 results.append(res)
+                ev.redeliver(res.undelivered)  # chunk usage the chunk couldn't deliver itself
                 done_frames += len(res.frames)
                 for w in res.warnings:
                     ev.warning(w)
@@ -244,6 +254,7 @@ def run_scene_job(job: JobRequest, deps: Deps) -> dict[str, Any]:
                     else:
                         assert deps.run_train is not None
                         trained = deps.run_train(dispatch.build_train_task(job, plan, deps.asset_root))
+                ev.redeliver(trained.pop("undelivered", None))
                 for w in trained.get("warnings", []):
                     ev.warning(w)
                 outputs = trained["outputs"]
@@ -262,14 +273,17 @@ def run_scene_job(job: JobRequest, deps: Deps) -> dict[str, Any]:
                     output_key=job.outputPrefix + dispatch.output_name(job.package, out_format),
                     keep_frames_prefix=job.outputPrefix + "frames/" if keep else None,
                     callback_url=str(job.callbackUrl),
+                    **dispatch.job_credentials(job),
                 )
                 with active.paused():  # the encode container bills its own time
                     video = deps.run_encode(enc)
+                ev.redeliver(video.pop("undelivered", None))
                 outputs = [video] + video.pop("frames", [])
             else:
                 outputs = objects
 
-            if cache_key:
+            _check_output_keys(job, outputs)
+            if cache_key and deps.result_cache:
                 deps.storage.put_json(_cache_manifest_key(cache_key), {"outputs": outputs, "jobId": job.jobId})
         # Report usage before `done` so the job's billed total is final when clients see it succeed.
         if billable and _billed(active.total, cache) > 0:
@@ -297,6 +311,8 @@ def run_scene_job(job: JobRequest, deps: Deps) -> dict[str, Any]:
         # Orchestrator active time (plan, finalize) on a 0.25-core container; skip on cache hits.
         if billable and _billed(active.total, cache) > 0:
             ev.usage(hw.Hardware.CPU.value, _billed(active.total, cache), "orchestrate")
+        ev.flush()  # chunk usage still being retried in the background goes out before the container exits
+        heartbeat.stop()
 
 
 def _mark_views_complete(deps: Deps, job_id: str) -> None:
@@ -306,6 +322,15 @@ def _mark_views_complete(deps: Deps, job_id: str) -> None:
     (d / ".complete").write_text("1")
     if deps.on_new_asset:
         deps.on_new_asset()  # Volume commit, so the training container sees the marker
+
+
+def _check_output_keys(job: JobRequest, outputs: list[dict[str, Any]]) -> None:
+    """Outputs come back from render containers, which process untrusted content: only ever report keys under
+    this job's own output prefix (web enforces the same rule on `done`)."""
+    for o in outputs:
+        for k in (o.get("key"), o.get("thumbKey")):
+            if k is not None and (not isinstance(k, str) or not k.startswith(job.outputPrefix) or ".." in k.split("/")):
+                raise ValueError(f"render returned an output outside {job.outputPrefix}: {str(k)[:120]}")
 
 
 def _plain(cfg: Any) -> Any:
@@ -319,6 +344,7 @@ def run_chunk(task: ChunkTask, deps: Deps, started: float | None = None) -> Chun
     started = deps.clock() if started is None else started
     meter = deps.events.start_meter(task.chunk, dispatch.runner_hardware(task.runner).value, lambda: deps.clock() - started)
     cache: AssetCache | None = None
+    chunk_result: ChunkResult | None = None
     ph = Phases(deps.clock)
     try:
         with ph("resolve"):
@@ -380,11 +406,14 @@ def run_chunk(task: ChunkTask, deps: Deps, started: float | None = None) -> Chun
         if cache is not None:
             ph.seconds["fetch"] = round(cache.fetch_seconds, 3)
         ph.seconds["total"] = round(deps.clock() - started, 3)
-        return ChunkResult(task.chunk, task.frames, objects, [str(w) for w in get(result, "warnings") or []],
-                           timings=ph.seconds, encoded=encoded)
+        chunk_result = ChunkResult(task.chunk, task.frames, objects, [str(w) for w in get(result, "warnings") or []],
+                                   timings=ph.seconds, encoded=encoded)
+        return chunk_result
     finally:
         meter.stop()
         deps.events.usage(dispatch.runner_hardware(task.runner).value, _billed(deps.clock() - started, cache), task.chunk)
+        if chunk_result is not None:  # same object the `return` hands back
+            chunk_result.undelivered = list(deps.events.undelivered)
 
 
 def run_train(task: "dispatch.TrainTask", deps: Deps, started: float | None = None) -> dict[str, Any]:
@@ -392,6 +421,7 @@ def run_train(task: "dispatch.TrainTask", deps: Deps, started: float | None = No
     started = deps.clock() if started is None else started
     meter = deps.events.start_meter("train", task.hardware, lambda: deps.clock() - started)
     cache: AssetCache | None = None
+    trained: dict[str, Any] | None = None
     try:
         cache = _asset_cache(deps, task.package, task.inputs)
         pkg = deps.core.load_package(task.package)
@@ -412,15 +442,19 @@ def run_train(task: "dispatch.TrainTask", deps: Deps, started: float | None = No
         shutil.rmtree(Path(task.views_dir).parent, ignore_errors=True)  # bakes/<job>/
         if deps.on_new_asset:
             deps.on_new_asset()
-        return {"outputs": outputs, "warnings": [str(w) for w in get(result, "warnings") or []]}
+        trained = {"outputs": outputs, "warnings": [str(w) for w in get(result, "warnings") or []]}
+        return trained
     finally:
         meter.stop()
         deps.events.usage(task.hardware, _billed(deps.clock() - started, cache), "train")
+        if trained is not None and deps.events.undelivered:
+            trained["undelivered"] = list(deps.events.undelivered)
 
 
 def run_encode(task: EncodeTask, deps: Deps, started: float | None = None) -> dict[str, Any]:
     started = deps.clock() if started is None else started
     meter = deps.events.start_meter("encode", hw.Hardware.CPU.value, lambda: deps.clock() - started)
+    result: dict[str, Any] | None = None
     try:
         work = Path(tempfile.mkdtemp(prefix="encode-", dir=_ensure(deps.work_root)))
         def download(key: str) -> Path:
@@ -447,6 +481,8 @@ def run_encode(task: EncodeTask, deps: Deps, started: float | None = None) -> di
     finally:
         meter.stop()
         deps.events.usage(hw.Hardware.CPU.value, deps.clock() - started, "encode")
+        if result is not None and deps.events.undelivered:
+            result["undelivered"] = list(deps.events.undelivered)
 
 
 def _billed(seconds: float, cache: AssetCache | None) -> float:
@@ -543,12 +579,17 @@ Runner = Callable[[list[str], Path, int], subprocess.CompletedProcess]
 
 
 def _subprocess_runner(cmd: list[str], cwd: Path, timeout: int) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    # The CLI drives headless Chrome over the user's HTML/JS: give it a minimal environment, no secrets.
+    from .procenv import untrusted_env
+
+    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout,
+                          env=untrusted_env(keep_prefixes=("HYPERFRAMES_", "PUPPETEER_", "PLAYWRIGHT_")))
 
 
 def run_hyperframes_job(job: JobRequest, deps: Deps, run: Runner = _subprocess_runner, timeout: int = 2 * 60 * 60, started: float | None = None) -> dict[str, Any]:
     started = deps.clock() if started is None else started
     meter = deps.events.start_meter("hyperframes", hw.Hardware.CPU.value, lambda: deps.clock() - started)
+    heartbeat = deps.events.start_heartbeat()
     cache: AssetCache | None = None
     ev = deps.events
     try:
@@ -591,3 +632,4 @@ def run_hyperframes_job(job: JobRequest, deps: Deps, run: Runner = _subprocess_r
     finally:
         meter.stop()
         ev.usage(hw.Hardware.CPU.value, _billed(deps.clock() - started, cache), "hyperframes")
+        heartbeat.stop()
