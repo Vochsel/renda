@@ -6,8 +6,8 @@ import type { JobOutput } from "./db/schema";
 import { appUrl, env, envOptional } from "./env";
 import { ApiError } from "./errors";
 import {
-  acquireJobSlot, checkBudget, checkRunningBudget, getBillingRow, recordUsage, reconcileUsage, recountActiveJobs,
-  releaseJobSlot, reportMeter, spentThisMonthUsd,
+  acquireJobSlot, checkBudget, checkRunningBudget, getBillingRow, recordUsage, recountActiveJobs, releaseJobSlot,
+  spentThisMonthUsd,
 } from "./billing";
 import { estimateHyperframes, estimatePriorities, estimateScene, type Priority } from "./estimate";
 import { flattenForOrg } from "./layers";
@@ -132,7 +132,9 @@ export async function submitJob(input: SubmitInput): Promise<Job> {
     ? { submitted: input.package, layers: layered.layers, provenance: layered.provenance }
     : null;
   const parsed = parseJobPackage(input.kind, layered ? layered.package : input.package);
-  if (input.org) {
+  const bill = await getBillingRow(input.orgId);
+  // Trial caps keep an unpaid workspace cheap; once it has bought credit it renders like any other.
+  if (input.org && !(bill.creditUsd > 0)) {
     const resolution = parsed.kind === "scene"
       ? parsed.pkg.render.resolution
       : parsed.pkg.width && parsed.pkg.height ? ([parsed.pkg.width, parsed.pkg.height] as [number, number]) : null;
@@ -166,7 +168,6 @@ export async function submitJob(input: SubmitInput): Promise<Job> {
   }
 
   // Cache hits above are free; anything that renders must fit the budget and take a concurrency slot.
-  const bill = await getBillingRow(input.orgId);
   checkBudget(bill, await spentThisMonthUsd(input.orgId), estimate, input.maxCostUsd);
   await acquireJobSlot(input.orgId, bill);
 
@@ -308,8 +309,7 @@ export async function sweepStaleJobs(now = Date.now()) {
     await trackFinished(row, "failed", { error: reason, swept: true }).catch(() => {});
   }
   await recountActiveJobs().catch((e) => captureError(e, { source: "sweep_recount" }));
-  const reconciled = await reconcileUsage().catch((e) => { captureError(e, { source: "sweep_reconcile" }); return 0; });
-  return { failed, reconciled };
+  return { failed };
 }
 
 // ---- worker events -------------------------------------------------------
@@ -362,9 +362,6 @@ export async function applyWorkerEvent(ev: WorkerEvent) {
       const split = await recordUsage(job.id, job.orgId, chunk, ev.hardware, ev.seconds);
       if (!split) return { duplicate: true };
       await markChunkFinal(job.id, chunk, ev.hardware, ev.seconds);
-      // A failure here is retried by the sweep (reconcileUsage): the row stays reported_to_stripe = false.
-      await reportMeter(job.orgId, job.id, chunk, ev.hardware, split.billedSeconds)
-        .catch((e) => captureError(e, { orgId: job.orgId, job_id: job.id, chunk, source: "stripe_meter" }));
       return { ok: true, ...split };
     }
     case "heartbeat":
@@ -478,7 +475,7 @@ async function enforceRunningBudget(job: JobRow, now: Pick<JobRow, "live" | "cos
   const pending = pendingUsage(now.live);
   const b = await getBillingRow(job.orgId);
   const verdict = checkRunningBudget(b, await spentThisMonthUsd(job.orgId, new Date(at)), {
-    pendingSeconds: pending.seconds, pendingCostUsd: pending.costUsd, jobCostUsd: now.costUsd + pending.costUsd,
+    pendingCostUsd: pending.costUsd, jobCostUsd: now.costUsd + pending.costUsd,
   }, now.maxCostUsd);
   if (!verdict.stop) return;
   await cancelWorkerCall(job.id, job.modalCallId);

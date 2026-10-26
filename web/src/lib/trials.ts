@@ -7,7 +7,6 @@ import { createApiKey } from "./accounts";
 import { workos } from "./workos";
 import { identify, track } from "./posthog";
 import { countHit } from "./ratelimit";
-import { claimFreeGrant } from "./freegrants";
 
 const { orgs, billing, trialRequests, memberships } = schema;
 
@@ -19,8 +18,6 @@ function envNumber(name: string, fallback: number): number {
 }
 
 export const trialLimits = {
-  /** Free render-seconds a new trial starts with. */
-  seconds: () => envNumber("TRIAL_SECONDS", 120),
   /** Lifetime of an unclaimed trial and its key. */
   ttlMs: () => envNumber("TRIAL_TTL_HOURS", 72) * 60 * 60 * 1000,
   /** Trials created per network per 24 h. */
@@ -29,8 +26,9 @@ export const trialLimits = {
   maxDimension: () => envNumber("TRIAL_MAX_DIMENSION", 1280),
 };
 
+/** No free render time: a trial is a workspace + key that renders once credit is bought. */
 export function trialSeconds(): number {
-  return trialLimits.seconds();
+  return 0;
 }
 
 type OrgRow = typeof orgs.$inferSelect;
@@ -111,7 +109,7 @@ export async function createTrial(ip: string | null) {
   return { apiKey: key.apiKey, orgId: org.id, claimUrl: claimUrlFor(token), freeSecondsLeft: trialSeconds(), expiresAt };
 }
 
-/** Attach a trial org to a signed-in user. Tops the free tier up to FREE_SECONDS, once per person. */
+/** Attach a trial org (and any credit bought for it) to a signed-in user. */
 export async function claimTrial(token: string, user: { id: string; workosUserId: string; email: string }) {
   const [org] = await db().select().from(orgs).where(eq(orgs.claimTokenHash, hashToken(token))).limit(1);
   if (!org || !isActiveTrial(org) || isExpiredTrial(org)) throw new ApiError("claim_invalid");
@@ -137,10 +135,5 @@ export async function claimTrial(token: string, user: { id: string; workosUserId
   await db().insert(memberships).values({ orgId: org.id, userId: user.id }).onConflictDoNothing();
   identify({ userId: user.id, orgId: org.id }, { email: user.email }, { name, claimed_trial: true });
   track("trial_claimed", { userId: user.id, orgId: org.id });
-  const topUp = (await claimFreeGrant(user.email, org.id)) ? Math.max(0, Number(env("FREE_SECONDS")) - trialSeconds()) : 0;
-  if (topUp > 0) await db()
-    .update(billing)
-    .set({ freeSecondsRemaining: sql`${billing.freeSecondsRemaining} + ${topUp}`, updatedAt: new Date() })
-    .where(eq(billing.orgId, org.id));
   return claimed;
 }

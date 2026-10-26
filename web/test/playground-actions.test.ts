@@ -15,7 +15,6 @@ process.env.RENDA_WORKER_TOKEN = "worker-token";
 process.env.MODAL_SUBMIT_URL = "https://modal.test/submit";
 process.env.APP_URL = "https://renda.test";
 process.env.R2_OUTPUT_TTL_SECONDS = "3600";
-process.env.FREE_SECONDS = "1800";
 process.env.RATE_LIMIT_DISABLED = "1";
 process.env.MAX_ACTIVE_JOBS_FREE = "100"; // fake worker: submitted jobs stay queued
 
@@ -65,6 +64,8 @@ vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
 const actions = await import("@/app/dashboard/playground/actions");
 const { buildPackage, DEFAULT_OPTIONS, expandBatch } = await import("@/lib/playground");
 
+/** Prepaid credit for every workspace created so far (accounts are created on the first action). */
+const fund = () => testDb.update(schema.billing).set({ creditUsd: 100 });
 const as = (who: "alice" | "bob") => {
   session = { user: { id: `user_${who}`, email: `${who}@example.com` }, organizationId: `org_wos_${who}` };
 };
@@ -100,11 +101,14 @@ describe("playground actions", () => {
     const est = await actions.estimatePlayground(pkg(), "standard");
     expect(est.ok && (est.data as { priorities: object }).priorities).toHaveProperty("rush");
 
+    await fund();
+
     const sub = await actions.submitPlayground(pkg(), "standard", "pg-1");
     expect(sub.ok).toBe(true);
     expect(sub.ok && sub.data.status).toBe("queued");
     expect(modalCalls).toHaveLength(1);
     // idempotent retry returns the same job, no second submission
+    await fund();
     const again = await actions.submitPlayground(pkg(), "standard", "pg-1");
     expect(again.ok && sub.ok && again.data.id).toBe(sub.ok && sub.data.id);
     expect(modalCalls).toHaveLength(1);
@@ -115,6 +119,7 @@ describe("playground actions", () => {
 
   it("another org can't read alice's job or use her file by hash", async () => {
     as("alice");
+    await fund();
     const mine = await actions.submitPlayground(pkg(), "standard", "pg-2");
     const id = mine.ok ? mine.data.id : "";
     as("bob");
@@ -122,6 +127,7 @@ describe("playground actions", () => {
     expect(peek).toMatchObject({ ok: false, error: { code: "not_found" } });
     const reg = await actions.registerUploads([{ filename: "m.glb", size: BYTES.length, sha256: SHA }]);
     expect(reg.ok && reg.data[0].exists).toBe(false); // must upload its own copy
+    await fund();
     const sub = await actions.submitPlayground(pkg(), "standard");
     expect(sub).toMatchObject({ ok: false, error: { code: "asset_missing" } });
   });
@@ -136,6 +142,7 @@ describe("playground actions", () => {
     expect(items).toHaveLength(2);
     const ids: string[] = [];
     for (const [i, it] of items.entries()) {
+      await fund();
       const r = await actions.submitPlayground(it.pkg, "standard", `pg-batch-${i}`);
       expect(r.ok).toBe(true);
       if (r.ok) ids.push(r.data.id);
@@ -166,6 +173,7 @@ describe("playground actions", () => {
 
   it("returns API errors as values (bad package, bad priority, too many files)", async () => {
     as("alice");
+    await fund();
     const bad = await actions.submitPlayground({ version: 1, scene: {} }, "standard");
     expect(bad).toMatchObject({ ok: false, error: { code: "invalid_package" } });
     const prio = await actions.estimatePlayground(pkg(), "turbo" as never);

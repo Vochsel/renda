@@ -50,6 +50,20 @@
       "when": 1793014656318,
       "tag": "0006_data_lifecycle",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793015154113,
+      "tag": "0007_no_free_time",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793015155101,
+      "tag": "0008_prepaid_credit",
+      "breakpoints": true
     }
   ]
 }

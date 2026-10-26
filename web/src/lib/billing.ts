@@ -1,11 +1,10 @@
 import type Stripe from "stripe";
-import { and, eq, gt, gte, isNotNull, lt, sql } from "drizzle-orm";
+import { and, eq, gte, lt, sql } from "drizzle-orm";
 import { db, schema } from "./db";
-import { appUrl, env, envOptional } from "./env";
+import { appUrl, envOptional } from "./env";
 import { ApiError } from "./errors";
 import { costUsd, PRICE_PER_MINUTE, round4, type Hardware } from "./pricing";
-import { stripe, stripeConfigured } from "./stripe";
-import { captureError } from "./posthog";
+import { stripe } from "./stripe";
 
 const { billing, usageEvents, orgs } = schema;
 export type BillingRow = typeof billing.$inferSelect;
@@ -15,31 +14,23 @@ function envNumber(name: string, fallback: number): number {
   return Number.isFinite(v) && v > 0 ? v : fallback;
 }
 
-/** Spend and concurrency limits; env overrides so production can tune them without a release. */
+/** Concurrency and overrun limits; env overrides so production can tune them without a release. */
 export const billingLimits = {
-  /** Jobs running at once in a workspace that can't be charged to a card (trials, free tier). */
+  /** Jobs running at once in a workspace that has never bought credit (they can't render anyway). */
   activeJobsFree: () => envNumber("MAX_ACTIVE_JOBS_FREE", 2),
   activeJobsPaid: () => envNumber("MAX_ACTIVE_JOBS_PAID", 20),
-  /** Monthly spend cap for workspaces that haven't set their own. */
-  defaultMonthlyUsd: () => envNumber("DEFAULT_MONTHLY_LIMIT_USD", 100),
-  /** Running time allowed past a free balance before a free-tier job is stopped (heartbeat lag). */
-  freeOverrunGraceSeconds: () => envNumber("FREE_OVERRUN_GRACE_SECONDS", 30),
+  /** Credit a running job may overdraw (heartbeat lag) before it's stopped. */
+  overrunGraceUsd: () => envNumber("CREDIT_OVERRUN_GRACE_USD", 0.05),
 };
 
-// Stripe subscription states in which renders can't be charged to the card on file.
-const BLOCKING_SUBSCRIPTION = new Set(["past_due", "unpaid", "canceled", "incomplete_expired", "paused"]);
-// States of a subscription that is still ours to reuse (a new one would bill the same meters twice).
-const OPEN_SUBSCRIPTION = new Set(["active", "trialing", "past_due", "unpaid", "incomplete", "paused"]);
+/** Prepaid credit purchases through Stripe Checkout: $1 units, adjustable on the payment page. */
+export const CREDIT_PURCHASE = { minUsd: 5, maxUsd: 1000, defaultUsd: 25 } as const;
 
-type CardState = Pick<BillingRow, "hasPaymentMethod" | "subscriptionStatus">;
+type BudgetState = Pick<BillingRow, "creditUsd" | "monthlyLimitUsd">;
 
-/** Can usage be charged to the card on file right now? */
-export function cardBillable(b: CardState): boolean {
-  return b.hasPaymentMethod && !BLOCKING_SUBSCRIPTION.has(b.subscriptionStatus ?? "");
-}
-
-export function monthlyLimitUsd(b: Pick<BillingRow, "monthlyLimitUsd">): number {
-  return b.monthlyLimitUsd ?? billingLimits.defaultMonthlyUsd();
+/** The workspace's own monthly cap, or null (prepaid credit already bounds what it can spend). */
+export function monthlyLimitUsd(b: Pick<BillingRow, "monthlyLimitUsd">): number | null {
+  return b.monthlyLimitUsd ?? null;
 }
 
 export type BudgetEstimate = { estSeconds: [number, number]; estCostUsd: [number, number] };
@@ -48,54 +39,41 @@ export type BudgetEstimate = { estSeconds: [number, number]; estCostUsd: [number
  * May a job with this estimate start? Pure; throws the error an agent can act on. Uses the low end of the
  * estimate so it never blocks a job that would fit; running jobs are re-checked by `checkRunningBudget`.
  */
-export function checkBudget(
-  b: CardState & Pick<BillingRow, "freeSecondsRemaining" | "monthlyLimitUsd">,
-  spentThisMonthUsd: number,
-  est: BudgetEstimate,
-  maxCostUsd?: number | null,
-): void {
+export function checkBudget(b: BudgetState, spentThisMonthUsd: number, est: BudgetEstimate, maxCostUsd?: number | null): void {
   if (maxCostUsd != null && est.estCostUsd[0] > maxCostUsd) {
     throw new ApiError("job_over_budget", undefined, { estimatedCostUsd: est.estCostUsd, maxCostUsd });
   }
-  if (cardBillable(b)) {
-    const limit = monthlyLimitUsd(b);
-    if (spentThisMonthUsd + est.estCostUsd[0] > limit) {
-      throw new ApiError("spend_limit", undefined, { monthlyLimitUsd: limit, spentThisMonthUsd: round4(spentThisMonthUsd), estimatedCostUsd: est.estCostUsd });
-    }
-    return;
+  const limit = monthlyLimitUsd(b);
+  if (limit != null && spentThisMonthUsd + est.estCostUsd[0] > limit) {
+    throw new ApiError("spend_limit", undefined, { monthlyLimitUsd: limit, spentThisMonthUsd: round4(spentThisMonthUsd), estimatedCostUsd: est.estCostUsd });
   }
-  if (b.freeSecondsRemaining <= 0) throw new ApiError(b.hasPaymentMethod ? "payment_failed" : "payment_required");
-  if (est.estSeconds[0] > b.freeSecondsRemaining) {
-    throw new ApiError("insufficient_free_minutes", undefined, {
-      estimatedSeconds: est.estSeconds, freeSecondsLeft: Math.floor(b.freeSecondsRemaining),
-    });
+  if (b.creditUsd <= 0) throw new ApiError("payment_required", undefined, { creditUsd: round4(b.creditUsd) });
+  if (est.estCostUsd[0] > b.creditUsd) {
+    throw new ApiError("insufficient_credit", undefined, { estimatedCostUsd: est.estCostUsd, creditUsd: round4(b.creditUsd) });
   }
 }
 
 export type RunningCheck = { stop: false } | { stop: true; reason: string };
 
 /**
- * Should a running job be stopped? Pure. `running` is the job's billed + in-flight seconds and cost so far;
- * `pendingSeconds` is in-flight time not yet deducted from the free balance.
+ * Should a running job be stopped? Pure. `pendingCostUsd` is in-flight cost not yet drawn from the credit
+ * balance (billed chunks already have been); `jobCostUsd` is the job's billed + in-flight cost.
  */
 export function checkRunningBudget(
-  b: CardState & Pick<BillingRow, "freeSecondsRemaining" | "monthlyLimitUsd">,
+  b: BudgetState,
   spentThisMonthUsd: number,
-  running: { pendingSeconds: number; pendingCostUsd: number; jobCostUsd: number },
+  running: { pendingCostUsd: number; jobCostUsd: number },
   maxCostUsd?: number | null,
 ): RunningCheck {
   if (maxCostUsd != null && running.jobCostUsd > maxCostUsd) {
     return { stop: true, reason: `Stopped: the job reached its maxCostUsd of $${maxCostUsd}.` };
   }
-  if (cardBillable(b)) {
-    const limit = monthlyLimitUsd(b);
-    if (spentThisMonthUsd + running.pendingCostUsd > limit) {
-      return { stop: true, reason: `Stopped: the workspace reached its monthly spending limit of $${limit}. Raise it with PUT /api/v1/billing/limit.` };
-    }
-    return { stop: false };
+  const limit = monthlyLimitUsd(b);
+  if (limit != null && spentThisMonthUsd + running.pendingCostUsd > limit) {
+    return { stop: true, reason: `Stopped: the workspace reached its monthly spending limit of $${limit}. Raise it with PUT /api/v1/billing/limit.` };
   }
-  if (running.pendingSeconds > b.freeSecondsRemaining + billingLimits.freeOverrunGraceSeconds()) {
-    return { stop: true, reason: "Stopped: free render minutes ran out. Add a card (POST /api/v1/billing/checkout) to keep rendering." };
+  if (running.pendingCostUsd > b.creditUsd + billingLimits.overrunGraceUsd()) {
+    return { stop: true, reason: "Stopped: render credit ran out. Buy more (POST /api/v1/billing/checkout) and resubmit." };
   }
   return { stop: false };
 }
@@ -115,11 +93,15 @@ export async function spentThisMonthUsd(orgId: string, now = new Date()): Promis
 }
 
 /** Take one of the org's concurrent-job slots, or throw concurrency_limit. Atomic (row lock + recheck). */
-export async function acquireJobSlot(orgId: string, b: CardState): Promise<void> {
-  const max = cardBillable(b) ? billingLimits.activeJobsPaid() : billingLimits.activeJobsFree();
+export async function acquireJobSlot(orgId: string, b: Pick<BillingRow, "creditUsd">): Promise<void> {
+  const max = maxActiveJobs(b);
   const taken = await db().update(billing).set({ activeJobs: sql`${billing.activeJobs} + 1` })
     .where(and(eq(billing.orgId, orgId), lt(billing.activeJobs, max))).returning({ n: billing.activeJobs });
   if (!taken.length) throw new ApiError("concurrency_limit", undefined, { maxActiveJobs: max });
+}
+
+export function maxActiveJobs(b: Pick<BillingRow, "creditUsd">): number {
+  return b.creditUsd > 0 ? billingLimits.activeJobsPaid() : billingLimits.activeJobsFree();
 }
 
 export async function releaseJobSlot(orgId: string): Promise<void> {
@@ -140,8 +122,8 @@ const SECONDS_SQL_COLUMN: Record<Hardware, string> = { cpu: "seconds_cpu", "gpu-
 export type RecordedUsage = { freeSeconds: number; billedSeconds: number; costUsd: number };
 
 /**
- * Record one chunk's usage exactly once. The usage row, its free/billed split, the free balance and the job's
- * totals change in one statement, so a crash or retry can't leave a chunk recorded but unbilled.
+ * Record one chunk's usage exactly once. The usage row, its free/billed split, the credit and free balances and
+ * the job's totals change in one statement, so a crash or retry can't leave a chunk recorded but unbilled.
  * Returns null for a duplicate (job, chunk).
  */
 export async function recordUsage(jobId: string, orgId: string, chunk: string, hardware: Hardware, seconds: number): Promise<RecordedUsage | null> {
@@ -160,7 +142,8 @@ export async function recordUsage(jobId: string, orgId: string, chunk: string, h
       on conflict do nothing
       returning free_seconds, billed_seconds, cost_usd
     ), bal as (
-      update billing set free_seconds_remaining = billing.free_seconds_remaining - ins.free_seconds, updated_at = now()
+      update billing set free_seconds_remaining = billing.free_seconds_remaining - ins.free_seconds,
+        credit_usd = billing.credit_usd - ins.cost_usd, updated_at = now()
       from ins where billing.org_id = ${orgId} returning 1
     ), job as (
       update jobs set ${col} = jobs.${col} + ${seconds}::float8, cost_usd = jobs.cost_usd + ins.cost_usd
@@ -186,21 +169,31 @@ export async function ensureStripeCustomer(orgId: string, email?: string): Promi
   return customer.id;
 }
 
-export async function checkoutUrl(orgId: string, email?: string): Promise<string> {
+/**
+ * Stripe Checkout (payment mode) for prepaid credit: $1 units, quantity adjustable on the page between
+ * CREDIT_PURCHASE.minUsd and maxUsd. Credit lands when the webhook sees the payment succeed (addCredit).
+ */
+export async function checkoutUrl(orgId: string, email?: string, amountUsd: number = CREDIT_PURCHASE.defaultUsd): Promise<string> {
+  const quantity = Math.min(CREDIT_PURCHASE.maxUsd, Math.max(CREDIT_PURCHASE.minUsd, Math.round(amountUsd)));
   const customer = await ensureStripeCustomer(orgId, email);
   const params = {
-    mode: "setup",
+    mode: "payment",
     customer,
     currency: "usd",
-    success_url: `${appUrl()}/dashboard/billing?setup=success`,
-    cancel_url: `${appUrl()}/dashboard/billing?setup=canceled`,
-    metadata: { renda_org: orgId },
-    setup_intent_data: { metadata: { renda_org: orgId } },
-    // Accounts with Managed Payments (Stripe as merchant of record) on by default reject setup mode.
-    // Renda bills usage itself via meters, so opt this card-collection session out.
+    line_items: [{
+      price_data: { currency: "usd", unit_amount: 100, product_data: { name: "Renda render credit", description: "Prepaid render time at per-second prices. Credit doesn't expire." } },
+      quantity,
+      adjustable_quantity: { enabled: true, minimum: CREDIT_PURCHASE.minUsd, maximum: CREDIT_PURCHASE.maxUsd },
+    }],
+    invoice_creation: { enabled: true }, // a receipt/tax invoice for every purchase
+    success_url: `${appUrl()}/dashboard/billing?credit=success`,
+    cancel_url: `${appUrl()}/dashboard/billing?credit=canceled`,
+    metadata: { renda_org: orgId, renda_kind: "credit" },
+    payment_intent_data: { metadata: { renda_org: orgId, renda_kind: "credit" } },
+    // Renda is the merchant (prices are its own), so keep this session out of Managed Payments.
     managed_payments: { enabled: false },
-    // Terms acceptance for cards added via an agent's link (recorded by the webhook on completion).
-    custom_text: { submit: { message: `By adding a card you agree to Renda's Terms (${appUrl()}/legal/terms) and Privacy Policy (${appUrl()}/legal/privacy). Usage is billed monthly in arrears.` } },
+    // Terms acceptance for purchases via an agent's link (recorded by the webhook on completion).
+    custom_text: { submit: { message: `By paying you agree to Renda's Terms (${appUrl()}/legal/terms) and Privacy Policy (${appUrl()}/legal/privacy). Credit doesn't expire; unused credit is refundable on request within 30 days.` } },
   } as Stripe.Checkout.SessionCreateParams;
   const session = await stripe().checkout.sessions.create(params);
   return session.url!;
@@ -213,89 +206,45 @@ export async function portalUrl(orgId: string): Promise<string> {
 }
 
 /**
- * One Stripe meter per hardware class (`render_seconds_cpu`, `render_seconds_gpu_l4`, `render_seconds_gpu_l40s`),
- * each with its own metered price, so classes can be priced independently.
+ * Credit a paid Checkout session, once (the purchase row is keyed by session id). Returns the amount credited,
+ * or 0 for a replay.
  */
-export function meterEventName(hardware: Hardware): string {
-  return `${env("STRIPE_METER_EVENT")}_${hardware.replace(/-/g, "_")}`;
+export async function addCredit(sessionId: string, orgId: string, amountUsd: number, paymentIntentId: string | null): Promise<number> {
+  if (!(amountUsd > 0)) return 0;
+  const res = await db().execute(sql`
+    with ins as (
+      insert into credit_purchases (stripe_session_id, org_id, payment_intent_id, amount_usd)
+      values (${sessionId}, ${orgId}, ${paymentIntentId}, ${amountUsd}::float8)
+      on conflict do nothing
+      returning amount_usd
+    ), bal as (
+      update billing set credit_usd = billing.credit_usd + ins.amount_usd, updated_at = now()
+      from ins where billing.org_id = ${orgId} returning 1
+    )
+    select amount_usd from ins`);
+  const r = res.rows[0] as { amount_usd: number } | undefined;
+  return r ? Number(r.amount_usd) : 0;
 }
-
-const PRICE_ENV: Record<Hardware, string> = { cpu: "STRIPE_PRICE_CPU", "gpu-l4": "STRIPE_PRICE_GPU_L4", "gpu-l40s": "STRIPE_PRICE_GPU_L40S" };
 
 /**
- * After a card is attached: make it the default and start the metered subscription (idempotent). Reuses any
- * open subscription, including past_due ones (Stripe retries their invoice on the new default card).
+ * A refund (from the Stripe dashboard) takes the refunded amount back off the balance. `totalRefundedUsd` is the
+ * charge's cumulative refund, so replays and partial refunds only ever deduct the increase.
  */
-export async function activateMeteredSubscription(customerId: string, setupIntentId?: string): Promise<{ id: string; status: string } | null> {
-  if (setupIntentId) {
-    const si = await stripe().setupIntents.retrieve(setupIntentId);
-    const pm = typeof si.payment_method === "string" ? si.payment_method : si.payment_method?.id;
-    if (pm) await stripe().customers.update(customerId, { invoice_settings: { default_payment_method: pm } });
-  }
-  const existing = await stripe().subscriptions.list({ customer: customerId, status: "all", limit: 20 });
-  const open = existing.data.find((s) => OPEN_SUBSCRIPTION.has(s.status));
-  if (open) return { id: open.id, status: open.status };
-  const items = (Object.keys(PRICE_ENV) as Hardware[])
-    .map((h) => process.env[PRICE_ENV[h]])
-    .filter((p): p is string => Boolean(p))
-    .map((price) => ({ price }));
-  if (!items.length) return null;
-  const sub = await stripe().subscriptions.create({ customer: customerId, items }, { idempotencyKey: `renda-sub-${customerId}` });
-  return { id: sub.id, status: sub.status };
-}
-
-/** Store the metered subscription's id and status (webhooks). Returns the org, if any. */
-export async function setSubscription(customerId: string, subscriptionId: string, status: string): Promise<string | null> {
-  const rows = await db().update(billing).set({ stripeSubscriptionId: subscriptionId, subscriptionStatus: status, updatedAt: new Date() })
-    .where(eq(billing.stripeCustomerId, customerId)).returning({ orgId: billing.orgId });
-  return rows[0]?.orgId ?? null;
-}
-
-/** Report billed seconds to the Stripe Billing Meter. Idempotent per (job, chunk). */
-export async function reportMeter(orgId: string, jobId: string, chunk: string, hardware: Hardware, billedSeconds: number, at?: Date) {
-  if (billedSeconds <= 0 || !stripeConfigured()) return false;
-  const [b] = await db().select().from(billing).where(eq(billing.orgId, orgId));
-  if (!b?.stripeCustomerId) return false;
-  await stripe().billing.meterEvents.create({
-    event_name: meterEventName(hardware),
-    identifier: `${jobId}:${chunk}`,
-    payload: { stripe_customer_id: b.stripeCustomerId, value: String(Math.ceil(billedSeconds)), hardware },
-    ...(at ? { timestamp: Math.floor(at.getTime() / 1000) } : {}),
-  });
-  await db().update(usageEvents).set({ reportedToStripe: true })
-    .where(and(eq(usageEvents.jobId, jobId), eq(usageEvents.chunk, chunk)));
-  return true;
-}
-
-// Stripe only accepts meter events up to 35 days old.
-const METER_MAX_AGE_MS = 34 * 24 * 60 * 60 * 1000;
-
-/**
- * Re-send billed usage Stripe never confirmed (a Stripe error or a timeout after the row was written). Run from
- * the sweep. The meter identifier is the same (job:chunk), so Stripe drops a resend of one it already has.
- */
-export async function reconcileUsage(limit = 200, now = Date.now()): Promise<number> {
-  if (!stripeConfigured()) return 0;
-  const rows = await db()
-    .select({ jobId: usageEvents.jobId, chunk: usageEvents.chunk, orgId: usageEvents.orgId, hardware: usageEvents.hardware,
-      billedSeconds: usageEvents.billedSeconds, createdAt: usageEvents.createdAt })
-    .from(usageEvents)
-    .innerJoin(billing, eq(billing.orgId, usageEvents.orgId))
-    .where(and(
-      eq(usageEvents.reportedToStripe, false), gt(usageEvents.billedSeconds, 0), isNotNull(billing.stripeCustomerId),
-      lt(usageEvents.createdAt, new Date(now - 2 * 60_000)), gt(usageEvents.createdAt, new Date(now - METER_MAX_AGE_MS)),
-    ))
-    .orderBy(usageEvents.createdAt)
-    .limit(limit);
-  let sent = 0;
-  for (const r of rows) {
-    try {
-      if (await reportMeter(r.orgId, r.jobId, r.chunk, r.hardware as Hardware, r.billedSeconds, r.createdAt)) sent += 1;
-    } catch (e) {
-      captureError(e, { orgId: r.orgId, job_id: r.jobId, chunk: r.chunk, source: "usage_reconcile" });
-    }
-  }
-  return sent;
+export async function applyRefund(paymentIntentId: string, totalRefundedUsd: number): Promise<{ orgId: string; deductedUsd: number } | null> {
+  const res = await db().execute(sql`
+    with old as (
+      select stripe_session_id, org_id, refunded_usd from credit_purchases where payment_intent_id = ${paymentIntentId} for update
+    ), upd as (
+      update credit_purchases p set refunded_usd = greatest(old.refunded_usd, least(${totalRefundedUsd}::float8, p.amount_usd))
+      from old where p.stripe_session_id = old.stripe_session_id
+      returning p.org_id, p.refunded_usd - old.refunded_usd as delta
+    ), bal as (
+      update billing set credit_usd = billing.credit_usd - upd.delta, updated_at = now()
+      from upd where billing.org_id = upd.org_id and upd.delta > 0 returning 1
+    )
+    select org_id, delta from upd`);
+  const r = res.rows[0] as { org_id: string; delta: number } | undefined;
+  return r ? { orgId: r.org_id, deductedUsd: Number(r.delta) } : null;
 }
 
 export async function usageSummary(orgId: string, from: Date, to: Date) {

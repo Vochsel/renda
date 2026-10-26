@@ -17,7 +17,6 @@ process.env.RENDA_WORKER_TOKEN = "worker-token";
 process.env.MODAL_SUBMIT_URL = "https://modal.test/submit";
 process.env.APP_URL = "https://renda.test";
 process.env.R2_OUTPUT_TTL_SECONDS = "3600";
-process.env.FREE_SECONDS = "1800";
 process.env.RATE_LIMIT_DISABLED = "1";
 process.env.WORKOS_CLIENT_ID = "client_test";
 
@@ -120,7 +119,7 @@ beforeEach(() => {
 let seq = 0;
 async function newOrg(name = "org") {
   const [org] = await testDb.insert(schema.orgs).values({ name: `${name} ${++seq}` }).returning();
-  await testDb.insert(schema.billing).values({ orgId: org.id, freeSecondsRemaining: 1800 });
+  await testDb.insert(schema.billing).values({ orgId: org.id, freeSecondsRemaining: 0, creditUsd: 100 });
   const k = generateApiKey();
   await testDb.insert(schema.apiKeys).values({ orgId: org.id, name: "k", prefix: k.prefix, hash: k.hash });
   return { org, key: k.key };

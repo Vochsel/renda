@@ -1,13 +1,17 @@
-import { eq } from "drizzle-orm";
-import { db, schema } from "@/lib/db";
+import type Stripe from "stripe";
 import { env } from "@/lib/env";
 import { stripe } from "@/lib/stripe";
-import { activateMeteredSubscription, setSubscription } from "@/lib/billing";
+import { addCredit, applyRefund } from "@/lib/billing";
 import { captureError, track } from "@/lib/posthog";
 import { recordTermsAcceptance } from "@/lib/terms";
 
 const idOf = (v: string | { id: string } | null | undefined) => (typeof v === "string" ? v : v?.id ?? null);
 
+/**
+ * Stripe → server. Prepaid credit: a paid Checkout session (lib/billing.ts checkoutUrl) adds its amount to the
+ * workspace's balance, once per session; refunds made in the Stripe dashboard take it back off.
+ * Subscribe the endpoint to checkout.session.completed, checkout.session.async_payment_succeeded and charge.refunded.
+ */
 export async function POST(req: Request) {
   const raw = await req.text();
   let event;
@@ -18,63 +22,39 @@ export async function POST(req: Request) {
   }
 
   switch (event.type) {
-    case "checkout.session.completed": {
-      const s = event.data.object;
-      const customer = typeof s.customer === "string" ? s.customer : s.customer?.id;
-      if (s.mode === "setup" && customer) {
-        const setupIntent = typeof s.setup_intent === "string" ? s.setup_intent : s.setup_intent?.id;
-        const sub = await activateMeteredSubscription(customer, setupIntent);
-        if (sub) await setSubscription(customer, sub.id, sub.status);
-        const orgId = await setPaymentMethod(customer, true);
-        track("payment_method_added", { orgId });
-        if (orgId) await recordTermsAcceptance({ orgId }, "checkout"); // Checkout shows the Terms notice (lib/billing.ts)
-      }
+    // Card payments are paid on completion; bank debits etc. complete first and succeed later.
+    case "checkout.session.completed":
+    case "checkout.session.async_payment_succeeded": {
+      const s = event.data.object as Stripe.Checkout.Session;
+      if (s.mode === "payment" && s.payment_status === "paid") await creditSession(s);
       break;
     }
-    case "payment_method.detached": {
-      // A detached method no longer has a customer; the one it left is in previous_attributes.
-      const pm = event.data.object;
-      const prev = event.data.previous_attributes as { customer?: string | { id: string } | null } | undefined;
-      const customer = idOf(pm.customer) ?? idOf(prev?.customer);
-      if (customer) {
-        const remaining = await stripe().paymentMethods.list({ customer, limit: 1 });
-        const orgId = await setPaymentMethod(customer, remaining.data.length > 0);
-        track("payment_method_removed", { orgId }, { has_payment_method: remaining.data.length > 0 });
-      }
-      break;
-    }
-    // Subscription state gates card-billed renders (lib/billing.ts cardBillable): past_due, unpaid and canceled
-    // pause them until the customer fixes payment in the portal.
-    case "customer.subscription.created":
-    case "customer.subscription.updated":
-    case "customer.subscription.deleted": {
-      const sub = event.data.object;
-      const customer = idOf(sub.customer);
-      if (customer) {
-        const orgId = await setSubscription(customer, sub.id, sub.status);
-        track("subscription_status_changed", { orgId }, { status: sub.status, event: event.type });
-      }
-      break;
-    }
-    case "invoice.payment_failed": {
-      const inv = event.data.object;
-      const customer = idOf(inv.customer);
-      const orgId = customer ? await orgForCustomer(customer) : null;
-      track("invoice_payment_failed", { orgId }, { amount_due: inv.amount_due, attempt_count: inv.attempt_count });
-      captureError(new Error("invoice payment failed"), { orgId: orgId ?? undefined, invoice: inv.id, source: "stripe_webhook" });
+    case "charge.refunded": {
+      const charge = event.data.object as Stripe.Charge;
+      const pi = idOf(charge.payment_intent);
+      if (!pi) break;
+      const r = await applyRefund(pi, charge.amount_refunded / 100);
+      if (r && r.deductedUsd > 0) track("credit_refunded", { orgId: r.orgId }, { amount_usd: r.deductedUsd });
       break;
     }
   }
   return Response.json({ received: true });
 }
 
-async function setPaymentMethod(customerId: string, has: boolean): Promise<string | null> {
-  const rows = await db().update(schema.billing).set({ hasPaymentMethod: has, updatedAt: new Date() })
-    .where(eq(schema.billing.stripeCustomerId, customerId)).returning({ orgId: schema.billing.orgId });
-  return rows[0]?.orgId ?? null;
-}
-
-async function orgForCustomer(customerId: string): Promise<string | null> {
-  const [row] = await db().select({ orgId: schema.billing.orgId }).from(schema.billing).where(eq(schema.billing.stripeCustomerId, customerId));
-  return row?.orgId ?? null;
+async function creditSession(s: Stripe.Checkout.Session) {
+  const orgId = s.metadata?.renda_org;
+  if (!orgId || s.metadata?.renda_kind !== "credit") return;
+  // Credit what was paid for (pre-tax subtotal), not what the link was opened with: the amount is adjustable.
+  const amountUsd = (s.amount_subtotal ?? 0) / 100;
+  try {
+    const added = await addCredit(s.id, orgId, amountUsd, idOf(s.payment_intent));
+    if (added > 0) {
+      track("credit_purchased", { orgId }, { amount_usd: added });
+      await recordTermsAcceptance({ orgId }, "checkout"); // Checkout shows the Terms notice (lib/billing.ts)
+    }
+  } catch (e) {
+    // Paid but not credited is the worst billing failure: surface it and let Stripe retry the webhook.
+    captureError(e, { orgId, session: s.id, source: "stripe_credit" });
+    throw e;
+  }
 }

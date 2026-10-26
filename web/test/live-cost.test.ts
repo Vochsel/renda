@@ -33,7 +33,7 @@ beforeAll(async () => {
     for (const stmt of readFileSync(join(dir, f), "utf8").split("--> statement-breakpoint")) if (stmt.trim()) await pg.exec(stmt);
   }
   const [org] = await testDb.insert(schema.orgs).values({ name: "org" }).returning();
-  await testDb.insert(schema.billing).values({ orgId: org.id, freeSecondsRemaining: 0, hasPaymentMethod: true });
+  await testDb.insert(schema.billing).values({ orgId: org.id, freeSecondsRemaining: 0, creditUsd: 100 });
   orgId = org.id;
 });
 afterEach(() => vi.restoreAllMocks());

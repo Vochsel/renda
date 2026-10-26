@@ -2,7 +2,7 @@ import { api } from "@/lib/http";
 import { authenticate } from "@/lib/auth";
 import { getBilling } from "@/lib/accounts";
 import { isActiveTrial, trialLimits } from "@/lib/trials";
-import { billingLimits, cardBillable, monthlyLimitUsd, spentThisMonthUsd } from "@/lib/billing";
+import { maxActiveJobs, monthlyLimitUsd, spentThisMonthUsd } from "@/lib/billing";
 import { assertDeletionConfirmed, deleteAccount } from "@/lib/account-deletion";
 
 export const GET = api(async (req) => {
@@ -11,22 +11,22 @@ export const GET = api(async (req) => {
   return Response.json({
     user: user ? { id: user.id, email: user.email, name: user.name } : null,
     org: { id: org.id, name: org.name },
-    balance: { freeSecondsLeft: Math.max(0, Math.floor(b.freeSecondsRemaining)) },
+    // freeSecondsLeft stays for older clients; there's no free render time any more.
+    balance: { creditUsd: Math.round(b.creditUsd * 100) / 100, freeSecondsLeft: Math.max(0, Math.floor(b.freeSecondsRemaining)) },
     billing: {
-      hasPaymentMethod: b.hasPaymentMethod,
-      subscriptionStatus: b.subscriptionStatus,
-      canChargeCard: cardBillable(b),
+      prepaid: true,
       monthlyLimitUsd: monthlyLimitUsd(b),
       spentThisMonthUsd: Math.round((await spentThisMonthUsd(org.id)) * 100) / 100,
       activeJobs: b.activeJobs,
-      maxActiveJobs: cardBillable(b) ? billingLimits.activeJobsPaid() : billingLimits.activeJobsFree(),
+      maxActiveJobs: maxActiveJobs(b),
+      buyCredit: "POST /api/v1/billing/checkout {amountUsd?} → {url} for the user to pay",
     },
     trial: isActiveTrial(org)
       ? {
           active: true,
           expiresAt: org.trialExpiresAt?.toISOString() ?? null,
           limits: { maxDimension: trialLimits.maxDimension(), priorities: ["economy", "standard"] },
-          next: ["Ask the user to open the claim link (`renda claim` prints it) to keep this workspace and get the full free tier."],
+          next: ["Ask the user to open the claim link (`renda claim` prints it) to keep this workspace, and to buy credit (`renda billing`) to render."],
         }
       : null,
   });

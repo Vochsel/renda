@@ -15,7 +15,6 @@ process.env.RENDA_WORKER_TOKEN = "worker-token";
 process.env.MODAL_SUBMIT_URL = "https://modal.test/submit";
 process.env.APP_URL = "https://renda.test";
 process.env.R2_OUTPUT_TTL_SECONDS = "3600";
-process.env.FREE_SECONDS = "1800";
 process.env.RATE_LIMIT_DISABLED = "1";
 process.env.MAX_ACTIVE_JOBS_FREE = "100"; // fake worker: submitted jobs stay queued
 
@@ -82,7 +81,7 @@ beforeAll(async () => {
   }
   for (const who of ["A", "B"] as const) {
     const [org] = await testDb.insert(schema.orgs).values({ name: `org ${who}` }).returning();
-    await testDb.insert(schema.billing).values({ orgId: org.id, freeSecondsRemaining: 1800 });
+    await testDb.insert(schema.billing).values({ orgId: org.id, freeSecondsRemaining: 0, creditUsd: 100 });
     const k = generateApiKey();
     await testDb.insert(schema.apiKeys).values({ orgId: org.id, name: who, prefix: k.prefix, hash: k.hash });
     keys[who] = k.key;

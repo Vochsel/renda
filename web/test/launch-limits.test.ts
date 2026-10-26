@@ -38,6 +38,8 @@ const fakeStripe = vi.hoisted(() => ({
   webhooks: { constructEventAsync: async (raw: string) => JSON.parse(raw) },
   paymentMethods: { list: vi.fn(async () => ({ data: [] as unknown[] })) },
   billing: { meterEvents: { create: vi.fn(async () => ({})) } },
+  customers: { create: vi.fn(async () => ({ id: `cus_${Math.random()}` })) },
+  checkout: { sessions: { create: vi.fn(async (p: unknown) => ({ url: "https://checkout.stripe.test/s", params: p })) } },
 }));
 vi.mock("@/lib/stripe", () => ({ stripe: () => fakeStripe, stripeConfigured: () => true }));
 
@@ -52,12 +54,12 @@ vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
 const { generateApiKey } = await import("@/lib/apikeys");
 const jobsRoute = await import("@/app/api/v1/jobs/route");
 const limitRoute = await import("@/app/api/v1/billing/limit/route");
+const checkoutRoute = await import("@/app/api/v1/billing/checkout/route");
 const eventsRoute = await import("@/app/api/v1/internal/worker/events/route");
 const webhookRoute = await import("@/app/api/v1/webhooks/stripe/route");
 const { signTimed } = await import("@/lib/hmac");
-const { checkBudget, checkRunningBudget, recordUsage, reconcileUsage, cardBillable } = await import("@/lib/billing");
+const { checkBudget, checkRunningBudget, recordUsage } = await import("@/lib/billing");
 const { sweepStaleJobs } = await import("@/lib/jobs");
-const { normalizeEmail, claimFreeGrant } = await import("@/lib/freegrants");
 const { networkOf, createTrial } = await import("@/lib/trials");
 
 beforeAll(async () => {
@@ -72,12 +74,13 @@ beforeEach(() => {
   vi.unstubAllEnvs();
   posthog.captureError.mockClear();
   fakeStripe.billing.meterEvents.create.mockClear();
+  fakeStripe.checkout.sessions.create.mockClear();
 });
 
 type Billing = Partial<typeof schema.billing.$inferInsert>;
 async function newOrg(b: Billing = {}) {
   const [org] = await testDb.insert(schema.orgs).values({ name: "org" }).returning();
-  await testDb.insert(schema.billing).values({ orgId: org.id, freeSecondsRemaining: 1800, ...b });
+  await testDb.insert(schema.billing).values({ orgId: org.id, freeSecondsRemaining: 0, creditUsd: 100, ...b });
   const k = generateApiKey();
   await testDb.insert(schema.apiKeys).values({ orgId: org.id, name: "k", prefix: k.prefix, hash: k.hash });
   return { orgId: org.id, key: k.key };
@@ -106,48 +109,43 @@ const stripeEvent = (event: unknown) => webhookRoute.POST(new Request("https://r
 const codeOf = async (r: Response) => (await r.json()).error?.code;
 
 describe("budget checks (pure)", () => {
-  const est = (s: number, usd: number) => ({ estSeconds: [s, s * 2] as [number, number], estCostUsd: [usd, usd * 2] as [number, number] });
-  const free = { hasPaymentMethod: false, subscriptionStatus: null, freeSecondsRemaining: 100, monthlyLimitUsd: null };
-  const card = { ...free, hasPaymentMethod: true, subscriptionStatus: "active", freeSecondsRemaining: 0 };
+  const est = (usd: number) => ({ estSeconds: [60, 120] as [number, number], estCostUsd: [usd, usd * 2] as [number, number] });
+  const funded = { creditUsd: 10, monthlyLimitUsd: null };
   const code = (f: () => void) => { try { f(); return null; } catch (e) { return (e as ApiError).code; } };
 
-  it("free tier: needs a balance that covers the low estimate", () => {
-    expect(code(() => checkBudget(free, 0, est(60, 0.1)))).toBeNull();
-    expect(code(() => checkBudget(free, 0, est(101, 0.1)))).toBe("insufficient_free_minutes");
-    expect(code(() => checkBudget({ ...free, freeSecondsRemaining: 0 }, 0, est(1, 0)))).toBe("payment_required");
+  it("needs prepaid credit that covers the low estimate", () => {
+    expect(code(() => checkBudget(funded, 0, est(5)))).toBeNull();
+    expect(code(() => checkBudget(funded, 0, est(11)))).toBe("insufficient_credit");
+    expect(code(() => checkBudget({ ...funded, creditUsd: 0 }, 0, est(0)))).toBe("payment_required");
+    expect(code(() => checkBudget({ ...funded, creditUsd: -0.01 }, 0, est(0)))).toBe("payment_required");
   });
-  it("card: monthly limit (default or own) applies, free balance doesn't", () => {
-    expect(code(() => checkBudget(card, 99, est(1e6, 0.5)))).toBeNull();
-    expect(code(() => checkBudget(card, 99.9, est(1, 0.5)))).toBe("spend_limit");
-    expect(code(() => checkBudget({ ...card, monthlyLimitUsd: 1000 }, 99.9, est(1, 0.5)))).toBeNull();
-  });
-  it("a failed or canceled subscription stops card billing until fixed", () => {
-    for (const s of ["past_due", "unpaid", "canceled"]) expect(cardBillable({ hasPaymentMethod: true, subscriptionStatus: s })).toBe(false);
-    expect(code(() => checkBudget({ ...card, subscriptionStatus: "past_due" }, 0, est(1, 0)))).toBe("payment_failed");
-    // free minutes still work while the card is blocked
-    expect(code(() => checkBudget({ ...card, subscriptionStatus: "past_due", freeSecondsRemaining: 50 }, 0, est(10, 0)))).toBeNull();
+  it("no monthly limit by default; a workspace's own limit applies", () => {
+    expect(code(() => checkBudget({ creditUsd: 1e6, monthlyLimitUsd: null }, 1e5, est(1)))).toBeNull();
+    expect(code(() => checkBudget({ creditUsd: 1e6, monthlyLimitUsd: 50 }, 49.5, est(1)))).toBe("spend_limit");
   });
   it("maxCostUsd refuses jobs estimated above it", () => {
-    expect(code(() => checkBudget(card, 0, est(1, 2), 1))).toBe("job_over_budget");
+    expect(code(() => checkBudget(funded, 0, est(2), 1))).toBe("job_over_budget");
   });
-  it("running jobs stop past the free balance (with grace), the monthly limit, or maxCostUsd", () => {
-    const run = (pendingSeconds: number, pendingCostUsd = 0, jobCostUsd = 0) => ({ pendingSeconds, pendingCostUsd, jobCostUsd });
-    expect(checkRunningBudget(free, 0, run(120)).stop).toBe(false);
-    expect(checkRunningBudget(free, 0, run(131)).stop).toBe(true);
-    expect(checkRunningBudget(card, 99.5, run(1e5, 0.4)).stop).toBe(false);
-    expect(checkRunningBudget(card, 99.5, run(1e5, 0.6)).stop).toBe(true);
-    expect(checkRunningBudget(card, 0, run(1, 0, 3), 2).stop).toBe(true);
+  it("running jobs stop once in-flight cost passes the credit (with grace), the monthly limit, or maxCostUsd", () => {
+    const run = (pendingCostUsd: number, jobCostUsd = pendingCostUsd) => ({ pendingCostUsd, jobCostUsd });
+    expect(checkRunningBudget(funded, 0, run(10.04)).stop).toBe(false);
+    expect(checkRunningBudget(funded, 0, run(10.06)).stop).toBe(true);
+    expect(checkRunningBudget({ creditUsd: 100, monthlyLimitUsd: 20 }, 19.5, run(0.6)).stop).toBe(true);
+    expect(checkRunningBudget(funded, 0, run(1, 3), 2).stop).toBe(true);
   });
 });
 
 describe("submit gates", () => {
-  it("no card and no free minutes → 402 payment_required; too big for the balance → insufficient_free_minutes", async () => {
-    expect(await codeOf(await submit((await newOrg({ freeSecondsRemaining: 0 })).key))).toBe("payment_required");
-    expect(await codeOf(await submit((await newOrg({ freeSecondsRemaining: 1 })).key))).toBe("insufficient_free_minutes");
+  it("no credit → 402 payment_required; job bigger than the credit → insufficient_credit", async () => {
+    expect(await codeOf(await submit((await newOrg({ creditUsd: 0 })).key))).toBe("payment_required");
+    expect(await codeOf(await submit((await newOrg({ creditUsd: 0.0000001 })).key))).toBe("insufficient_credit");
     expect(modal.submit).toHaveLength(0);
   });
-  it("card holders are held to the monthly limit, which they can set", async () => {
-    const { orgId, key } = await newOrg({ hasPaymentMethod: true, subscriptionStatus: "active", monthlyLimitUsd: 0.000001 });
+  it("leftover free seconds don't let a workspace without credit render", async () => {
+    expect(await codeOf(await submit((await newOrg({ creditUsd: 0, freeSecondsRemaining: 1800 })).key))).toBe("payment_required");
+  });
+  it("a workspace's own monthly limit is enforced, and can be changed", async () => {
+    const { orgId, key } = await newOrg({ monthlyLimitUsd: 0.000001 });
     expect(await codeOf(await submit(key))).toBe("spend_limit");
     const put = await limitRoute.PUT(new Request("https://renda.test/api/v1/billing/limit", {
       method: "PUT", headers: { authorization: `Bearer ${key}`, "content-type": "application/json" }, body: JSON.stringify({ monthlyLimitUsd: 50 }),
@@ -157,12 +155,12 @@ describe("submit gates", () => {
     expect((await billingOf(orgId)).activeJobs).toBe(1);
   });
   it("maxCostUsd below the estimate → 422 and nothing runs", async () => {
-    const { key } = await newOrg({ hasPaymentMethod: true });
+    const { key } = await newOrg();
     expect(await codeOf(await submit(key, { maxCostUsd: 0.0000001 }))).toBe("job_over_budget");
     expect(modal.submit).toHaveLength(0);
   });
   it("caps concurrent jobs; a finished job frees its slot", async () => {
-    vi.stubEnv("MAX_ACTIVE_JOBS_FREE", "2");
+    vi.stubEnv("MAX_ACTIVE_JOBS_PAID", "2");
     const { orgId, key } = await newOrg();
     const a = await (await submit(key)).json();
     expect((await submit(key)).status).toBe(201);
@@ -174,7 +172,7 @@ describe("submit gates", () => {
     expect((await submit(key)).status).toBe(201);
   });
   it("parallel submits can't exceed the cap", async () => {
-    vi.stubEnv("MAX_ACTIVE_JOBS_FREE", "2");
+    vi.stubEnv("MAX_ACTIVE_JOBS_PAID", "2");
     const { orgId, key } = await newOrg();
     const res = await Promise.all(Array.from({ length: 6 }, () => submit(key)));
     expect(res.filter((r) => r.status === 201)).toHaveLength(2);
@@ -189,52 +187,47 @@ describe("submit gates", () => {
   });
 });
 
-describe("usage is recorded exactly once, atomically", () => {
-  it("splits free/billed, never drives the balance negative, and ignores duplicates", async () => {
-    const { orgId } = await newOrg({ freeSecondsRemaining: 30 });
+describe("usage draws down prepaid credit exactly once, atomically", () => {
+  it("charges the credit, records totals, and ignores duplicates", async () => {
+    const { orgId } = await newOrg({ creditUsd: 1 });
     const [job] = await testDb.insert(schema.jobs).values({ orgId, package: {} }).returning();
-    const first = await recordUsage(job.id, orgId, "0", "gpu-l4", 60);
-    expect(first).toEqual({ freeSeconds: 30, billedSeconds: 30, costUsd: 0.0175 });
+    expect(await recordUsage(job.id, orgId, "0", "gpu-l4", 60)).toEqual({ freeSeconds: 0, billedSeconds: 60, costUsd: 0.035 });
     expect(await recordUsage(job.id, orgId, "0", "gpu-l4", 60)).toBeNull();
-    expect((await billingOf(orgId)).freeSecondsRemaining).toBe(0);
+    expect((await billingOf(orgId)).creditUsd).toBeCloseTo(0.965, 6);
     const j = await jobOf(job.id);
     expect(j.secondsGpuL4).toBe(60);
-    expect(j.costUsd).toBeCloseTo(0.0175, 6);
-    expect(await recordUsage(job.id, orgId, "1", "cpu", 120)).toEqual({ freeSeconds: 0, billedSeconds: 120, costUsd: 0.03 });
+    expect(j.costUsd).toBeCloseTo(0.035, 6);
   });
-  it("concurrent reports of different chunks each take their own share of the free balance", async () => {
-    const { orgId } = await newOrg({ freeSecondsRemaining: 100 });
+  it("concurrent chunk reports all land on the balance", async () => {
+    const { orgId } = await newOrg({ creditUsd: 1 });
     const [job] = await testDb.insert(schema.jobs).values({ orgId, package: {} }).returning();
-    const parts = await Promise.all(Array.from({ length: 5 }, (_, i) => recordUsage(job.id, orgId, String(i), "cpu", 40)));
-    expect(parts.reduce((s, p) => s + p!.freeSeconds, 0)).toBe(100);
-    expect((await billingOf(orgId)).freeSecondsRemaining).toBe(0);
+    await Promise.all(Array.from({ length: 5 }, (_, i) => recordUsage(job.id, orgId, String(i), "cpu", 60)));
+    expect((await billingOf(orgId)).creditUsd).toBeCloseTo(1 - 5 * 0.015, 6);
   });
-  it("re-sends usage Stripe never confirmed", async () => {
+  it("never reports usage to Stripe meters (credit is prepaid)", async () => {
     const { orgId } = await newOrg({ stripeCustomerId: `cus_${Math.random()}` });
-    const [job] = await testDb.insert(schema.jobs).values({ orgId, package: {} }).returning();
-    await testDb.insert(schema.usageEvents).values({ jobId: job.id, chunk: "0", orgId, hardware: "cpu", seconds: 10, billedSeconds: 10,
-      createdAt: new Date(Date.now() - 10 * 60_000) });
-    expect(await reconcileUsage()).toBeGreaterThanOrEqual(1);
-    expect(fakeStripe.billing.meterEvents.create).toHaveBeenCalledWith(expect.objectContaining({ identifier: `${job.id}:0` }));
-    const [u] = await testDb.select().from(schema.usageEvents).where(eq(schema.usageEvents.jobId, job.id));
-    expect(u.reportedToStripe).toBe(true);
+    const job = await (await submit((await newOrg()).key)).json();
+    await send({ jobId: job.id, type: "usage", hardware: "cpu", seconds: 10, chunk: 0 });
+    expect(fakeStripe.billing.meterEvents.create).not.toHaveBeenCalled();
+    expect(orgId).toBeTruthy();
   });
 });
 
-describe("running jobs are stopped at the budget", () => {
-  it("a free-tier job is stopped when its running time passes the balance", async () => {
-    const { orgId, key } = await newOrg({ freeSecondsRemaining: 60 });
-    const job = await (await submit(key)).json();
+describe("running jobs are stopped when credit runs out", () => {
+  it("stops the job, cancels the worker call and frees the slot; a late done doesn't revive it", async () => {
+    const { orgId, key } = await newOrg({ creditUsd: 0.05 });
+    vi.stubEnv("MAX_ACTIVE_JOBS_PAID", "20");
+    const job = await (await submit(key, { package: PKG })).json();
+    expect(job.status).toBe("queued");
     await send({ jobId: job.id, type: "meter", chunk: 0, hardware: "cpu", elapsedSeconds: 30 });
     expect((await jobOf(job.id)).status).toBe("queued");
     await new Promise((r) => setTimeout(r, 2_600)); // past the meter write throttle
-    await send({ jobId: job.id, type: "meter", chunk: 0, hardware: "cpu", elapsedSeconds: 200 });
+    await send({ jobId: job.id, type: "meter", chunk: 0, hardware: "cpu", elapsedSeconds: 600 }); // $0.15 in flight
     const j = await jobOf(job.id);
     expect(j.status).toBe("failed");
-    expect(j.error).toMatch(/free render minutes ran out/);
+    expect(j.error).toMatch(/render credit ran out/);
     expect(modal.cancel).toContainEqual(expect.objectContaining({ jobId: job.id }));
     expect((await billingOf(orgId)).activeJobs).toBe(0);
-    // the late `done` doesn't resurrect it
     await send({ jobId: job.id, type: "done", outputs: [] });
     expect((await jobOf(job.id)).status).toBe("failed");
   });
@@ -259,35 +252,63 @@ describe("sweep", () => {
   });
 });
 
-describe("Stripe webhook", () => {
-  it("a past_due subscription pauses card renders; paying it resumes them", async () => {
-    const cus = `cus_${Math.random()}`;
-    const { key } = await newOrg({ stripeCustomerId: cus, hasPaymentMethod: true, subscriptionStatus: "active", freeSecondsRemaining: 0 });
-    const sub = (status: string) => ({ type: "customer.subscription.updated", data: { object: { id: "sub_1", customer: cus, status } } });
-    await stripeEvent(sub("past_due"));
-    expect(await codeOf(await submit(key))).toBe("payment_failed");
-    await stripeEvent(sub("active"));
-    expect((await submit(key)).status).toBe(201);
-    await stripeEvent({ type: "customer.subscription.deleted", data: { object: { id: "sub_1", customer: cus, status: "canceled" } } });
-    expect(await codeOf(await submit(key))).toBe("payment_failed");
+describe("prepaid credit purchases", () => {
+  const session = (orgId: string, id: string, cents: number, extra: Record<string, unknown> = {}) => ({
+    type: "checkout.session.completed",
+    data: { object: { id, mode: "payment", payment_status: "paid", amount_subtotal: cents, payment_intent: `pi_${id}`, metadata: { renda_org: orgId, renda_kind: "credit" }, ...extra } },
   });
-  it("a detached card clears the flag (the customer is only in previous_attributes)", async () => {
-    const cus = `cus_${Math.random()}`;
-    const { orgId } = await newOrg({ stripeCustomerId: cus, hasPaymentMethod: true });
-    await stripeEvent({ type: "payment_method.detached", data: { object: { id: "pm_1", customer: null }, previous_attributes: { customer: cus } } });
-    expect((await billingOf(orgId)).hasPaymentMethod).toBe(false);
+
+  it("checkout opens a payment-mode session for the chosen amount, clamped to $5–$1000", async () => {
+    const { key } = await newOrg({ creditUsd: 0 });
+    const buy = (body: unknown) => checkoutRoute.POST(new Request("https://renda.test/api/v1/billing/checkout", {
+      method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "application/json" }, body: JSON.stringify(body),
+    }), undefined as never);
+    const r = await buy({ amountUsd: 40 });
+    expect((await r.json()).url).toBe("https://checkout.stripe.test/s");
+    const params = fakeStripe.checkout.sessions.create.mock.calls[0][0] as { mode: string; line_items: { quantity: number; price_data: { unit_amount: number } }[] };
+    expect(params.mode).toBe("payment");
+    expect(params.line_items[0]).toMatchObject({ quantity: 40, price_data: { unit_amount: 100 } });
+    expect((await buy({ amountUsd: 2 })).status).toBe(400);
+    expect((await buy({})).status).toBe(200);
+  });
+  it("a paid session credits the balance once; replays and unpaid sessions don't", async () => {
+    const { orgId } = await newOrg({ creditUsd: 0 });
+    await stripeEvent(session(orgId, "cs_1", 2500));
+    await stripeEvent(session(orgId, "cs_1", 2500)); // replay
+    await stripeEvent(session(orgId, "cs_2", 1000, { payment_status: "unpaid" })); // e.g. bank debit pending
+    expect((await billingOf(orgId)).creditUsd).toBe(25);
+    await stripeEvent({ ...session(orgId, "cs_2", 1000), type: "checkout.session.async_payment_succeeded" });
+    expect((await billingOf(orgId)).creditUsd).toBe(35);
+  });
+  it("refunds take credit back off, counting each refunded cent once", async () => {
+    const { orgId } = await newOrg({ creditUsd: 0 });
+    await stripeEvent(session(orgId, "cs_r", 5000));
+    const refund = (cents: number) => stripeEvent({ type: "charge.refunded", data: { object: { payment_intent: "pi_cs_r", amount_refunded: cents } } });
+    await refund(2000);
+    await refund(2000); // replay
+    expect((await billingOf(orgId)).creditUsd).toBe(30);
+    await refund(5000); // refunded in full
+    expect((await billingOf(orgId)).creditUsd).toBe(0);
+  });
+  it("credit unlocks a trial workspace's resolution cap", async () => {
+    const [org] = await testDb.insert(schema.orgs).values({ name: "t", isTrial: true, trialExpiresAt: new Date(Date.now() + 86_400_000) }).returning();
+    await testDb.insert(schema.billing).values({ orgId: org.id, freeSecondsRemaining: 0, creditUsd: 0 });
+    const k = generateApiKey();
+    await testDb.insert(schema.apiKeys).values({ orgId: org.id, name: "k", prefix: k.prefix, hash: k.hash });
+    const big = { ...PKG, render: { resolution: [3840, 2160] } };
+    expect(await codeOf(await submit(k.key, { package: big }))).toBe("trial_limit");
+    await stripeEvent(session(org.id, "cs_t", 1000));
+    expect((await submit(k.key, { package: big })).status).toBe(201);
   });
 });
 
-describe("free-tier farming", () => {
-  it("normalises emails for the once-per-person grant", () => {
-    expect(normalizeEmail(" Ben.V+renda1@GoogleMail.com")).toBe("benv@gmail.com");
-    expect(normalizeEmail("a.b+x@example.com")).toBe("a.b@example.com");
-  });
-  it("grants the free tier once per person", async () => {
-    const { orgId } = await newOrg();
-    expect(await claimFreeGrant("someone@example.com", orgId)).toBe(true);
-    expect(await claimFreeGrant("Someone+2@example.com", orgId)).toBe(false);
+describe("no free render time", () => {
+  it("anonymous trials start with no free seconds and no credit", async () => {
+    const t = await createTrial("198.51.100.77");
+    expect(t.freeSecondsLeft).toBe(0);
+    const b = await billingOf(t.orgId);
+    expect(b.freeSecondsRemaining).toBe(0);
+    expect(b.creditUsd).toBe(0);
   });
   it("rate-limits trials by IPv6 /64 and isn't fooled by parallel requests", async () => {
     expect(networkOf("2001:db8:1:2:aaaa::1")).toBe(networkOf("2001:0db8:0001:0002:ffff:1:2:3"));

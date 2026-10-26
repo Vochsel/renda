@@ -191,14 +191,21 @@ export const billing = pgTable("billing", {
   subscriptionStatus: text("subscription_status"),
   /** Jobs between submit and a terminal status; caps concurrency. Recounted by the sweep. */
   activeJobs: integer("active_jobs").notNull().default(0),
-  /** Monthly spend cap in USD; null = the deployment default (DEFAULT_MONTHLY_LIMIT_USD). */
+  /** Optional monthly spend cap in USD (null = none; prepaid credit already caps spend). */
   monthlyLimitUsd: doublePrecision("monthly_limit_usd"),
+  /** Prepaid render credit in USD. Usage draws it down; it can dip slightly below 0 while a job is stopped. */
+  creditUsd: doublePrecision("credit_usd").notNull().default(0),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-/** One free-tier grant per person: keyed hash of the normalised email (plus-tags and Gmail dots removed). */
-export const freeGrants = pgTable("free_grants", {
-  emailHash: text("email_hash").primaryKey(),
-  orgId: text("org_id").references(() => orgs.id, { onDelete: "set null" }),
+
+/** Prepaid credit bought through Stripe Checkout. One row per session, so a replayed webhook can't credit twice. */
+export const creditPurchases = pgTable("credit_purchases", {
+  stripeSessionId: text("stripe_session_id").primaryKey(),
+  orgId: text("org_id").notNull().references(() => orgs.id, { onDelete: "restrict" }),
+  paymentIntentId: text("payment_intent_id").unique(),
+  amountUsd: doublePrecision("amount_usd").notNull(),
+  /** Total refunded so far (charge.refunded); the balance is reduced by each increase. */
+  refundedUsd: doublePrecision("refunded_usd").notNull().default(0),
   createdAt: createdAt(),
-});
+}, (t) => [index("credit_purchases_org_idx").on(t.orgId)]);
