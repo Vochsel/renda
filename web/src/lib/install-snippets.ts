@@ -15,7 +15,7 @@ export const installSnippets = {
   ],
   /** Python path: same commands, plus local rendering. */
   uvx: [
-    `uvx renda trial                    # 5 free render-minutes, no signup`,
+    `uvx renda trial                    # workspace + API key, no signup (buy credit to render)`,
     `uvx renda render chair.blend --cloud --res 1920x1080`,
   ],
   /** Paste this into any agent. */

@@ -65,7 +65,7 @@ export function openapi(baseUrl: string) {
             outputs: { type: "array", items: { type: "object", properties: { name: { type: "string" }, url: { type: "string", format: "uri" }, contentType: { type: "string" }, bytes: { type: "integer" } } } },
             live: {
               type: "object",
-              description: "Only while the job is running: billed seconds so far plus running containers, at list price (the final bill can be lower, e.g. free minutes). Interpolate with costUsd + ratePerSecond × (now − updatedAt).",
+              description: "Only while the job is running: billed seconds so far plus running containers, at list price (what the job is drawing from prepaid credit). Interpolate with costUsd + ratePerSecond × (now − updatedAt).",
               properties: {
                 seconds: { type: "object", properties: { cpu: { type: "number" }, "gpu-l4": { type: "number" }, "gpu-l40s": { type: "number" } } },
                 costUsd: { type: "number" }, activeContainers: { type: "integer" }, ratePerSecond: { type: "number" },
@@ -165,7 +165,7 @@ export function openapi(baseUrl: string) {
         get: { ...authed, summary: "Monthly spending limit and spend so far this month (UTC)", responses: { 200: ok({ type: "object", properties: { monthlyLimitUsd: { type: "number" }, spentThisMonthUsd: { type: "number" } } }) } },
         put: { ...authed, summary: "Set the monthly spending limit (null = default). New jobs are refused, and running ones stopped, once it's reached.", requestBody: body({ type: "object", required: ["monthlyLimitUsd"], properties: { monthlyLimitUsd: { type: ["number", "null"] } } }), responses: { 200: ok({ type: "object", properties: { monthlyLimitUsd: { type: "number" }, spentThisMonthUsd: { type: "number" } } }), 400: err } },
       },
-      "/billing/checkout": { post: { ...authed, summary: "Stripe Checkout link (setup mode) for the user to add a card", responses: { 200: ok({ type: "object", properties: { url: { type: "string" } } }) } } },
+      "/billing/checkout": { post: { ...authed, summary: "Stripe Checkout link for the user to buy prepaid render credit ($5–$1000; body {amountUsd?}, default 25)", responses: { 200: ok({ type: "object", properties: { url: { type: "string" } } }) } } },
       "/billing/portal": { get: { ...authed, summary: "Stripe customer portal link", responses: { 200: ok({ type: "object", properties: { url: { type: "string" } } }) } } },
       "/pricing": { get: { summary: "Price table", responses: { 200: ok({ type: "object" }) } } },
       "/schema.json": { get: { summary: "Renda package JSON Schema", responses: { 200: ok({ type: "object" }) } } },

@@ -5,7 +5,7 @@ import { appUrl } from "@/lib/env";
 import { termsNotice } from "@/lib/legal";
 
 /**
- * Anonymous, claimable trial: an API key with a few free render-minutes, no signup.
+ * Anonymous, claimable workspace: an API key, no signup and no free render time (buy credit to render).
  * The human opens `claimUrl` later to keep the workspace (and its renders).
  */
 export const POST = api(async (req) => {

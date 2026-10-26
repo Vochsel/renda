@@ -4,7 +4,6 @@
  */
 const OPTIONAL_DEFAULTS: Record<string, string> = {
   APP_URL: "http://localhost:3000",
-  STRIPE_METER_EVENT: "render_seconds",
   R2_OUTPUT_TTL_SECONDS: String(60 * 60 * 24),
 };
 

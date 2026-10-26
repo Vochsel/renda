@@ -11,7 +11,7 @@ export const METER_WRITE_INTERVAL_MS = 2_500;
 export type LiveCost = {
   /** Billed seconds so far + running containers' elapsed time, per hardware class. */
   seconds: Record<Hardware, number>;
-  /** At list price; the final bill can be lower (free minutes). */
+  /** At list price: what the job is drawing from prepaid credit. */
   costUsd: number;
   activeContainers: number;
   /** $/s the running containers are adding now — clients interpolate with it between snapshots. */

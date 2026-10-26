@@ -21,7 +21,7 @@ const { orgs, users, memberships, apiKeys, deviceCodes, jobs, billing, trialRequ
  *
  * Kept, anonymised: the org row (renamed, unlinked from WorkOS), job rows with only id/kind/status/
  * hardware/seconds/cost/timestamps, usage_events and the billing row (Stripe customer id, free balance).
- * Those are the invoicing and tax records for usage billed in arrears, and they contain no customer
+ * Those are the invoicing and tax records for usage and credit purchases, and they contain no customer
  * content or personal details. usage_events' foreign keys restrict deletes (migration 0006) so a future
  * hard delete can't silently drop them.
  */

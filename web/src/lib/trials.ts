@@ -88,7 +88,7 @@ export function claimUrlFor(token: string): string {
   return `${appUrl()}/claim?token=${encodeURIComponent(token)}`;
 }
 
-/** Create an unclaimed org with a few free render-minutes and an API key. */
+/** Create an unclaimed org with an API key and no credit (it renders once credit is bought). */
 export async function createTrial(ip: string | null) {
   const network = networkOf(ip ?? "unknown");
   const ipHash = hashIp(network);

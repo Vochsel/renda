@@ -29,10 +29,12 @@ pnpm --filter @rendahq/web test
 
 ## Stripe setup
 
-1. Create three meters with event names `render_seconds_cpu`, `render_seconds_gpu_l4`, `render_seconds_gpu_l40s`
-   (sum aggregation, value key `value`, customer key `stripe_customer_id`).
-2. Create a metered price on each ($0.00025, $0.000583, $0.00125 per second) and set `STRIPE_PRICE_*`.
-3. Point a webhook at `/api/v1/webhooks/stripe` for `checkout.session.completed` and `payment_method.detached`.
+Billing is prepaid credit: no products, prices or meters to create. Checkout sessions use inline $1 prices
+(`src/lib/billing.ts`), and the webhook credits the balance.
+
+1. Set `STRIPE_SECRET_KEY` and point a webhook at `/api/v1/webhooks/stripe` for `checkout.session.completed`,
+   `checkout.session.async_payment_succeeded` and `charge.refunded`; set its secret as `STRIPE_WEBHOOK_SECRET`.
+2. Refund unused credit from the Stripe dashboard; the `charge.refunded` webhook takes it off the balance.
 
 ## Data retention and deletion
 
