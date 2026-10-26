@@ -2,9 +2,11 @@
 
 ## Reporting a vulnerability
 
-Please email **security@renda.vochsel.com** (or open a private
-[GitHub security advisory](https://github.com/vochsel/renda/security/advisories/new)) with steps to
-reproduce. Don't open a public issue for anything exploitable. We aim to acknowledge within 2 business
+Please open a private
+[GitHub security advisory](https://github.com/vochsel/renda/security/advisories/new) or email
+**security@[DOMAIN]** with steps to reproduce. (The security mailbox isn't set up yet, so until this
+placeholder is replaced, use the advisory form. Keep this in sync with `SECURITY_EMAIL` in
+`web/src/lib/contact.ts`.) Don't open a public issue for anything exploitable. We aim to acknowledge within 2 business
 days and to fix or mitigate high-severity issues within 14 days, and we'll credit you if you'd like.
 
 Please test only against your own account and data, don't degrade the service for others (no load or

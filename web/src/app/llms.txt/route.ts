@@ -2,6 +2,7 @@ import { appUrl } from "@/lib/env";
 import { FREE_MINUTES, HARDWARE, HARDWARE_LABEL, PRICE_PER_MINUTE } from "@/lib/pricing";
 import { CLI_PACKAGE, MCP_PACKAGE, installSnippets } from "@/lib/install-snippets";
 import { GITHUB_REPO } from "@/lib/site";
+import { RETENTION } from "@/lib/legal";
 
 /**
  * Setup script for agents. A user pastes "set up renda — <url>/llms.txt" and the agent follows it.
@@ -89,7 +90,13 @@ ${HARDWARE.map((h) => `  - ${HARDWARE_LABEL[h]} (${h}): $${PRICE_PER_MINUTE[h]}`
 - Estimate: POST /api/v1/estimate {package} · Submit: POST /api/v1/jobs {package, kind?, priority?, fast?, idempotencyKey?} (fast: true = priority rush: more parallel on faster GPUs, costs a bit more; the estimate's priorities.rush shows its price and wall time) · Poll: GET /api/v1/jobs/{id} (while running, live.costUsd is the cost so far — ticks up every few seconds)
 - Past renders: GET /api/v1/outputs?limit=30&kind=image|video|model → {items:[{jobId, name, url, thumbUrl, width, height, …}], nextCursor} (pass cursor=nextCursor for the next page)
 - Layered packages: the API flattens https:// and your asset:// layers itself (local paths must be flattened/uploaded client-side). POST /api/v1/packages/flatten {package} → {package, provenance, layers}.
+- Delete: DELETE /api/v1/jobs/{id} (a finished job's outputs; 409 while running) · DELETE /api/v1/uploads/{sha256} (an upload) · DELETE /api/v1/me {confirm: <org id>} (the whole account; only when the user asks)
 - Send \`Authorization: Bearer <apiKey>\` on everything except auth routes.
+
+## 8. Terms, privacy and data
+- Creating an account (trial claim, email code, browser sign-in) or adding a card means the user agrees to the Terms of Service (${base}/legal/terms) and Privacy Policy (${base}/legal/privacy). Tell the user when you create an account for them; auth responses include a \`terms\` object with these links.
+- Uploaded files are deleted ${RETENTION.assetDays} days after their last use, outputs ${RETENTION.outputDays} days after the render finished. Download outputs you want to keep. Customer files are used only to perform the render, never for training.
+- Acceptable use: ${base}/legal/acceptable-use · Refunds (no charge for renders that fail because of a Renda fault; usage billed monthly in arrears): ${base}/legal/refunds · Subprocessors: ${base}/legal/subprocessors
 
 ## Links
 - Package format: ${base}/docs · JSON Schema: ${base}/api/v1/schema.json · OpenAPI: ${base}/api/v1/openapi.json

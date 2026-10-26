@@ -87,13 +87,13 @@ export function openapi(baseUrl: string) {
     },
     paths: {
       "/auth/trial": {
-        post: { summary: "Anonymous claimable trial: API key + ~5 free render-minutes, no signup. Give claimUrl to the human.", responses: { 201: ok({ type: "object", properties: { apiKey: { type: "string" }, claimUrl: { type: "string" }, freeSecondsLeft: { type: "number" }, expiresAt: { type: "string", format: "date-time" }, limits: { type: "object" }, next: { type: "array", items: { type: "string" } } } }, "Created"), 429: err } },
+        post: { summary: "Anonymous claimable trial: API key + ~5 free render-minutes, no signup. Give claimUrl to the human.", responses: { 201: ok({ type: "object", properties: { apiKey: { type: "string" }, claimUrl: { type: "string" }, freeSecondsLeft: { type: "number" }, expiresAt: { type: "string", format: "date-time" }, limits: { type: "object" }, next: { type: "array", items: { type: "string" } }, terms: { type: "object", description: "Terms of Service / Privacy Policy links and version: tell the user", properties: { version: { type: "string" }, termsUrl: { type: "string" }, privacyUrl: { type: "string" }, notice: { type: "string" } } } } }, "Created"), 429: err } },
       },
       "/auth/magic/start": {
         post: { summary: "Email the user a 6-digit sign-in code (creates the account if new)", requestBody: body({ type: "object", required: ["email"], properties: { email: { type: "string", format: "email" } } }), responses: { 200: ok({ type: "object", properties: { ok: { type: "boolean" }, next: { type: "string" } } }), 400: err } },
       },
       "/auth/magic/verify": {
-        post: { summary: "Exchange the emailed code for an API key", requestBody: body({ type: "object", required: ["email", "code"], properties: { email: { type: "string" }, code: { type: "string", pattern: "^\\d{6}$" }, keyName: { type: "string" } } }), responses: { 200: ok({ type: "object", properties: { apiKey: { type: "string" }, user: { type: "object" }, org: { type: "object" } } }), 400: err } },
+        post: { summary: "Exchange the emailed code for an API key", requestBody: body({ type: "object", required: ["email", "code"], properties: { email: { type: "string" }, code: { type: "string", pattern: "^\\d{6}$" }, keyName: { type: "string" } } }), responses: { 200: ok({ type: "object", properties: { apiKey: { type: "string" }, user: { type: "object" }, org: { type: "object" }, terms: { type: "object", description: "Terms of Service / Privacy Policy links and version: tell the user", properties: { version: { type: "string" }, termsUrl: { type: "string" }, privacyUrl: { type: "string" }, notice: { type: "string" } } } } }), 400: err } },
       },
       "/auth/device": {
         post: { summary: "Start device login (CLI)", responses: { 200: ok({ type: "object", properties: { deviceCode: { type: "string" }, userCode: { type: "string" }, verificationUri: { type: "string" }, verificationUriComplete: { type: "string" }, interval: { type: "integer" }, expiresIn: { type: "integer" } } }) } },
@@ -101,9 +101,15 @@ export function openapi(baseUrl: string) {
       "/auth/device/token": {
         post: { summary: "Poll for the device login result", requestBody: body({ type: "object", required: ["deviceCode"], properties: { deviceCode: { type: "string" } } }), responses: { 200: ok({ type: "object", properties: { apiKey: { type: "string" } } }), 428: err, 400: err } },
       },
-      "/me": { get: { ...authed, summary: "Current user, org, free balance, billing status", responses: { 200: ok({ type: "object" }), 401: err } } },
+      "/me": {
+        get: { ...authed, summary: "Current user, org, free balance, billing status", responses: { 200: ok({ type: "object" }), 401: err } },
+        delete: { ...authed, summary: "Delete the whole account (only when the user asks). Revokes all keys, cancels running jobs, deletes outputs and uploads, cancels the subscription with a final invoice. Billing records are kept, anonymised.", requestBody: body({ type: "object", required: ["confirm"], properties: { confirm: { type: "string", description: "The org.id from GET /me" } } }), responses: { 200: ok({ type: "object", properties: { deleted: { type: "boolean" }, orgId: { type: "string" }, keysRevoked: { type: "integer" }, jobsCanceled: { type: "integer" }, subscriptionsCanceled: { type: "integer" }, storagePurged: { type: "boolean" } } }), 400: err, 401: err } },
+      },
       "/uploads": {
         post: { ...authed, summary: "Register a content-addressed upload; PUT bytes to uploadUrl unless exists. exists is only true once *your account* has uploaded these bytes and they were hash-verified (first use in a job); another account having the same file doesn't count", description: "contentType must be a plain MIME type (no parameters). Bytes are checked against sha256 on first use; a mismatch fails the job with asset_mismatch.", requestBody: body({ type: "object", required: ["filename", "size", "sha256"], properties: { filename: { type: "string" }, size: { type: "integer" }, sha256: { type: "string" }, contentType: { type: "string" } } }), responses: { 200: ok({ type: "object", properties: { assetUri: { type: "string" }, exists: { type: "boolean" }, uploadUrl: { type: "string" }, uploadMethod: { const: "PUT" }, uploadHeaders: { type: "object" } } }), 401: err } },
+      },
+      "/uploads/{sha256}": {
+        delete: { ...authed, summary: "Delete your upload of a file (asset://<sha256>). The stored bytes are deleted unless another account uploaded the same file. 409 while a running job uses it.", parameters: [{ name: "sha256", in: "path", required: true, schema: { type: "string", pattern: "^[0-9a-f]{64}$" } }], responses: { 200: ok({ type: "object", properties: { assetUri: { type: "string" }, deleted: { type: "boolean" }, storageDeleted: { type: "boolean" } } }), 404: err, 409: err } },
       },
       "/estimate": { post: { ...authed, summary: "Estimate hardware, time and cost (free)", requestBody: body({ type: "object", required: ["package"], properties: { package: { type: "object" }, kind: { enum: ["scene", "hyperframes"] }, priority: { enum: ["economy", "standard", "rush"] } } }), responses: { 200: ok(ref("Estimate")), 422: err } } },
       "/packages/flatten": { post: { ...authed, summary: "Resolve `extends` layers and package references (https:// or your asset:// uploads) into one flat package, with field → layer provenance", requestBody: body({ type: "object", required: ["package"], properties: { package: { type: "object" } } }), responses: { 200: ok({ type: "object", properties: { package: { type: "object" }, provenance: { type: "object", additionalProperties: { type: "string" } }, layers: { type: "array", items: { type: "string" } }, valid: { type: "boolean" }, issues: { type: "array" } } }), 422: err } } },
@@ -111,7 +117,10 @@ export function openapi(baseUrl: string) {
         post: { ...authed, summary: "Submit a render job (layered packages are flattened first; see /packages/flatten)", parameters: [{ name: "Idempotency-Key", in: "header", schema: { type: "string" } }], requestBody: body(ref("JobRequest")), responses: { 201: ok(ref("Job"), "Created"), 402: err, 422: err, 503: err } },
         get: { ...authed, summary: "List jobs (newest first)", parameters: [{ name: "limit", in: "query", schema: { type: "integer", maximum: 200 } }, { name: "before", in: "query", schema: { type: "string", format: "date-time" } }, { name: "status", in: "query", schema: { type: "string" } }], responses: { 200: ok({ type: "object", properties: { jobs: { type: "array", items: ref("Job") } } }) } },
       },
-      "/jobs/{id}": { get: { ...authed, summary: "Get a job (outputs carry presigned download URLs)", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { 200: ok(ref("Job")), 404: err } } },
+      "/jobs/{id}": {
+        get: { ...authed, summary: "Get a job (outputs carry presigned download URLs)", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { 200: ok(ref("Job")), 404: err } },
+        delete: { ...authed, summary: "Delete a finished job's outputs from storage and clear them on the job (the job record and its billing stay). 409 while running.", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { 200: ok({ type: "object", properties: { id: { type: "string" }, outputsDeleted: { type: "boolean" }, objectsDeleted: { type: "integer" }, objectsKept: { type: "integer", description: "Files still listed by a cached copy of this job" } } }), 404: err, 409: err } },
+      },
       "/jobs/{id}/cancel": { post: { ...authed, summary: "Cancel a job", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { 200: ok(ref("Job")), 409: err } } },
       "/outputs": {
         get: {

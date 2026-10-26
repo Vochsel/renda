@@ -53,6 +53,8 @@ export async function checkoutUrl(orgId: string, email?: string): Promise<string
     // Accounts with Managed Payments (Stripe as merchant of record) on by default reject setup mode.
     // Renda bills usage itself via meters, so opt this card-collection session out.
     managed_payments: { enabled: false },
+    // Terms acceptance for cards added via an agent's link (recorded by the webhook on completion).
+    custom_text: { submit: { message: `By adding a card you agree to Renda's Terms (${appUrl()}/legal/terms) and Privacy Policy (${appUrl()}/legal/privacy). Usage is billed monthly in arrears.` } },
   } as Stripe.Checkout.SessionCreateParams;
   const session = await stripe().checkout.sessions.create(params);
   return session.url!;

@@ -36,6 +36,13 @@
       "when": 1792482659980,
       "tag": "0004_job_live",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793013765143,
+      "tag": "0006_data_lifecycle",
+      "breakpoints": true
     }
   ]
 }

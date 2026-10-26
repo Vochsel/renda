@@ -30,7 +30,8 @@ export async function registerUpload(orgId: string, input: UploadInput): Promise
   const contentType = b.contentType ?? "application/octet-stream";
   await db().insert(schema.assets)
     .values({ orgId, sha256: b.sha256, filename: b.filename, size: b.size, contentType })
-    .onConflictDoNothing();
+    // Re-registering counts as use for retention (lib/retention.ts); the rest of the row is kept.
+    .onConflictDoUpdate({ target: [schema.assets.orgId, schema.assets.sha256], set: { lastUsedAt: new Date() } });
   const assetUri = `asset://${b.sha256}`;
   if (await isVerifiedFor(orgId, b.sha256)) return { assetUri, exists: true };
   const uploadUrl = await presignPut(stagingKey(orgId, b.sha256), contentType, b.size);

@@ -4,6 +4,8 @@ import { workos } from "@/lib/workos";
 import { ApiError } from "@/lib/errors";
 import { clientIp } from "@/lib/clientip";
 import { rateLimit } from "@/lib/ratelimit";
+import { appUrl } from "@/lib/env";
+import { termsNotice } from "@/lib/legal";
 
 const Body = z.object({ email: z.email() });
 
@@ -26,6 +28,7 @@ export const POST = api(async (req) => {
   }
   return Response.json({
     ok: true,
-    next: "Ask the user for the 6-digit code emailed to them, then POST /api/v1/auth/magic/verify {email, code}.",
+    next: "Ask the user for the 6-digit code emailed to them, then POST /api/v1/auth/magic/verify {email, code}. Creating an account means agreeing to the Terms and Privacy Policy: tell the user (links in `terms`).",
+    terms: termsNotice(appUrl()),
   });
 });

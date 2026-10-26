@@ -11,6 +11,7 @@ const ITEMS = [
   { href: "/dashboard/gallery", label: "Gallery" },
   { href: "/dashboard/keys", label: "API keys" },
   { href: "/dashboard/billing", label: "Billing" },
+  { href: "/dashboard/settings", label: "Settings" },
   { href: "/docs", label: "Docs" },
 ];
 

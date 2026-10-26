@@ -14,6 +14,7 @@ import { assertWithinTrialLimits } from "./trials";
 import { outputPrefix, presignGet } from "./r2";
 import { HARDWARE, type Hardware } from "./pricing";
 import { liveCost, METER_WRITE_INTERVAL_MS, type LiveCost } from "./live";
+import { supportEmail } from "./contact";
 
 const { jobs, usageEvents } = schema;
 type JobRow = typeof jobs.$inferSelect;
@@ -253,7 +254,7 @@ export async function sweepStaleJobs(maxMinutes = Number(envOptional("JOB_MAX_MI
     }
     await db()
       .update(jobs)
-      .set({ status: "failed", finishedAt: new Date(), error: `Timed out: no result after ${maxMinutes} minutes. Retry, or contact support with the job id.` })
+      .set({ status: "failed", finishedAt: new Date(), error: `Timed out: no result after ${maxMinutes} minutes. Retry, or contact support (${supportEmail()}) with the job id.` })
       .where(and(eq(jobs.id, job.id), inArray(jobs.status, ["queued", "planning", "rendering", "encoding"])));
   }
   return stale.map((j) => j.id);

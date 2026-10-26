@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
-  CopyObjectCommand, DeleteObjectCommand, HeadObjectCommand, GetObjectCommand, PutObjectCommand, S3Client,
+  CopyObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, HeadObjectCommand, GetObjectCommand, ListObjectsV2Command,
+  PutObjectCommand, S3Client,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { env } from "./env";
@@ -39,6 +40,32 @@ export async function deleteObject(key: string): Promise<void> {
   await s3().send(new DeleteObjectCommand({ Bucket: bucket(), Key: key }));
 }
 export const outputPrefix = (jobId: string) => `outputs/${jobId}/`;
+/** Worker scratch (frames between render chunks and the encoder); see worker/renda_worker/storage.py. */
+export const workPrefix = (jobId: string) => `work/${jobId}/`;
+
+/**
+ * Delete every object under `prefix` except the keys in `keep`. Idempotent (an empty prefix is a no-op).
+ * Returns how many objects were deleted.
+ */
+export async function deletePrefix(prefix: string, keep: ReadonlySet<string> = new Set()): Promise<number> {
+  if (!prefix.endsWith("/") || prefix.length < 3) throw new Error(`refusing to delete prefix ${JSON.stringify(prefix)}`);
+  let deleted = 0;
+  let token: string | undefined;
+  do {
+    const page = await s3().send(new ListObjectsV2Command({ Bucket: bucket(), Prefix: prefix, ContinuationToken: token }));
+    const keys = (page.Contents ?? []).map((o) => o.Key!).filter((k) => k && !keep.has(k));
+    if (keys.length) {
+      const res = await s3().send(new DeleteObjectsCommand({
+        Bucket: bucket(),
+        Delete: { Objects: keys.map((Key) => ({ Key })), Quiet: true },
+      }));
+      if (res.Errors?.length) throw new Error(`R2 delete failed for ${res.Errors.length} objects under ${prefix}: ${res.Errors[0].Message}`);
+      deleted += keys.length;
+    }
+    token = page.IsTruncated ? page.NextContinuationToken : undefined;
+  } while (token);
+  return deleted;
+}
 
 export async function objectExists(key: string): Promise<boolean> {
   try {
